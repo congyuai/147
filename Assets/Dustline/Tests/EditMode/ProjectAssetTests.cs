@@ -18,12 +18,17 @@ namespace Dustline.Tests
             Assert.That(catalog, Is.Not.Null, "Run Dustline > Prepare Project first.");
             Assert.That(loot, Is.Not.Null);
             Assert.DoesNotThrow(catalog.RebuildIndex);
-            Assert.That(catalog.Items.Count, Is.EqualTo(6));
+            Assert.That(catalog.Items.Count, Is.EqualTo(7));
             foreach (var item in catalog.Items)
                 if (item.Kind == ItemKind.Weapon)
                 {
                     Assert.That(item.Weapon, Is.Not.Null);
-                    Assert.That(catalog.Find(item.Weapon.AmmoId).Kind, Is.EqualTo(ItemKind.Ammo));
+                    if (item.Weapon.Melee)
+                    {
+                        Assert.That(item.Weapon.MagazineSize, Is.Zero);
+                        Assert.That(string.IsNullOrEmpty(item.Weapon.AmmoId), Is.True);
+                    }
+                    else Assert.That(catalog.Find(item.Weapon.AmmoId).Kind, Is.EqualTo(ItemKind.Ammo));
                 }
             foreach (var entry in loot.Entries) Assert.That(catalog.Find(entry.ItemId), Is.Not.Null);
         }
@@ -34,6 +39,7 @@ namespace Dustline.Tests
         [TestCase("armor", "战术防弹衣")]
         [TestCase("circuit", "电路板")]
         [TestCase("relic", "勘测模块")]
+        [TestCase(WeaponDefinition.BatonId, "检修短棍")]
         public void ItemNamesUseSimplifiedChinese(string id, string expected)
         {
             var catalog = Resources.Load<ItemCatalog>("Dustline/Items");
