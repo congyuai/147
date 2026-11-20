@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.IO;
 using UnityEngine;
 
@@ -17,24 +18,43 @@ namespace Dustline
         public GameUI UI { get; private set; }
         public PlayerController Player { get; private set; }
         public WorldBuilder World { get; private set; }
+        public RaidCombatEffects Effects { get; private set; }
+        public RaidEnvironmentAudio EnvironmentAudio { get; private set; }
+        public int FrameRate { get; private set; }
+        public int QualityLevel { get; private set; }
+        public float ResolutionScale { get; private set; }
+        public OperatorStyle SelectedOperator { get; private set; }
         public float RaidRemaining { get; private set; }
         public int Kills;
         public string Result { get; private set; }
         public string Error { get; private set; }
         public string Notice { get; private set; }
+        const string OperatorPreference = "Dustline.OperatorStyle.v1";
+        const string SprintPreference = "Dustline.TouchSprintThreshold.v1";
+        const string QualityPreference = "Dustline.QualityLevel.v1";
+        const string ResolutionPreference = "Dustline.ResolutionScale.v1";
         ProfileStore store;
         Camera menuCamera;
-        bool focused = true;
+        bool focused = true, paused, sprintPreferenceDirty;
+        float refreshCheckAt;
 
         void Awake()
         {
-            Application.targetFrameRate = 60;
+            FrameRate = RaidFrameRate.Load();
+            RaidFrameRate.Apply(FrameRate);
+            SelectedOperator = PlayerPrefs.GetInt(OperatorPreference, 0) == 1 ? OperatorStyle.Female : OperatorStyle.Male;
             Input = gameObject.AddComponent<PlayerInputReader>();
+            Input.SprintThreshold = PlayerInputReader.ClampSprintThreshold(PlayerPrefs.GetInt(SprintPreference, PlayerInputReader.DefaultSprintThreshold));
+            int qualityCount = Mathf.Max(1, Mathf.Min(3, QualitySettings.names.Length));
+            QualityLevel = Mathf.Clamp(PlayerPrefs.GetInt(QualityPreference, QualitySettings.GetQualityLevel()), 0, qualityCount - 1);
+            QualitySettings.SetQualityLevel(QualityLevel, true);
+            ResolutionScale = Mathf.Clamp(PlayerPrefs.GetFloat(ResolutionPreference, 1f), 0.65f, 1f);
             var cameraObject = new GameObject("Menu camera", typeof(Camera));
             cameraObject.transform.SetParent(transform);
             menuCamera = cameraObject.GetComponent<Camera>();
             menuCamera.clearFlags = CameraClearFlags.SolidColor;
             menuCamera.backgroundColor = new Color(0.025f, 0.035f, 0.045f);
+            ApplyDisplayPreferences();
             UI = gameObject.AddComponent<GameUI>();
             UI.Initialize(this);
             try
@@ -87,45 +107,124 @@ namespace Dustline
 
         void Update()
         {
-            Input.Gameplay = Phase == SessionPhase.Raid && !UI.InventoryOpen && focused;
+            if (Application.isMobilePlatform && Time.unscaledTime >= refreshCheckAt)
+            {
+                refreshCheckAt = Time.unscaledTime + 2;
+                RaidFrameRate.Apply(FrameRate);
+            }
+            if (focused && !paused)
+            {
+                if (Input.EscapePressed || Input.SettingsPressed) UI.BackOrSettings();
+                else if (Phase == SessionPhase.Raid && Input.InventoryPressed) UI.ToggleInventory();
+            }
+            Input.Gameplay = AcceptsGameplay;
             if (Phase != SessionPhase.Raid) return;
-            if (Input.InventoryPressed || Input.EscapePressed) UI.ToggleInventory();
-            Input.Gameplay = !UI.InventoryOpen && focused;
             RaidRemaining = Mathf.Max(0, RaidRemaining - Time.deltaTime);
             if (RaidRemaining <= 0) EndRaid(false, "撤离失败：突袭时间已耗尽");
+        }
+
+        bool AcceptsGameplay => Phase == SessionPhase.Raid && focused && !paused && !UI.BlocksGameplay;
+
+        public void SelectFrameRate(int value)
+        {
+            FrameRate = RaidFrameRate.Normalize(value);
+            RaidFrameRate.Apply(FrameRate);
+            RaidFrameRate.Save(FrameRate);
+        }
+
+        internal void SelectQuality(int value)
+        {
+            QualityLevel = Mathf.Clamp(value, 0, Mathf.Max(0, Mathf.Min(2, QualitySettings.names.Length - 1)));
+            QualitySettings.SetQualityLevel(QualityLevel, true);
+            ApplyDisplayPreferences();
+            PlayerPrefs.SetInt(QualityPreference, QualityLevel);
+            sprintPreferenceDirty = true;
+        }
+
+        internal void SelectResolution(float value)
+        {
+            ResolutionScale = Mathf.Clamp(value, 0.65f, 1f);
+            ApplyDisplayPreferences();
+            PlayerPrefs.SetFloat(ResolutionPreference, ResolutionScale);
+            sprintPreferenceDirty = true;
+        }
+
+        void ApplyDisplayPreferences()
+        {
+            UnityEngine.ScalableBufferManager.ResizeBuffers(ResolutionScale, ResolutionScale);
+            if (menuCamera != null) menuCamera.allowDynamicResolution = true;
+            if (Player != null && Player.View != null) Player.View.allowDynamicResolution = true;
+        }
+
+        internal void SelectSprintThreshold(int value)
+        {
+            value = PlayerInputReader.ClampSprintThreshold(value);
+            if (Input.SprintThreshold == value) return;
+            Input.SprintThreshold = value;
+            PlayerPrefs.SetInt(SprintPreference, value);
+            sprintPreferenceDirty = true;
+        }
+
+        internal void SaveControlPreferences()
+        {
+            if (!sprintPreferenceDirty) return;
+            PlayerPrefs.Save();
+            sprintPreferenceDirty = false;
+        }
+
+        internal void SelectOperator(OperatorStyle style)
+        {
+            if (Phase != SessionPhase.Menu || SelectedOperator == style) return;
+            SelectedOperator = style;
+            PlayerPrefs.SetInt(OperatorPreference, style == OperatorStyle.Female ? 1 : 0);
+            PlayerPrefs.Save();
         }
 
         public void StartRaid()
         {
             if (Phase != SessionPhase.Menu) return;
-            if (Loadout.Equipped(EquipmentSlot.Weapon) == null) { UI.Notify("请先装备武器，再开始突袭。"); return; }
+            if (Loadout.Equipped(EquipmentSlot.Weapon) == null) { UI.Notify("请先在仓库装备武器，再开始突袭。"); return; }
+            Phase = SessionPhase.Loading;
+            UI.ShowLoading();
+            StartCoroutine(BuildRaid());
+        }
+
+        IEnumerator BuildRaid()
+        {
+            yield return null;
             try
             {
-                // The durable profile relinquishes carried items before the raid can begin.
-                Profile.Stash = Stash.Snapshot();
-                Profile.Loadout.Clear();
-                Profile.RaidInProgress = true;
-                Profile.Raids++;
-                store.Save(Profile);
                 Kills = 0;
                 RaidRemaining = 900;
                 var worldObject = new GameObject("Raid world");
                 worldObject.transform.SetParent(transform);
                 World = worldObject.AddComponent<WorldBuilder>();
                 World.Build(this);
+                Effects = worldObject.AddComponent<RaidCombatEffects>();
+                Effects.Initialize();
                 var actor = new GameObject("Player");
                 actor.transform.SetParent(worldObject.transform);
                 actor.transform.position = World.Spawn;
                 actor.transform.rotation = Quaternion.Euler(0, 40, 0);
                 Player = actor.AddComponent<PlayerController>();
                 Player.Initialize(this);
+                EnvironmentAudio = worldObject.AddComponent<RaidEnvironmentAudio>();
+                EnvironmentAudio.Initialize(this);
                 World.SpawnBots();
+                Profile.Stash = Stash.Snapshot();
+                Profile.Loadout.Clear();
+                Profile.RaidInProgress = true;
+                Profile.Raids++;
+                store.Save(Profile);
                 menuCamera.enabled = false;
                 Phase = SessionPhase.Raid;
                 UI.ShowRaid();
-                SetCursor(false);
             }
-            catch (Exception error) { Fail(error); }
+            catch (Exception error)
+            {
+                ClearRaidWorld();
+                Fail(error);
+            }
         }
 
         public void EndRaid(bool extracted, string reason)
@@ -133,7 +232,6 @@ namespace Dustline
             if (Phase != SessionPhase.Raid) return;
             Phase = SessionPhase.Results;
             Input.Gameplay = false;
-            Input.ReleaseTouch();
             SetCursor(true);
             try
             {
@@ -155,13 +253,20 @@ namespace Dustline
         public void ReturnToMenu()
         {
             if (Phase != SessionPhase.Results) return;
+            ClearRaidWorld();
+            Phase = SessionPhase.Menu;
+            Notice = null;
+            UI.ShowMenu();
+        }
+
+        void ClearRaidWorld()
+        {
             if (World != null) { World.gameObject.SetActive(false); Destroy(World.gameObject); }
             World = null;
             Player = null;
-            Phase = SessionPhase.Menu;
+            Effects = null;
+            EnvironmentAudio = null;
             menuCamera.enabled = true;
-            Notice = null;
-            UI.ShowMenu();
         }
 
         public void PersistSafeState()
@@ -234,17 +339,26 @@ namespace Dustline
             Input.ReleaseTouch();
         }
 
+        public void SyncControls()
+        {
+            Input.Gameplay = AcceptsGameplay;
+            SetCursor(!Input.Gameplay);
+        }
+
         void OnApplicationFocus(bool hasFocus)
         {
             focused = hasFocus;
-            if (Input == null) return;
-            Input.ReleaseTouch();
-            SetCursor(!hasFocus || Phase != SessionPhase.Raid || UI.InventoryOpen);
+            if (UI == null) return;
+            if (hasFocus) RaidFrameRate.Apply(FrameRate);
+            SyncControls();
         }
-        void OnApplicationPause(bool paused)
+        void OnApplicationPause(bool isPaused)
         {
-            focused = !paused;
-            if (Input != null) Input.ReleaseTouch();
+            paused = isPaused;
+            if (UI == null) return;
+            if (paused) SaveControlPreferences();
+            else RaidFrameRate.Apply(FrameRate);
+            SyncControls();
         }
         void Fail(Exception error)
         {
@@ -255,6 +369,11 @@ namespace Dustline
             Debug.LogException(error);
             UI.ShowError();
         }
-        void OnDestroy() { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; }
+        void OnDestroy()
+        {
+            SaveControlPreferences();
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
     }
 }
