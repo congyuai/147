@@ -2,7 +2,7 @@ using System;
 
 namespace Dustline
 {
-    public enum SessionPhase { Menu, Raid, Results, Error }
+    public enum SessionPhase { Menu, Raid, Results, Error, Loading }
 
     public sealed class ExtractionTimer
     {

@@ -38,7 +38,7 @@ namespace Dustline
                     || float.IsNaN(definition.UnitWeight) || float.IsInfinity(definition.UnitWeight)
                     || definition.UnitWeight < 0f)
                     throw new ArgumentException("Invalid inventory definition: " + definition.Id, nameof(Items));
-                if (definition.Weapon != null && definition.Weapon.MagazineSize < 1)
+                if (definition.Weapon != null && !definition.Weapon.Melee && definition.Weapon.MagazineSize < 1)
                     throw new ArgumentException("Invalid magazine size: " + definition.Id, nameof(Items));
                 if (rebuilt.ContainsKey(definition.Id))
                     throw new ArgumentException("Duplicate item ID: " + definition.Id, nameof(Items));

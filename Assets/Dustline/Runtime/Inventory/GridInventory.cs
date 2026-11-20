@@ -423,7 +423,7 @@ namespace Dustline
                 return false;
             }
             if (stack.LoadedAmmo < -1
-                || (definition.Kind != ItemKind.Weapon && stack.LoadedAmmo != -1)
+                || ((definition.Kind != ItemKind.Weapon || definition.Weapon != null && definition.Weapon.Melee) && stack.LoadedAmmo != -1)
                 || (definition.Kind == ItemKind.Weapon && definition.Weapon != null
                     && stack.LoadedAmmo > definition.Weapon.MagazineSize))
             {
