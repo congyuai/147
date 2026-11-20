@@ -1,0 +1,6 @@
+{
+  "name": "Dustline.PlayMode",
+  "references": ["Dustline.Runtime"],
+  "optionalUnityReferences": ["TestAssemblies"],
+  "autoReferenced": false
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Dustline.Runtime",
+  "rootNamespace": "Dustline",
+  "references": ["Unity.InputSystem", "UnityEngine.UI"],
+  "autoReferenced": true
+}

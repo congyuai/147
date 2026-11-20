@@ -1,0 +1,294 @@
+using System;
+using System.IO;
+using NUnit.Framework;
+using UnityEngine;
+
+namespace Dustline
+{
+    public sealed class ProfileTests
+    {
+        [Test]
+        public void MissingProfileReturnsNullWithoutCreatingDirectories()
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                var store = new ProfileStore(System.IO.Path.Combine(directory, "nested", "profile.json"));
+                Assert.That(store.Load(), Is.Null);
+                Assert.That(Directory.Exists(directory), Is.False);
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
+        }
+
+        [Test]
+        public void SaveAndLoadRoundTripAndReplaceExistingProfile()
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                string path = System.IO.Path.Combine(directory, "profile.json");
+                var store = new ProfileStore(path);
+                var profile = new ProfileData
+                {
+                    Credits = 2468,
+                    RaidInProgress = true,
+                    Raids = 3,
+                    Extractions = 2
+                };
+                profile.Stash.Add(new ItemStack
+                {
+                    InstanceId = "stash-instance",
+                    ItemId = "物资-\"Stash\":[]\\",
+                    Quantity = 4,
+                    X = 2,
+                    Y = 3,
+                    Rotated = true
+                });
+                profile.Loadout.Add(new ItemStack
+                {
+                    InstanceId = "weapon-instance",
+                    ItemId = "rifle",
+                    Slot = EquipmentSlot.Weapon,
+                    LoadedAmmo = 7
+                });
+
+                store.Save(profile);
+                Assert.That(store.Path, Is.EqualTo(System.IO.Path.GetFullPath(path)));
+                ProfileData loaded = store.Load();
+                Assert.That(loaded.Version, Is.EqualTo(1));
+                Assert.That(loaded.Credits, Is.EqualTo(2468));
+                Assert.That(loaded.RaidInProgress, Is.True);
+                Assert.That(loaded.Raids, Is.EqualTo(3));
+                Assert.That(loaded.Extractions, Is.EqualTo(2));
+                Assert.That(loaded.Stash.Count, Is.EqualTo(1));
+                Assert.That(loaded.Stash[0].InstanceId, Is.EqualTo("stash-instance"));
+                Assert.That(loaded.Stash[0].ItemId, Is.EqualTo(profile.Stash[0].ItemId));
+                Assert.That(loaded.Stash[0].Quantity, Is.EqualTo(4));
+                Assert.That(loaded.Stash[0].X, Is.EqualTo(2));
+                Assert.That(loaded.Stash[0].Y, Is.EqualTo(3));
+                Assert.That(loaded.Stash[0].Rotated, Is.True);
+                Assert.That(loaded.Stash[0].LoadedAmmo, Is.EqualTo(-1));
+                Assert.That(loaded.Loadout[0].InstanceId, Is.EqualTo("weapon-instance"));
+                Assert.That(loaded.Loadout[0].Slot, Is.EqualTo(EquipmentSlot.Weapon));
+                Assert.That(loaded.Loadout[0].LoadedAmmo, Is.EqualTo(7));
+                Assert.That(loaded.Stash[0], Is.Not.SameAs(profile.Stash[0]));
+
+                loaded.Credits = 900;
+                loaded.RaidInProgress = false;
+                loaded.Loadout[0].LoadedAmmo = 0;
+                store.Save(loaded);
+                ProfileData replaced = store.Load();
+                Assert.That(replaced.Credits, Is.EqualTo(900));
+                Assert.That(replaced.RaidInProgress, Is.False);
+                Assert.That(replaced.Loadout[0].LoadedAmmo, Is.Zero);
+                Assert.That(Directory.GetFiles(directory), Is.EquivalentTo(new[] { path }));
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
+        }
+
+        [TestCase("")]
+        [TestCase("{}")]
+        [TestCase("null")]
+        [TestCase("[]")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]")]
+        [TestCase("{\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[]}")]
+        [TestCase("{\"Version\":2,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":0,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":\"1\",\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":-1,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":\"1000\",\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":2147483648,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":1.5,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":01,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":NaN,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":null,\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":{},\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[],\"Loadout\":null}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[null],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[{}],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[],\"Loadout\":[],\"Raids\":-1}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[],\"Loadout\":[],\"Extractions\":1,\"Raids\":0}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[],\"Loadout\":[],\"RaidInProgress\":1}")]
+        [TestCase("{\"Version\":1,\"Version\":1,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":1,\"\\u0056ersion\":1,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Credits\":1000,\"Stash\":[],\"Loadout\":[],\"Extra\":{\"Version\":1}}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[],\"Loadout\":[],}")]
+        [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}garbage")]
+        public void LoadRejectsInvalidJsonOrSchemaWithoutChangingFile(string json)
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                Directory.CreateDirectory(directory);
+                string path = System.IO.Path.Combine(directory, "profile.json");
+                File.WriteAllText(path, json);
+                var store = new ProfileStore(path);
+                Assert.Throws<InvalidDataException>(() => store.Load());
+                Assert.That(File.ReadAllText(path), Is.EqualTo(json));
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
+        }
+
+        [TestCase("null-stash")]
+        [TestCase("null-loadout")]
+        [TestCase("null-item")]
+        [TestCase("empty-instance")]
+        [TestCase("empty-item")]
+        [TestCase("duplicate-instance")]
+        [TestCase("zero-quantity")]
+        [TestCase("negative-coordinate")]
+        [TestCase("invalid-slot")]
+        [TestCase("equipped-stack")]
+        [TestCase("duplicate-slot")]
+        [TestCase("invalid-loaded")]
+        [TestCase("invalid-version")]
+        [TestCase("negative-credits")]
+        [TestCase("negative-raids")]
+        [TestCase("negative-extractions")]
+        [TestCase("extractions-exceed-raids")]
+        public void InvalidProfileItemsAndCountersAreRejectedByLoadAndSave(string scenario)
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                Directory.CreateDirectory(directory);
+                string path = System.IO.Path.Combine(directory, "profile.json");
+                var store = new ProfileStore(path);
+                var profile = new ProfileData();
+                profile.Stash.Add(new ItemStack { InstanceId = "item", ItemId = "ammo", Quantity = 3 });
+                switch (scenario)
+                {
+                    case "null-stash": profile.Stash = null; break;
+                    case "null-loadout": profile.Loadout = null; break;
+                    case "null-item": profile.Stash[0] = null; break;
+                    case "empty-instance": profile.Stash[0].InstanceId = ""; break;
+                    case "empty-item": profile.Stash[0].ItemId = " "; break;
+                    case "duplicate-instance": profile.Loadout.Add(profile.Stash[0].Clone()); break;
+                    case "zero-quantity": profile.Stash[0].Quantity = 0; break;
+                    case "negative-coordinate": profile.Stash[0].Y = -1; break;
+                    case "invalid-slot": profile.Stash[0].Slot = (EquipmentSlot)20; break;
+                    case "equipped-stack": profile.Stash[0].Slot = EquipmentSlot.Weapon; break;
+                    case "duplicate-slot":
+                        profile.Stash[0].Quantity = 1;
+                        profile.Stash[0].Slot = EquipmentSlot.Weapon;
+                        profile.Stash.Add(new ItemStack
+                        {
+                            InstanceId = "second", ItemId = "rifle", Slot = EquipmentSlot.Weapon
+                        });
+                        break;
+                    case "invalid-loaded": profile.Stash[0].LoadedAmmo = -2; break;
+                    case "invalid-version": profile.Version = 2; break;
+                    case "negative-credits": profile.Credits = -1; break;
+                    case "negative-raids": profile.Raids = -1; break;
+                    case "negative-extractions": profile.Extractions = -1; break;
+                    case "extractions-exceed-raids": profile.Extractions = 1; break;
+                }
+
+                Assert.Throws<InvalidDataException>(() => store.Save(profile));
+                Assert.That(File.Exists(path), Is.False);
+                string json = JsonUtility.ToJson(profile);
+                if (scenario == "null-stash")
+                    json = "{\"Version\":1,\"Credits\":1000,\"Stash\":null,\"Loadout\":[]}";
+                else if (scenario == "null-loadout")
+                    json = "{\"Version\":1,\"Credits\":1000,\"Stash\":[],\"Loadout\":null}";
+                File.WriteAllText(path, json);
+                Assert.Throws<InvalidDataException>(() => store.Load());
+                Assert.That(File.ReadAllText(path), Is.EqualTo(json));
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
+        }
+
+        [Test]
+        public void SaveRefusesToOverwriteCorruptExistingProfile()
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                Directory.CreateDirectory(directory);
+                string path = System.IO.Path.Combine(directory, "profile.json");
+                const string corrupt = "{\"Version\":1,\"Credits\":";
+                File.WriteAllText(path, corrupt);
+                var store = new ProfileStore(path);
+                Assert.Throws<InvalidDataException>(() => store.Load());
+                Assert.Throws<InvalidDataException>(() => store.Save(new ProfileData()));
+                Assert.That(File.ReadAllText(path), Is.EqualTo(corrupt));
+                Assert.That(Directory.GetFiles(directory), Is.EquivalentTo(new[] { path }));
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
+        }
+
+        [Test]
+        public void InvalidSaveKeepsThePreviousValidProfile()
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                string path = System.IO.Path.Combine(directory, "profile.json");
+                var store = new ProfileStore(path);
+                var profile = new ProfileData { Credits = 350 };
+                store.Save(profile);
+                byte[] original = File.ReadAllBytes(path);
+                profile.Credits = -1;
+                Assert.Throws<InvalidDataException>(() => store.Save(profile));
+                Assert.Throws<InvalidDataException>(() => store.Save(null));
+                Assert.That(File.ReadAllBytes(path), Is.EqualTo(original));
+                Assert.That(store.Load().Credits, Is.EqualTo(350));
+                Assert.That(Directory.GetFiles(directory), Is.EquivalentTo(new[] { path }));
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
+        }
+
+        [Test]
+        public void InvalidEncodingIsReportedAsCorruptData()
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                Directory.CreateDirectory(directory);
+                string path = System.IO.Path.Combine(directory, "profile.json");
+                byte[] bytes = { 0x7b, 0xff, 0x7d };
+                File.WriteAllBytes(path, bytes);
+                var store = new ProfileStore(path);
+                Assert.Throws<InvalidDataException>(() => store.Load());
+                Assert.That(File.ReadAllBytes(path), Is.EqualTo(bytes));
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
+        }
+
+        private static string TemporaryDirectory()
+        {
+            return System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dustline-profile-tests-" + Guid.NewGuid().ToString("N"));
+        }
+    }
+}
