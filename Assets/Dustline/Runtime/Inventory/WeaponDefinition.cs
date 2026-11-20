@@ -5,6 +5,8 @@ namespace Dustline
     [CreateAssetMenu(menuName = "Dustline/Weapon Definition")]
     public sealed class WeaponDefinition : ScriptableObject
     {
+        public const string BatonId = "baton";
+        public bool Melee;
         public string AmmoId;
         public int MagazineSize = 20;
         public float Damage = 24f;
