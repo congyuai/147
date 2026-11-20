@@ -6,47 +6,58 @@ using UnityEngine.UI;
 
 namespace Dustline
 {
-    public sealed class GameUI : MonoBehaviour
+    public sealed partial class GameUI : MonoBehaviour
     {
-        public bool InventoryOpen { get; private set; }
+        enum ScreenPage { Lobby, Stash, Operator, MenuSettings, Loading, Field, FieldInventory, FieldSettings, Results, Error }
+
+        ScreenPage current;
+        public bool InventoryOpen => current == ScreenPage.FieldInventory;
+        public bool BlocksGameplay => current != ScreenPage.Field;
         GameSession session;
         Font font;
-        RectTransform safe, page, hud, touch, inventory, gridRoot, detailsRoot;
-        Text hudStatus, compass, prompt, crosshair, toast, balance, description;
-        LootContainer loot;
-        GridInventory selectedBag;
-        string selectedId;
-        bool placing, rotated;
-        float toastUntil, hitUntil;
+        RaidUiIcons icons;
+        RectTransform safe, page, panelRoot, hud, touch, toastAnchor;
+        Canvas uiCanvas;
+        OperatorPreview operatorPreview;
+        Text toast, fpsReadout;
+        float toastUntil, fpsSeconds, sampledFps;
+        int fpsFrames;
         Rect lastSafe;
         Vector2Int lastScreen;
-        readonly Color panel = new Color(0.04f, 0.065f, 0.075f, 0.97f);
-        readonly Color accent = new Color(0.76f, 0.58f, 0.28f);
-        readonly Color textColor = new Color(0.88f, 0.91f, 0.88f);
+        static readonly Color Ink = new Color32(13, 20, 24, 255);
+        static readonly Color Surface = new Color32(22, 31, 36, 250);
+        static readonly Color Plate = new Color32(33, 47, 53, 255);
+        static readonly Color Border = new Color32(52, 73, 79, 255);
+        static readonly Color Pale = new Color32(239, 240, 229, 255);
+        static readonly Color Muted = new Color32(169, 192, 190, 255);
+        static readonly Color Amber = new Color32(229, 174, 91, 255);
+        static readonly Color Aqua = new Color32(111, 195, 177, 255);
 
         public void Initialize(GameSession owner)
         {
             session = owner;
             font = Resources.Load<Font>("Dustline/Fonts/NotoSansSC-Regular");
+            icons = new RaidUiIcons();
             var canvasObject = new GameObject("Dustline UI", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             canvasObject.transform.SetParent(transform, false);
-            canvasObject.GetComponent<Canvas>().renderMode = RenderMode.ScreenSpaceOverlay;
+            uiCanvas = canvasObject.GetComponent<Canvas>();
+            uiCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
             var scaler = canvasObject.GetComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = new Vector2(1280, 720);
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.Expand;
-            safe = Rect("Safe area", canvasObject.transform, 0, 0, 1, 1);
-            page = Rect("Pages", safe, 0, 0, 1, 1);
-            hud = Rect("HUD", safe, 0, 0, 1, 1);
-            hudStatus = Label(hud, "", 24, 20, 20, 610, 70);
-            compass = Label(hud, "", 20, 730, 20, 520, 70, TextAnchor.UpperRight);
-            prompt = Label(hud, "", 23, 350, 440, 580, 70, TextAnchor.MiddleCenter);
-            var center = Rect("Crosshair center", hud, 0.5f, 0.5f, 0.5f, 0.5f);
-            crosshair = Label(center, "+", 28, -25, -25, 50, 50, TextAnchor.MiddleCenter);
-            touch = Rect("Touch controls", safe, 0, 0, 1, 1);
+            safe = Stretch("Safe area", canvasObject.transform);
+            hud = Stretch("HUD", safe);
+            BuildHud();
+            touch = Stretch("Touch controls", safe);
             BuildTouch();
-            toast = Label(safe, "", 22, 300, 105, 680, 70, TextAnchor.MiddleCenter);
-            toast.color = accent;
+            page = Stretch("Pages", safe);
+            toastAnchor = Anchor("Toast anchor", safe, 0.5f, 0);
+            var toastPanel = At("Toast panel", toastAnchor, -290, -101, 580, 71);
+            Fill(toastPanel, new Color32(12, 19, 23, 244));
+            Fill(At("Toast rule", toastPanel, 0, 0, 3, 71), Amber);
+            toast = Label(toastPanel, "", 18, 16, 4, 548, 62, TextAnchor.MiddleCenter);
+            toastAnchor.gameObject.SetActive(false);
             var events = new GameObject("Event System", typeof(EventSystem), typeof(InputSystemUIInputModule));
             events.transform.SetParent(transform, false);
             hud.gameObject.SetActive(false);
@@ -54,367 +65,465 @@ namespace Dustline
             UpdateSafeArea();
         }
 
-        RectTransform Rect(string title, Transform parent, float x0, float y0, float x1, float y1)
+        public void ShowMenu()
+        {
+            var panel = Display(ScreenPage.Lobby, "Operations desk");
+            Header(panel, "行动大厅", "01 / 今日任务");
+            var left = At("Deployment summary", panel, 26, 132, 410, 471);
+            Fill(left, Ink);
+            Fill(At("Brief accent", left, 0, 0, 3, 99), Amber);
+            Label(left, "尘线：撤离行动", 35, 22, 24, 368, 59);
+            Label(left, "当前区域 / 北岬货运港", 19, 22, 85, 368, 33, color: Amber);
+            Label(left, "沿货运港的铁路与堆场搜索物资，在突袭结束前找到撤离点。", 20, 22, 132, 354, 82, color: Muted);
+            Fill(At("Summary divider", left, 22, 237, 366, 1), Border);
+            string equipped = ItemName(session.Loadout.Equipped(EquipmentSlot.Weapon), "未装备武器");
+            Label(left, "当前整备", 15, 22, 254, 340, 27, color: Muted);
+            Label(left, equipped, 25, 22, 286, 366, 43);
+            if (!string.IsNullOrEmpty(session.Notice))
+                Label(left, session.Notice, 17, 22, 340, 366, 83, color: Amber);
+            DrawBriefingMap(panel);
+            Button(panel, "开始突袭", 26, 615, 195, 49, session.StartRaid, true);
+            Button(panel, "仓库", 231, 615, 100, 49, ShowStash);
+            Button(panel, "设置", 341, 615, 95, 49, () => ShowSettings(false));
+            Button(panel, "角色", 446, 615, 100, 49, ShowOperator);
+            Label(panel, "本地突袭  /  14 名电脑对手  /  15 分钟", 16, 566, 618, 627, 43, TextAnchor.MiddleRight, Muted);
+        }
+
+        void DrawBriefingMap(RectTransform parent)
+        {
+            var field = At("District briefing", parent, 460, 132, 752, 471);
+            Fill(field, Plate);
+            Fill(At("Schematic rule", field, 0, 0, 752, 2), Aqua);
+            Label(field, "北岬货运港", 28, 19, 15, 420, 41);
+            Label(field, "02 / 区域示意", 17, 445, 22, 285, 34, TextAnchor.UpperRight, Muted);
+            var map = At("Overview grid", field, 20, 65, 712, 349);
+            Fill(map, new Color32(17, 28, 33, 255));
+            Color grid = new Color32(37, 57, 61, 255);
+            for (int x = 0; x <= 8; x++) Fill(At("Grid column", map, 174 + x * 43, 0, 1, 349), grid);
+            for (int y = 0; y <= 8; y++) Fill(At("Grid row", map, 174, y * 43, 345, 1), grid);
+            Label(map, "北", 17, 23, 13, 34, 24, color: Muted);
+            Stroke(map, "North axis", new Vector2(40, 49), new Vector2(40, 82), 2, Muted);
+            Stroke(map, "North pointer", new Vector2(35, 55), new Vector2(40, 49), 2, Muted);
+            Stroke(map, "North pointer", new Vector2(40, 49), new Vector2(45, 55), 2, Muted);
+            Vector2 Point(Vector3 position) => new Vector2(346 + position.x * (344 / PortLayout.Size), 173 - position.z * (344 / PortLayout.Size));
+            var districts = PortLayout.Districts;
+            for (int i = 0; i < districts.Count; i++)
+            {
+                var district = districts[i];
+                Vector2 p = Point(district.Center);
+                Fill(At("District block", map, p.x - 17, p.y - 13, 34, 26), new Color32(44, 68, 71, 255));
+                Fill(At("District center", map, p.x - 3, p.y - 3, 6, 6), Muted);
+                Label(map, district.Name, 16, p.x - 57, p.y + 10, 114, 28, TextAnchor.MiddleCenter);
+            }
+            var spawn = Point(PortLayout.Spawn);
+            Fill(At("Spawn mark", map, spawn.x - 4, spawn.y - 4, 8, 8), Amber);
+            Label(map, "入口", 15, spawn.x - 73, spawn.y - 13, 63, 27, TextAnchor.MiddleRight, Amber);
+            foreach (var exit in PortLayout.Exits)
+            {
+                Vector2 p = Point(exit.Position);
+                Fill(At("Exit mark", map, p.x - 4, p.y - 4, 8, 8), Aqua);
+                Label(map, exit.Name, 15, p.x + 10, p.y - 13, 149, 27, TextAnchor.MiddleLeft, Aqua);
+            }
+            Label(field, "960 × 960 米    /    五处货运分区    /    双撤离点", 17, 20, 428, 710, 31, color: Muted);
+        }
+
+        void ShowOperator()
+        {
+            var panel = Display(ScreenPage.Operator, "Operator selection");
+            Header(panel, "角色整备", "行动大厅 / 外观");
+            var showcase = At("Operator preview", panel, 26, 130, 494, 455);
+            Fill(showcase, Ink);
+            Fill(At("Preview rule", showcase, 0, 0, 494, 2), Aqua);
+            var target = At("Portrait", showcase, 69, 16, 356, 423).gameObject.AddComponent<RawImage>();
+            target.raycastTarget = false;
+            operatorPreview = new OperatorPreview(transform, target,
+                session.Loadout.Equipped(EquipmentSlot.Weapon) is ItemStack item ? session.Catalog.Find(item.ItemId).Weapon : null);
+            operatorPreview.Select(session.SelectedOperator);
+            var dossier = At("Operator dossier", panel, 545, 130, 667, 455);
+            Fill(dossier, Ink);
+            Label(dossier, "行动员外观", 30, 24, 24, 617, 52);
+            Label(dossier, "选择角色性别。仅改变外观，不影响生命、负重或移动速度。", 21, 24, 93, 617, 76, color: Muted);
+            Button male = null, female = null;
+            void UpdateSelection(OperatorStyle style)
+            {
+                session.SelectOperator(style);
+                operatorPreview.Select(session.SelectedOperator);
+                StyleButton(male, session.SelectedOperator == OperatorStyle.Male, null);
+                StyleButton(female, session.SelectedOperator == OperatorStyle.Female, null);
+            }
+            male = Button(dossier, "男性", 24, 183, 297, 64, () => UpdateSelection(OperatorStyle.Male));
+            female = Button(dossier, "女性", 345, 183, 297, 64, () => UpdateSelection(OperatorStyle.Female));
+            UpdateSelection(session.SelectedOperator);
+            Label(dossier, "外观选择会保存在本机。", 17, 24, 277, 617, 55, color: Aqua);
+            Button(panel, "返回大厅", 1014, 615, 198, 49, ShowMenu, true);
+        }
+
+        void ShowSettings(bool field)
+        {
+            var panel = Display(field ? ScreenPage.FieldSettings : ScreenPage.MenuSettings, "Display settings");
+            Header(panel, "设置", field ? "突袭 / 显示与触控" : "大厅 / 显示与触控");
+            var body = At("Frame settings", panel, 26, 116, 1186, 492);
+            Fill(body, Ink);
+            Fill(At("Section rule", body, 0, 0, 1186, 2), Amber);
+            Label(body, "局内帧率", 29, 24, 12, 1112, 32);
+            Label(body, "切换立即生效。实际帧率受设备、画面负载和系统调度影响。", 19, 24, 60, 1112, 37, color: Muted);
+            var choices = new Button[RaidFrameRate.Options.Count];
+            for (int i = 0; i < choices.Length; i++)
+            {
+                int value = RaidFrameRate.Options[i];
+                choices[i] = Button(body, value == RaidFrameRate.Uncapped ? "不限帧" : value + " 帧", 24 + i * 225, 50, 208, 45, () =>
+                {
+                    session.SelectFrameRate(value);
+                    UpdateFrameChoices(choices);
+                    UpdateFpsText();
+                });
+            }
+            UpdateFrameChoices(choices);
+            Label(body, Application.isMobilePlatform
+                ? "安卓的不限帧使用当前屏幕刷新率。固定档位可能被系统匹配为更低的刷新率分频。"
+                : "不限帧会关闭游戏帧率上限与垂直同步。",
+                17, 24, 102, 1100, 32, color: Muted);
+            fpsReadout = Label(body, "", 20, 24, 138, 1100, 32, color: Aqua);
+            UpdateFpsText();
+            BuildDisplaySettings(body);
+            BuildSprintSetting(body);
+            if (!field && !Application.isMobilePlatform)
+            {
+                var preview = Button(panel, session.Input.ForceTouch ? "触控预览：开启" : "触控预览：关闭", 26, 615, 233, 49, null);
+                preview.onClick.AddListener(() =>
+                {
+                    session.Input.ForceTouch = !session.Input.ForceTouch;
+                    preview.GetComponentInChildren<Text>().text = session.Input.ForceTouch ? "触控预览：开启" : "触控预览：关闭";
+                });
+            }
+            if (field) Label(panel, "设置打开时，突袭不会暂停。", 17, 26, 584, 560, 24, color: Amber);
+            Button(panel, field ? "返回突袭" : "返回大厅", 1014, 615, 198, 49, BackOrSettings, true);
+        }
+
+        void BuildDisplaySettings(Transform parent)
+        {
+            Fill(At("Quality divider", parent, 24, 177, 1138, 1), Border);
+            Label(parent, "画质", 24, 24, 188, 230, 32);
+            var quality = new Button[3];
+            string[] labels = { "低", "中", "高" };
+            for (int i = 0; i < quality.Length; i++)
+            {
+                int value = i;
+                quality[i] = Button(parent, labels[i], 264 + i * 145, 184, 130, 43, () =>
+                {
+                    session.SelectQuality(value);
+                    for (int j = 0; j < quality.Length; j++) StyleButton(quality[j], session.QualityLevel == j, null);
+                });
+            }
+            for (int i = 0; i < quality.Length; i++) StyleButton(quality[i], session.QualityLevel == i, null);
+            Label(parent, "画质档位会调节阴影、材质和后处理的总体质量。", 17, 720, 190, 430, 29, TextAnchor.UpperRight, Muted);
+            Label(parent, "渲染分辨率", 24, 24, 250, 230, 32);
+            var scales = new[] { 0.65f, 0.80f, 1f };
+            var resolution = new Button[scales.Length];
+            for (int i = 0; i < scales.Length; i++)
+            {
+                int value = i;
+                resolution[i] = Button(parent, Mathf.RoundToInt(scales[i] * 100) + "%", 264 + i * 145, 246, 130, 43, () =>
+                {
+                    session.SelectResolution(scales[value]);
+                    for (int j = 0; j < resolution.Length; j++) StyleButton(resolution[j], Mathf.Abs(session.ResolutionScale - scales[j]) < 0.01f, null);
+                });
+            }
+            for (int i = 0; i < resolution.Length; i++) StyleButton(resolution[i], Mathf.Abs(session.ResolutionScale - scales[i]) < 0.01f, null);
+            Label(parent, "只缩放 3D 渲染，界面保持清晰。", 17, 720, 252, 430, 29, TextAnchor.UpperRight, Muted);
+        }
+
+        void BuildSprintSetting(Transform parent)
+        {
+            Fill(At("Touch settings divider", parent, 24, 310, 1138, 1), Border);
+            Label(parent, "冲刺灵敏度", 25, 24, 321, 569, 34);
+            Label(parent, "摇杆向前推到设定的幅度时自动冲刺。百分比越低，越容易触发。", 17, 24, 363, 748, 34, color: Muted);
+            var readout = Label(parent, "", 23, 805, 321, 339, 34, TextAnchor.UpperRight, Amber);
+            var root = At("Sprint threshold", parent, 24, 401, 912, 57);
+            Fill(root, Color.clear, true);
+            Fill(At("Slider background", root, 13, 28, 886, 9), Border);
+            var fillZone = At("Fill area", root, 13, 28, 886, 9);
+            var fill = Stretch("Threshold fill", fillZone);
+            Fill(fill, Amber);
+            var handleZone = At("Handle area", root, 13, 0, 886, 65);
+            var handle = Anchor("Slider handle", handleZone, 0, 0.5f);
+            handle.sizeDelta = new Vector2(24, 39);
+            var grip = Fill(handle, Pale);
+            var slider = root.gameObject.AddComponent<Slider>();
+            slider.targetGraphic = grip;
+            slider.fillRect = fill;
+            slider.handleRect = handle;
+            slider.navigation = new Navigation { mode = Navigation.Mode.None };
+            slider.minValue = PlayerInputReader.MinSprintThreshold;
+            slider.maxValue = PlayerInputReader.MaxSprintThreshold;
+            slider.wholeNumbers = true;
+            slider.SetValueWithoutNotify(session.Input.SprintThreshold);
+            readout.text = "前推 " + session.Input.SprintThreshold + "%";
+            slider.onValueChanged.AddListener(value =>
+            {
+                session.SelectSprintThreshold(Mathf.RoundToInt(value));
+                readout.text = "前推 " + session.Input.SprintThreshold + "%";
+            });
+            Button(parent, "恢复默认", 968, 405, 194, 43, () => slider.value = PlayerInputReader.DefaultSprintThreshold);
+        }
+
+        void UpdateFrameChoices(Button[] choices)
+        {
+            for (int i = 0; i < choices.Length; i++)
+                StyleButton(choices[i], RaidFrameRate.Options[i] == session.FrameRate, null);
+        }
+
+        void UpdateFpsText()
+        {
+            if (fpsReadout == null) return;
+            int target = Application.targetFrameRate;
+            fpsReadout.text = "游戏目标：" + (target < 0 ? "不限帧" : target + " 帧") + "    /    实测：" + (sampledFps > 0 ? Mathf.RoundToInt(sampledFps) + " 帧" : "采样中");
+        }
+
+        public void BackOrSettings()
+        {
+            if (session.Phase == SessionPhase.Menu && (current == ScreenPage.Stash || current == ScreenPage.Operator || current == ScreenPage.MenuSettings)) ShowMenu();
+            else if (session.Phase == SessionPhase.Raid)
+            {
+                if (current == ScreenPage.Field) ShowSettings(true);
+                else if (current == ScreenPage.FieldInventory || current == ScreenPage.FieldSettings) EnterField();
+            }
+        }
+
+        public void ShowLoading()
+        {
+            var panel = Display(ScreenPage.Loading, "Loading district");
+            Header(panel, "正在部署", "北岬货运港");
+            Label(panel, "正在准备港区、搜刮点与撤离路线…", 30, 42, 285, 1150, 78, TextAnchor.MiddleCenter);
+        }
+
+        public void ShowRaid()
+        {
+            EnterField();
+            Notify(session.Input.TouchMode
+                ? "摇杆前推可自动冲刺。右侧拖动转向，容器对准后点放大镜搜索。"
+                : "WASD 移动 / Shift 冲刺 / F 搜索 / Q、E 探头 / Tab 背包 / Esc 设置");
+        }
+
+        public void ShowResults()
+        {
+            var panel = Display(ScreenPage.Results, "Raid report");
+            Header(panel, "突袭结算", "北岬货运港 / 行动记录");
+            var report = At("Debrief plate", panel, 26, 136, 1186, 450);
+            Fill(report, Ink);
+            Fill(At("Report accent", report, 0, 0, 4, 109), Amber);
+            Label(report, session.Result, 25, 24, 27, 1138, 389);
+            Button(panel, "返回大厅", 26, 615, 192, 49, session.ReturnToMenu);
+            Button(panel, "前往仓库", 1015, 615, 197, 49, () =>
+            {
+                session.ReturnToMenu();
+                if (session.Phase == SessionPhase.Menu) ShowStash();
+            }, true);
+        }
+
+        public void ShowError()
+        {
+            var panel = Display(ScreenPage.Error, "Session halted");
+            Header(panel, "行动已停止", "运行状态");
+            Label(panel, session.Error, 23, 36, 148, 1156, 442);
+        }
+
+        void EnterField()
+        {
+            Switch(ScreenPage.Field);
+            UpdateHud(true);
+        }
+
+        void Switch(ScreenPage next)
+        {
+            session.SaveControlPreferences();
+            operatorPreview?.Dispose();
+            operatorPreview = null;
+            Clear(page);
+            panelRoot = null;
+            fpsReadout = null;
+            ResetInventoryView();
+            current = next;
+            bool field = next == ScreenPage.Field;
+            hud.gameObject.SetActive(field);
+            touch.gameObject.SetActive(field && session.Input.TouchMode);
+            toastAnchor.gameObject.SetActive(false);
+            session.SyncControls();
+        }
+
+        RectTransform Display(ScreenPage next, string title)
+        {
+            Switch(next);
+            Fill(Stretch("Page scrim", page), new Color32(6, 10, 13, 221), true);
+            panelRoot = Anchor(title, page, 0.5f, 0.5f);
+            panelRoot.sizeDelta = new Vector2(1240, 680);
+            Fill(panelRoot, Surface, true);
+            Canvas.ForceUpdateCanvases();
+            FitPanel();
+            return panelRoot;
+        }
+
+        void Header(RectTransform root, string title, string subtitle)
+        {
+            Fill(At("Header fill", root, 0, 0, 1240, 110), Ink);
+            Fill(At("Header highlight", root, 0, 0, 1240, 3), Amber);
+            Label(root, title, 35, 26, 23, 785, 57);
+            Label(root, subtitle, 16, 26, 78, 770, 25, color: Muted);
+            Label(root, "尘线 / " + Application.version, 19, 816, 28, 396, 40, TextAnchor.UpperRight, Amber);
+            if (session.Profile != null && session.Phase == SessionPhase.Menu)
+                creditsReadout = Label(root, session.Profile.Credits + " 信用点", 19, 853, 73, 359, 30, TextAnchor.UpperRight, Muted);
+        }
+
+        void FitPanel()
+        {
+            if (panelRoot == null) return;
+            float scale = Mathf.Min(1, Mathf.Min(safe.rect.width / 1260f, safe.rect.height / 700f));
+            panelRoot.localScale = Vector3.one * Mathf.Max(0.01f, scale);
+        }
+
+        void UpdateSafeArea()
+        {
+            lastSafe = Screen.safeArea;
+            lastScreen = new Vector2Int(Screen.width, Screen.height);
+            if (Screen.width < 1 || Screen.height < 1) return;
+            safe.anchorMin = new Vector2(lastSafe.xMin / Screen.width, lastSafe.yMin / Screen.height);
+            safe.anchorMax = new Vector2(lastSafe.xMax / Screen.width, lastSafe.yMax / Screen.height);
+            Canvas.ForceUpdateCanvases();
+            reticleAnchor.anchoredPosition = (new Vector2(Screen.width * 0.5f, Screen.height * 0.5f) - lastSafe.center) / uiCanvas.scaleFactor;
+            FitPanel();
+        }
+
+        public void Notify(string message)
+        {
+            toast.text = message;
+            toastUntil = Time.unscaledTime + 4.5f;
+            float y = current == ScreenPage.Field ? 117 : 145;
+            toastAnchor.GetChild(0).GetComponent<RectTransform>().anchoredPosition = new Vector2(-290, y);
+            toastAnchor.gameObject.SetActive(true);
+        }
+
+        void Update()
+        {
+            if (Screen.safeArea != lastSafe || Screen.width != lastScreen.x || Screen.height != lastScreen.y) UpdateSafeArea();
+            if (toastAnchor.gameObject.activeSelf && Time.unscaledTime >= toastUntil) toastAnchor.gameObject.SetActive(false);
+            fpsFrames++;
+            fpsSeconds += Time.unscaledDeltaTime;
+            if (fpsSeconds >= 0.6f)
+            {
+                sampledFps = fpsFrames / fpsSeconds;
+                fpsFrames = 0;
+                fpsSeconds = 0;
+                UpdateFpsText();
+            }
+            if (current == ScreenPage.Field) UpdateHud(false);
+        }
+
+        static RectTransform Anchor(string title, Transform parent, float x, float y)
         {
             var rect = new GameObject(title, typeof(RectTransform)).GetComponent<RectTransform>();
             rect.SetParent(parent, false);
-            rect.anchorMin = new Vector2(x0, y0);
-            rect.anchorMax = new Vector2(x1, y1);
+            rect.anchorMin = rect.anchorMax = new Vector2(x, y);
             rect.offsetMin = rect.offsetMax = Vector2.zero;
             return rect;
         }
-        RectTransform At(string title, Transform parent, float x, float y, float width, float height)
+
+        static RectTransform Stretch(string title, Transform parent)
         {
-            var rect = Rect(title, parent, 0, 1, 0, 1);
+            var rect = Anchor(title, parent, 0, 0);
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = rect.offsetMax = Vector2.zero;
+            return rect;
+        }
+
+        static RectTransform At(string title, Transform parent, float x, float y, float width, float height)
+        {
+            var rect = Anchor(title, parent, 0, 1);
             rect.pivot = new Vector2(0, 1);
             rect.anchoredPosition = new Vector2(x, -y);
             rect.sizeDelta = new Vector2(width, height);
             return rect;
         }
-        Text Label(Transform parent, string value, int size, float x, float y, float w, float h, TextAnchor alignment = TextAnchor.UpperLeft)
+
+        static Image Fill(RectTransform rect, Color color, bool raycast = false)
+        {
+            var image = rect.gameObject.AddComponent<Image>();
+            image.color = color;
+            image.raycastTarget = raycast;
+            return image;
+        }
+
+        static void Stroke(Transform root, string title, Vector2 a, Vector2 b, float width, Color color)
+        {
+            var d = b - a;
+            var line = At(title, root, a.x, a.y, d.magnitude, width);
+            line.localRotation = Quaternion.Euler(0, 0, -Mathf.Atan2(d.y, d.x) * Mathf.Rad2Deg);
+            Fill(line, color);
+        }
+
+        Text Label(Transform parent, string value, int size, float x, float y, float w, float h,
+            TextAnchor alignment = TextAnchor.UpperLeft, Color? color = null)
         {
             var label = At("Label", parent, x, y, w, h).gameObject.AddComponent<Text>();
             label.font = font;
             label.fontSize = size;
             label.text = value;
-            label.color = textColor;
+            label.color = color ?? Pale;
             label.alignment = alignment;
+            label.supportRichText = false;
             label.raycastTarget = false;
             label.horizontalOverflow = HorizontalWrapMode.Wrap;
             label.verticalOverflow = VerticalWrapMode.Truncate;
             return label;
         }
-        Button Button(Transform parent, string title, float x, float y, float w, float h, Action action, Color? color = null)
+
+        Button Button(Transform parent, string title, float x, float y, float w, float h, Action action, bool primary = false, Color? background = null)
         {
             var rect = At(title, parent, x, y, w, h);
-            var image = rect.gameObject.AddComponent<Image>();
-            image.color = color ?? new Color(0.16f, 0.22f, 0.23f);
+            var image = Fill(rect, Plate, true);
             var button = rect.gameObject.AddComponent<Button>();
             button.targetGraphic = image;
             button.navigation = new Navigation { mode = Navigation.Mode.None };
-            button.onClick.AddListener(() => action());
-            var text = Label(rect, title, 18, 5, 3, w - 10, h - 6, TextAnchor.MiddleCenter);
-            text.resizeTextForBestFit = true;
-            text.resizeTextMinSize = 12;
-            text.resizeTextMaxSize = 19;
+            if (action != null) button.onClick.AddListener(() => action());
+            if (!string.IsNullOrEmpty(title))
+            {
+                var text = Label(rect, title, 18, 5, 2, w - 10, h - 4, TextAnchor.MiddleCenter);
+                text.resizeTextForBestFit = true;
+                text.resizeTextMinSize = 11;
+                text.resizeTextMaxSize = primary ? 22 : 19;
+            }
+            StyleButton(button, primary, background);
             return button;
         }
-        void Clear(Transform parent)
+
+        static void StyleButton(Button button, bool primary, Color? background)
+        {
+            button.targetGraphic.color = background ?? (primary ? Amber : Plate);
+            var label = button.GetComponentInChildren<Text>();
+            if (label != null) label.color = primary ? Ink : Pale;
+            var palette = button.colors;
+            palette.normalColor = Color.white;
+            palette.highlightedColor = new Color(0.91f, 0.94f, 0.98f);
+            palette.pressedColor = new Color(0.68f, 0.75f, 0.78f);
+            palette.fadeDuration = 0.08f;
+            button.colors = palette;
+        }
+
+        static void Clear(Transform parent)
         {
             for (int i = parent.childCount - 1; i >= 0; i--)
-            { var child = parent.GetChild(i).gameObject; child.SetActive(false); Destroy(child); }
-        }
-        void Background(RectTransform root) { root.gameObject.AddComponent<Image>().color = panel; }
-        RectTransform CenterPanel(string title)
-        {
-            var rect = Rect(title, page, 0.5f, 0.5f, 0.5f, 0.5f);
-            rect.sizeDelta = new Vector2(1240, 680);
-            Canvas.ForceUpdateCanvases();
-            rect.localScale = Vector3.one * Mathf.Min(1, safe.rect.width / 1280, safe.rect.height / 720);
-            Background(rect);
-            return rect;
+            {
+                var child = parent.GetChild(i).gameObject;
+                if (!child.activeSelf) continue;
+                child.SetActive(false);
+                Destroy(child);
+            }
         }
 
-        public void ShowMenu()
+        string ItemName(ItemStack item, string missing) => item == null ? missing : session.Catalog.Find(item.ItemId).DisplayName;
+        void OnDestroy()
         {
-            InventoryOpen = false;
-            loot = null;
-            selectedBag = null;
-            selectedId = null;
-            placing = false;
-            Clear(page);
-            hud.gameObject.SetActive(false);
-            touch.gameObject.SetActive(false);
-            session.SetCursor(true);
-            inventory = CenterPanel("Loadout and stash");
-            Label(inventory, "尘线：撤离行动", 30, 24, 16, 780, 48);
-            balance = Label(inventory, "", 23, 820, 22, 390, 40, TextAnchor.UpperRight);
-            Label(inventory, "本地突袭 / 14 名电脑对手 / 15 分钟\n装备步枪，按 R 或点击“换弹”装填，前往东北方绿色撤离区。本版本不含真人联机。", 18, 24, 65, 1170, 56);
-            BuildInventoryBody();
-            Button(inventory, "开始突袭", 1010, 604, 205, 54, session.StartRaid, new Color(0.37f, 0.3f, 0.12f));
-            Button(inventory, "应急装备", 785, 604, 205, 54, session.EmergencyKit);
-            Button(inventory, "AR-20步枪 / 240", 24, 604, 140, 54, () => session.Buy("rifle", 1));
-            Button(inventory, "弹药×30 / 60", 174, 604, 150, 54, () => session.Buy("ammo", 30));
-            Button(inventory, "医疗包 / 40", 334, 604, 140, 54, () => session.Buy("medkit", 1));
-            Button(inventory, "防弹衣 / 160", 484, 604, 140, 54, () => session.Buy("armor", 1));
-            Button(inventory, "触控预览", 634, 604, 140, 54, () => { session.Input.ForceTouch = !session.Input.ForceTouch; Notify("触控预览已" + (session.Input.ForceTouch ? "开启" : "关闭")); });
-            RefreshInventory();
-            if (!string.IsNullOrEmpty(session.Notice)) Notify(session.Notice);
-        }
-
-        public void ShowRaid()
-        {
-            Clear(page);
-            InventoryOpen = false;
-            inventory = null;
-            selectedBag = null;
-            selectedId = null;
-            hud.gameObject.SetActive(true);
-            touch.gameObject.SetActive(session.Input.TouchMode);
-            Notify(session.Input.TouchMode
-                ? "左侧摇杆移动，右侧拖动转向；点击换弹装填，对准物资后点击交互。"
-                : "WASD 移动 | 鼠标转向/射击 | R 换弹 | C 蹲下 | E 搜刮 | Tab 背包 | H 治疗 | B 射击模式");
-        }
-        public void ToggleInventory()
-        {
-            if (session.Phase != SessionPhase.Raid) return;
-            if (InventoryOpen)
-            {
-                InventoryOpen = false;
-                loot = null;
-                Clear(page);
-                inventory = null;
-                touch.gameObject.SetActive(session.Input.TouchMode);
-                session.SetCursor(false);
-                session.Input.Gameplay = true;
-                return;
-            }
-            OpenInventory(null);
-        }
-        public void OpenLoot(LootContainer container)
-        {
-            if (session.Phase != SessionPhase.Raid || container == null) return;
-            OpenInventory(container);
-        }
-        void OpenInventory(LootContainer container)
-        {
-            loot = container;
-            InventoryOpen = true;
-            selectedBag = null;
-            selectedId = null;
-            placing = false;
-            Clear(page);
-            touch.gameObject.SetActive(false);
-            session.SetCursor(true);
-            session.Input.Gameplay = false;
-            inventory = CenterPanel("Inventory");
-            Label(inventory, "战地背包 / 突袭仍在继续", 28, 24, 16, 930, 50);
-            Label(inventory, "先选择物品，再选择操作。移动：点击目标格子。旋转：更改下一次放置的方向。", 18, 24, 68, 1170, 50);
-            Button(inventory, "关闭 [Tab]", 1025, 20, 185, 44, ToggleInventory);
-            BuildInventoryBody();
-            Button(inventory, "使用医疗品 [H]", 24, 604, 215, 54, () => session.UseMedicine());
-            Button(inventory, "射击模式", 249, 604, 180, 54, () => { session.Player.Weapon.ToggleFireMode(); Notify(session.Player.Weapon.Automatic ? "全自动" : "半自动"); });
-            Label(inventory, "打开背包不会暂停战斗或撤离倒计时。", 19, 455, 616, 745, 40);
-            RefreshInventory();
-        }
-        void BuildInventoryBody()
-        {
-            gridRoot = At("Grids", inventory, 20, 122, 1200, 450);
-            detailsRoot = At("Selection", inventory, 970, 126, 240, 445);
-        }
-
-        public void RefreshInventory()
-        {
-            if (inventory == null || (session.Phase != SessionPhase.Menu && !InventoryOpen)) return;
-            Clear(gridRoot);
-            Clear(detailsRoot);
-            if (session.Phase == SessionPhase.Menu)
-            {
-                balance.text = session.Profile.Credits + " 信用点";
-                DrawGrid(session.Stash, "仓库", 0, 0, 32);
-            }
-            else if (loot != null) DrawGrid(loot.Inventory, loot.DisplayName, 0, 0, 52);
-            else Label(gridRoot, "行动指引\n\n寻找黄色物资箱和倒地敌人的物资。对准容器后按 E 或点击“交互”搜刮。\n\n撤离区位于地图东北角的绿色地面。连续停留 8 秒即可撤离。\n\n离开撤离区会重置倒计时。死亡或突袭超时将失去所有随身装备与物资。", 21, 0, 10, 360, 420);
-            DrawGrid(session.Loadout, "背包", 420, 0, 52);
-            DrawEquipment(EquipmentSlot.Weapon, 420, 365);
-            DrawEquipment(EquipmentSlot.Armor, 420, 410);
-            ShowSelection();
-        }
-
-        void DrawGrid(GridInventory bag, string title, float x, float y, float cell)
-        {
-            Label(gridRoot, title + "  " + bag.Weight.ToString("0.0") + "/" + bag.MaxWeight.ToString("0") + " 千克", 19, x, y, 390, 30);
-            var board = At(title, gridRoot, x, y + 35, bag.Width * cell, bag.Height * cell);
-            for (int row = 0; row < bag.Height; row++)
-                for (int col = 0; col < bag.Width; col++)
-                {
-                    int cx = col, cy = row;
-                    Button(board, "", col * cell, row * cell, cell - 2, cell - 2, () => PlaceAt(bag, cx, cy), new Color(0.1f, 0.135f, 0.15f));
-                }
-            foreach (var item in bag.Items)
-            {
-                if (item.Slot != EquipmentSlot.None) continue;
-                var definition = session.Catalog.Find(item.ItemId);
-                int width = item.Rotated ? definition.Height : definition.Width;
-                int height = item.Rotated ? definition.Width : definition.Height;
-                string id = item.InstanceId;
-                Color color = selectedBag == bag && selectedId == id ? accent : definition.Tint;
-                string titleText = definition.DisplayName;
-                if (width == 1 && height == 1 && definition.Kind == ItemKind.Ammo)
-                    titleText = cell < 40 ? "弹" : "弹药\n" + item.Quantity;
-                else
-                {
-                    if (width == 1 && definition.Kind == ItemKind.Medicine) titleText = "医疗包";
-                    if (cell >= 40 && item.Quantity > 1) titleText += " ×" + item.Quantity;
-                }
-                Button(board, titleText, item.X * cell, item.Y * cell,
-                    width * cell - 2, height * cell - 2, () => SelectItem(bag, id), color);
-            }
-        }
-        void DrawEquipment(EquipmentSlot slot, float x, float y)
-        {
-            var item = session.Loadout.Equipped(slot);
-            string text = (slot == EquipmentSlot.Weapon ? "武器" : "护甲") + "：" + (item == null ? "未装备" : session.Catalog.Find(item.ItemId).DisplayName);
-            Button(gridRoot, text, x, y, 312, 40, () => { if (item != null) SelectItem(session.Loadout, item.InstanceId); });
-        }
-        void SelectItem(GridInventory bag, string id)
-        {
-            if (placing && bag == selectedBag)
-            {
-                var destination = bag.Find(id);
-                PlaceAt(bag, destination.X, destination.Y);
-                return;
-            }
-            selectedBag = bag;
-            selectedId = id;
-            rotated = bag.Find(id).Rotated;
-            placing = false;
-            RefreshInventory();
-        }
-        void PlaceAt(GridInventory bag, int x, int y)
-        {
-            if (!placing || bag != selectedBag || selectedId == null) return;
-            if (!bag.TryMove(selectedId, x, y, rotated, out var error)) { Notify(error); return; }
-            placing = false;
-            session.InventoryChanged();
-            RefreshInventory();
-        }
-        void ShowSelection()
-        {
-            var item = selectedBag?.Find(selectedId);
-            if (item == null) { Label(detailsRoot, "请选择物品\n\n可在此移动、旋转、装备、转移或出售物品。", 20, 0, 0, 235, 150); return; }
-            var definition = session.Catalog.Find(item.ItemId);
-            description = Label(detailsRoot, definition.DisplayName + "\n" + definition.KindName + " / 数量：" + item.Quantity + "\n" + (definition.UnitWeight * item.Quantity).ToString("0.00") + " 千克" + (definition.Kind == ItemKind.Weapon ? "\n弹匣：" + Mathf.Max(0, item.LoadedAmmo) : ""), 21, 0, 0, 235, 120);
-            float y = 128;
-            GridInventory target = null;
-            if (session.Phase == SessionPhase.Menu) target = selectedBag == session.Stash ? session.Loadout : session.Stash;
-            else if (loot != null) target = selectedBag == loot.Inventory ? session.Loadout : loot.Inventory;
-            if (target != null)
-            {
-                var destination = target;
-                ActionButton("转移", ref y, () =>
-                {
-                    if (!selectedBag.TryTransferTo(selectedId, destination, out var error)) Notify(error);
-                    else { selectedId = null; placing = false; session.InventoryChanged(); }
-                    RefreshInventory();
-                });
-            }
-            if (item.Slot == EquipmentSlot.None)
-            {
-                ActionButton(placing ? "取消移动" : "移动", ref y, () => { placing = !placing; RefreshInventory(); });
-                ActionButton(rotated ? "旋转：90度" : "旋转：0度", ref y, () => { rotated = !rotated; placing = true; RefreshInventory(); });
-            }
-            if (selectedBag == session.Loadout && (definition.Kind == ItemKind.Weapon || definition.Kind == ItemKind.Armor))
-            {
-                ActionButton(item.Slot == EquipmentSlot.None ? "装备" : "卸下", ref y, () =>
-                {
-                    string error;
-                    bool ok = item.Slot != EquipmentSlot.None ? selectedBag.TryUnequip(item.Slot, out error)
-                        : selectedBag.TryEquip(item.InstanceId, definition.Kind == ItemKind.Weapon ? EquipmentSlot.Weapon : EquipmentSlot.Armor, out error);
-                    if (!ok) Notify(error); else session.InventoryChanged();
-                    placing = false;
-                    RefreshInventory();
-                });
-            }
-            if (session.Phase == SessionPhase.Menu) ActionButton("出售 / " + Mathf.Max(1, definition.Value / 2) * item.Quantity, ref y, () => session.Sell(selectedBag, selectedId));
-            else if (selectedBag == session.Loadout && definition.Kind == ItemKind.Medicine) ActionButton("使用", ref y, () => session.UseMedicine(selectedId));
-            if (placing) Label(detailsRoot, "请在当前背包中选择目标格子。\n放置方向：" + (rotated ? "90度" : "0度"), 17, 0, y + 4, 235, 75);
-        }
-        void ActionButton(string title, ref float y, Action action)
-        {
-            Button(detailsRoot, title, 0, y, 230, 42, action);
-            y += 49;
-        }
-
-        public void ShowResults()
-        {
-            InventoryOpen = false;
-            inventory = null;
-            Clear(page);
-            hud.gameObject.SetActive(false);
-            touch.gameObject.SetActive(false);
-            var root = CenterPanel("Raid result");
-            Label(root, "突袭结算", 38, 55, 55, 1100, 60);
-            Label(root, session.Result, 26, 55, 155, 1100, 310);
-            Button(root, "返回仓库", 55, 540, 360, 70, session.ReturnToMenu);
-        }
-        public void ShowError()
-        {
-            InventoryOpen = false;
-            inventory = null;
-            Clear(page);
-            hud.gameObject.SetActive(false);
-            touch.gameObject.SetActive(false);
-            var root = CenterPanel("Error");
-            Label(root, "行动已停止", 36, 50, 50, 1100, 65);
-            Label(root, session.Error, 23, 50, 150, 1100, 440);
-        }
-        public void Notify(string message) { toast.text = message; toastUntil = Time.unscaledTime + 5; toast.transform.SetAsLastSibling(); }
-        public void HitMarker() { hitUntil = Time.unscaledTime + 0.12f; }
-
-        void BuildTouch()
-        {
-            var look = Rect("Look zone", touch, 0.4f, 0, 1, 0.85f);
-            look.gameObject.AddComponent<Image>().color = new Color(0, 0, 0, 0.001f);
-            var lookControl = look.gameObject.AddComponent<TouchControl>();
-            lookControl.Input = session.Input; lookControl.Action = "Look";
-            var bottomLeft = Rect("Left controls", touch, 0, 0, 0, 0);
-            var bottomRight = Rect("Right controls", touch, 1, 0, 1, 0);
-            var stick = TouchButton(bottomLeft, "Move", "", 35, -210, 180, 180);
-            var knob = At("Stick knob", stick.transform, 60, 60, 60, 60);
-            knob.anchorMin = knob.anchorMax = knob.pivot = new Vector2(0.5f, 0.5f);
-            knob.anchoredPosition = Vector2.zero;
-            var image = knob.gameObject.AddComponent<Image>(); image.color = new Color(0.8f, 0.8f, 0.7f, 0.35f); image.raycastTarget = false;
-            stick.Knob = knob;
-            TouchButton(bottomLeft, "Sprint", "冲刺", 235, -105, 100, 70);
-            TouchButton(bottomRight, "Fire", "开火", -150, -225, 125, 115);
-            TouchButton(bottomRight, "Aim", "瞄准", -280, -165, 105, 80);
-            TouchButton(bottomRight, "Reload", "换弹", -150, -98, 125, 65);
-            TouchButton(bottomRight, "Crouch", "蹲下", -395, -100, 105, 65);
-            TouchButton(bottomRight, "Interact", "交互", -280, -260, 105, 70);
-            TouchButton(bottomRight, "Heal", "治疗", -395, -190, 105, 65);
-            TouchButton(bottomRight, "Inventory", "背包", -150, -320, 125, 65);
-        }
-        TouchControl TouchButton(Transform parent, string action, string title, float x, float y, float w, float h)
-        {
-            var rect = At(action, parent, x, y, w, h);
-            rect.gameObject.AddComponent<Image>().color = new Color(0.12f, 0.18f, 0.19f, 0.55f);
-            Label(rect, title, 19, 4, 4, w - 8, h - 8, TextAnchor.MiddleCenter);
-            var control = rect.gameObject.AddComponent<TouchControl>();
-            control.Input = session.Input; control.Action = action;
-            return control;
-        }
-        void UpdateSafeArea()
-        {
-            lastSafe = Screen.safeArea;
-            lastScreen = new Vector2Int(Screen.width, Screen.height);
-            safe.anchorMin = new Vector2(lastSafe.xMin / Screen.width, lastSafe.yMin / Screen.height);
-            safe.anchorMax = new Vector2(lastSafe.xMax / Screen.width, lastSafe.yMax / Screen.height);
-        }
-        void Update()
-        {
-            if (Screen.safeArea != lastSafe || Screen.width != lastScreen.x || Screen.height != lastScreen.y) UpdateSafeArea();
-            if (Time.unscaledTime > toastUntil) toast.text = "";
-            if (session.Phase != SessionPhase.Raid || session.Player == null) return;
-            var player = session.Player;
-            var weapon = player.Weapon;
-            string ammo = weapon.Magazine == null ? "未装备武器" : weapon.Magazine.Reloading ? "正在换弹" : weapon.Magazine.Rounds + " / " + weapon.Reserve + (weapon.Automatic ? " 全自动" : " 半自动");
-            hudStatus.text = "生命 " + player.Health.Current.ToString("0") + " / 体力 " + player.Stamina.ToString("0") + " / " + session.Loadout.Weight.ToString("0.0") + " 千克\n" + ammo;
-            var exit = session.World.Exit;
-            float distance = Vector3.Distance(player.transform.position, exit.transform.position);
-            float angle = Mathf.Repeat(player.transform.eulerAngles.y, 360);
-            compass.text = "朝向 " + angle.ToString("000") + "度 | 东北撤离区 " + distance.ToString("0") + "米\n剩余 " + Mathf.FloorToInt(session.RaidRemaining / 60).ToString("00") + ":" + Mathf.FloorToInt(session.RaidRemaining % 60).ToString("00") + " | 击败 " + session.Kills;
-            prompt.text = exit.Inside ? "撤离倒计时 " + exit.Timer.Remaining.ToString("0.0") + "秒 / 请留在绿色区域内" : player.InteractionHint;
-            crosshair.text = Time.unscaledTime < hitUntil ? "x" : "+";
-            crosshair.color = Time.unscaledTime < hitUntil ? accent : textColor;
-            if (loot != null && Vector3.Distance(loot.transform.position, player.transform.position) > 4)
-            {
-                loot = null;
-                selectedBag = null;
-                selectedId = null;
-                placing = false;
-                RefreshInventory();
-            }
+            operatorPreview?.Dispose();
+            icons?.Dispose();
         }
     }
 }
