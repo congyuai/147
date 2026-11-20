@@ -4,19 +4,34 @@ using UnityEngine.UI;
 
 namespace Dustline
 {
-    public sealed class TouchControl : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IDragHandler
+    public sealed class TouchControl : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IDragHandler, IInitializePotentialDragHandler
     {
         public PlayerInputReader Input;
         public string Action;
         public RectTransform Knob;
         int pointer = int.MinValue;
         Vector2 lastPosition;
+        Image face;
+        Color idleColor, pressedColor;
+
+        public void SetFace(Image image, Color pressed)
+        {
+            face = image;
+            idleColor = image.color;
+            pressedColor = pressed;
+        }
+
+        public void OnInitializePotentialDrag(PointerEventData data)
+        {
+            if (Action == "Move" || Action == "Look") data.useDragThreshold = false;
+        }
 
         public void OnPointerDown(PointerEventData data)
         {
-            if (pointer != int.MinValue) return;
+            if (pointer != int.MinValue || data.button != PointerEventData.InputButton.Left) return;
             pointer = data.pointerId;
             lastPosition = data.position;
+            if (face != null) face.color = pressedColor;
             Input.Hold(Action, true);
             if (Action != "Move" && Action != "Look") Input.Tap(Action);
             if (Action == "Move") SetStick(data);
@@ -48,6 +63,7 @@ namespace Dustline
         void Release()
         {
             pointer = int.MinValue;
+            if (face != null) face.color = idleColor;
             if (Input == null) return;
             Input.Hold(Action, false);
             if (Action == "Move") Input.TouchMove = Vector2.zero;
