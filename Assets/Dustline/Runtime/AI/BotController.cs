@@ -9,7 +9,9 @@ namespace Dustline
         GameSession session;
         Health health, target;
         CharacterController motor;
-        Transform body;
+        OperatorVisual operatorVisual;
+        WeaponVisual weapon;
+        StepCadence steps;
         State state;
         Vector3 goal, lastKnown;
         List<Vector3> path = new List<Vector3>();
@@ -27,26 +29,15 @@ namespace Dustline
             motor.center = Vector3.up * 0.9f;
             health = gameObject.AddComponent<Health>();
             health.Initialize(80, team);
+            health.AimHeight = 1.25f;
             health.Hurt += OnHurt;
             health.Died += Die;
-            var visual = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            Destroy(visual.GetComponent<Collider>());
-            visual.name = team == 1 ? "Raider" : "Scavenger";
-            body = visual.transform;
-            body.SetParent(transform, false);
-            body.localPosition = Vector3.up * 0.9f;
-            body.localScale = new Vector3(0.7f, 0.9f, 0.7f);
-            var renderer = visual.GetComponent<Renderer>();
-            renderer.sharedMaterial = session.World.DarkMaterial;
-            var properties = new MaterialPropertyBlock();
-            properties.SetColor("_BaseColor", team == 1 ? new Color(0.6f, 0.24f, 0.16f) : new Color(0.21f, 0.34f, 0.25f));
-            renderer.SetPropertyBlock(properties);
-            var weapon = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            Destroy(weapon.GetComponent<Collider>());
-            weapon.transform.SetParent(transform, false);
-            weapon.transform.localPosition = new Vector3(0.25f, 1.2f, 0.4f);
-            weapon.transform.localScale = new Vector3(0.12f, 0.12f, 0.6f);
-            weapon.GetComponent<Renderer>().sharedMaterial = session.World.DarkMaterial;
+            operatorVisual = OperatorVisual.Create(transform,
+                seed % 2 == 0 ? OperatorStyle.Male : OperatorStyle.Female, team, gameObject.layer);
+            var weaponMount = operatorVisual.WeaponMount;
+            weapon = WeaponVisual.Create(weaponMount, false);
+            weapon.SetEquipped(true);
+            operatorVisual.PoseArms(weapon.RightGrip, weapon.LeftGrip);
             thinkAt = Time.time + seed * 0.027f;
             CombatNoise.Heard += OnNoise;
             PickPatrol();
@@ -57,10 +48,10 @@ namespace Dustline
         {
             if (source == null || source.Team == health.Team || !health.Alive || Vector3.Distance(position, transform.position) > radius) return;
             if (state == State.Attack) return;
+            if (state != State.Search) pathAt = 0;
             lastKnown = goal = position;
             state = State.Search;
             searchUntil = Time.time + 9;
-            pathAt = 0;
         }
         void OnHurt(Health attacker)
         {
@@ -116,7 +107,11 @@ namespace Dustline
                 Vector3 facing = lastKnown - transform.position;
                 facing.y = 0;
                 if (facing.sqrMagnitude > 0.01f) transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(facing), 8 * Time.deltaTime);
-                if (Visible(target)) Shoot();
+                if (Time.time >= shotAt && Time.time >= reloadUntil)
+                {
+                    if (Visible(target)) Shoot();
+                    else shotAt = Time.time + 0.1f;
+                }
             }
             else
             {
@@ -126,8 +121,15 @@ namespace Dustline
                     path = session.World.Navigation.Path(transform.position, goal);
                     waypoint = 0;
                     pathAt = Time.time + 1.5f + (float)random.NextDouble();
+                    if (path.Count == 0 && state == State.Patrol)
+                        goal = session.World.PickPatrolPoint(transform.position, random);
                 }
-                while (waypoint < path.Count && (path[waypoint] - transform.position).sqrMagnitude < 0.65f) waypoint++;
+                while (waypoint < path.Count)
+                {
+                    Vector3 offset = path[waypoint] - transform.position;
+                    if (offset.x * offset.x + offset.z * offset.z > 0.0625f) break;
+                    waypoint++;
+                }
                 if (waypoint < path.Count)
                 {
                     movement = path[waypoint] - transform.position;
@@ -136,37 +138,55 @@ namespace Dustline
                     if (movement.sqrMagnitude > 0) transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(movement), 7 * Time.deltaTime);
                 }
             }
-            motor.Move((movement * (state == State.Search ? 3.1f : 2.2f) + Vector3.down * 5) * Time.deltaTime);
+            float speed = movement.sqrMagnitude > 0.01f ? state == State.Search ? 3.1f : 2.2f : 0;
+            Vector3 before = transform.position;
+            motor.Move((movement * speed + Vector3.down * 5) * Time.deltaTime);
+            Vector3 displacement = transform.position - before;
+            if (steps.Advance(new Vector2(displacement.x, displacement.z).magnitude, motor.isGrounded, 1.38f))
+                session.EnvironmentAudio.PlayFootstep(transform.position, 0.72f, false);
+            operatorVisual.SetMotion(speed, false, false, Time.deltaTime);
+            weapon.SetPose(state == State.Attack, speed, false, false, Time.deltaTime);
+            operatorVisual.PoseArms(weapon.RightGrip, weapon.LeftGrip);
         }
         void PickPatrol()
         {
             state = State.Patrol;
-            goal = session.World.PatrolPoints[random.Next(session.World.PatrolPoints.Count)];
+            goal = session.World.PickPatrolPoint(transform.position, random);
             pathAt = 0;
         }
         void Shoot()
         {
             if (Time.time < shotAt || Time.time < reloadUntil) return;
-            if (magazine <= 0) { reloadUntil = Time.time + 2.8f; magazine = 20; return; }
+            if (magazine <= 0)
+            {
+                reloadUntil = Time.time + 2.8f;
+                magazine = 20;
+                weapon.BeginReload(2.8f);
+                return;
+            }
             magazine--;
             shotAt = Time.time + 0.38f;
             var point = target.AimPoint + Random.insideUnitSphere * 0.7f;
             var direction = (point - Eye).normalized;
             var end = Eye + direction * 45;
-            if (Physics.Raycast(Eye, direction, out var hit, 45, ~0, QueryTriggerInteraction.Ignore))
+            bool hitSomething = Physics.Raycast(Eye, direction, out var hit, 45, ~0, QueryTriggerInteraction.Ignore);
+            Health struck = null;
+            if (hitSomething)
             {
                 end = hit.point;
-                hit.collider.GetComponentInParent<Health>()?.Damage(12, health);
+                struck = hit.collider.GetComponentInParent<Health>();
+                struck?.Damage(12, health);
             }
             CombatNoise.Emit(transform.position, 55, health);
-            session.World.Trace(Eye + direction * 0.6f, end, Color.yellow);
+            session.Effects.Shot(weapon.Muzzle.position, end, hitSomething ? hit.normal : Vector3.zero, hitSomething, struck != null, false);
+            weapon.Kick();
         }
         void Die(Health killer)
         {
             CombatNoise.Heard -= OnNoise;
             motor.enabled = false;
-            body.localRotation = Quaternion.Euler(90, 0, 0);
-            body.localPosition = Vector3.up * 0.3f;
+            weapon.SetEquipped(false);
+            operatorVisual.Fall();
             var loot = session.World.CreateLoot(transform.position + transform.right * 0.8f, "阵亡者物资");
             session.LootTable.Fill(loot.Inventory, random);
             loot.Inventory.TryAdd("ammo", random.Next(12, 31), out _);
