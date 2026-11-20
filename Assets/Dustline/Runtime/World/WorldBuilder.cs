@@ -73,10 +73,10 @@ namespace Dustline
             };
             for (int i = 0; i < supplies.Length; i++)
             {
-                var container = CreateLoot(supplies[i], "Supply crate " + (i + 1));
+                var container = CreateLoot(supplies[i], "物资箱 " + (i + 1));
                 session.LootTable.Fill(container.Inventory, random);
             }
-            var loose = CreateLoot(new Vector3(-35, 0, -35), "Field supplies");
+            var loose = CreateLoot(new Vector3(-35, 0, -35), "战地补给");
             loose.Inventory.TryAdd("medkit", 1, out _);
             loose.Inventory.TryAdd("ammo", 30, out _);
             var exitPad = Box("North-east extraction", new Vector3(39, 0.025f, 39), new Vector3(8, 0.05f, 8), green);

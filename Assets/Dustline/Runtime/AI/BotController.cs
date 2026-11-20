@@ -167,7 +167,7 @@ namespace Dustline
             motor.enabled = false;
             body.localRotation = Quaternion.Euler(90, 0, 0);
             body.localPosition = Vector3.up * 0.3f;
-            var loot = session.World.CreateLoot(transform.position + transform.right * 0.8f, "Fallen combatant");
+            var loot = session.World.CreateLoot(transform.position + transform.right * 0.8f, "阵亡者物资");
             session.LootTable.Fill(loot.Inventory, random);
             loot.Inventory.TryAdd("ammo", random.Next(12, 31), out _);
             if (killer == session.Player.Health) session.Kills++;

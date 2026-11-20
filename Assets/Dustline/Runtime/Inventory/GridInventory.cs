@@ -41,24 +41,24 @@ namespace Dustline
             error = null;
             if (quantity < 1)
             {
-                error = "Quantity must be positive.";
+                error = "物品数量必须大于零。";
                 return false;
             }
 
             ItemDefinition definition = Catalog.Find(itemId);
             if (definition == null)
             {
-                error = "Unknown item ID: " + itemId;
+                error = "未知物品 ID：" + itemId;
                 return false;
             }
             if (!CanCarry(CalculateWeight(items) + (double)definition.UnitWeight * quantity))
             {
-                error = "Weight limit exceeded.";
+                error = "已超出负重上限。";
                 return false;
             }
             if ((long)Count(itemId) + quantity > int.MaxValue)
             {
-                error = "Item count limit exceeded.";
+                error = "已超出物品数量上限。";
                 return false;
             }
 
@@ -88,7 +88,7 @@ namespace Dustline
                 };
                 if (!TryPlace(stack, definition, staged))
                 {
-                    error = "Not enough backpack space.";
+                    error = "背包空间不足。";
                     return false;
                 }
                 staged.Add(stack);
@@ -116,12 +116,12 @@ namespace Dustline
             ItemStack stack = Find(instanceId);
             if (stack == null)
             {
-                error = "Item not found.";
+                error = "未找到该物品。";
                 return false;
             }
             if (stack.Slot != EquipmentSlot.None)
             {
-                error = "Unequip the item before moving it.";
+                error = "请先卸下该物品，再移动。";
                 return false;
             }
 
@@ -131,7 +131,7 @@ namespace Dustline
             moved.Rotated = rotated;
             if (!Fits(moved, Catalog.Find(stack.ItemId), items, stack.InstanceId))
             {
-                error = "The position is occupied or outside the backpack.";
+                error = "该位置已被占用或超出背包范围。";
                 return false;
             }
 
@@ -148,17 +148,17 @@ namespace Dustline
             ItemStack stack = Find(instanceId);
             if (stack == null)
             {
-                error = "Item not found.";
+                error = "未找到该物品。";
                 return false;
             }
             if (!MatchesSlot(Catalog.Find(stack.ItemId), slot))
             {
-                error = "This item does not match the equipment slot.";
+                error = "该物品不适用于此装备栏位。";
                 return false;
             }
             if (stack.Slot != EquipmentSlot.None || Equipped(slot) != null)
             {
-                error = "Unequip the existing item first.";
+                error = "请先卸下已装备的物品。";
                 return false;
             }
 
@@ -175,7 +175,7 @@ namespace Dustline
             ItemStack stack = Equipped(slot);
             if (stack == null)
             {
-                error = "Equipment slot is empty or invalid.";
+                error = "装备栏位为空或无效。";
                 return false;
             }
 
@@ -183,7 +183,7 @@ namespace Dustline
             moved.Slot = EquipmentSlot.None;
             if (!TryPlace(moved, Catalog.Find(stack.ItemId), items))
             {
-                error = "Not enough backpack space.";
+                error = "背包空间不足。";
                 return false;
             }
 
@@ -200,14 +200,14 @@ namespace Dustline
             error = null;
             if (destination == null || ReferenceEquals(this, destination))
             {
-                error = "A different destination inventory is required.";
+                error = "请选择另一个物品栏作为转移目标。";
                 return false;
             }
 
             ItemStack stack = Find(instanceId);
             if (stack == null)
             {
-                error = "Item not found.";
+                error = "未找到该物品。";
                 return false;
             }
             if (!destination.TryPrepareInsert(stack, out ItemStack inserted, out error))
@@ -332,31 +332,31 @@ namespace Dustline
                 if (!ValidateStack(input, out ItemDefinition definition, out string error))
                     throw new InvalidDataException(error);
                 if (!ids.Add(input.InstanceId))
-                    throw new InvalidDataException("Duplicate instance ID: " + input.InstanceId);
+                    throw new InvalidDataException("物品实例 ID 重复：" + input.InstanceId);
                 if (input.X < 0 || input.Y < 0 || input.X >= Width || input.Y >= Height)
-                    throw new InvalidDataException("Invalid item coordinates.");
+                    throw new InvalidDataException("物品位置坐标无效。");
 
                 ItemStack stack = input.Clone();
                 if (stack.Slot == EquipmentSlot.None)
                 {
                     if (!Fits(stack, definition, restored, null))
-                        throw new InvalidDataException("Items overlap or extend outside the backpack.");
+                        throw new InvalidDataException("物品相互重叠或超出背包范围。");
                 }
                 else if (!MatchesSlot(definition, stack.Slot) || !slots.Add(stack.Slot))
                 {
-                    throw new InvalidDataException("Invalid or duplicate equipment slot.");
+                    throw new InvalidDataException("装备栏位无效或被重复占用。");
                 }
 
                 counts.TryGetValue(stack.ItemId, out long count);
                 count += stack.Quantity;
                 if (count > int.MaxValue)
-                    throw new InvalidDataException("Item count limit exceeded.");
+                    throw new InvalidDataException("已超出物品数量上限。");
                 counts[stack.ItemId] = count;
                 restored.Add(stack);
             }
 
             if (!CanCarry(CalculateWeight(restored)))
-                throw new InvalidDataException("Weight limit exceeded.");
+                throw new InvalidDataException("已超出负重上限。");
 
             Commit(restored);
             Touch();
@@ -374,17 +374,17 @@ namespace Dustline
                 return false;
             if (Find(input.InstanceId) != null)
             {
-                error = "Duplicate instance ID: " + input.InstanceId;
+                error = "物品实例 ID 重复：" + input.InstanceId;
                 return false;
             }
             if ((long)Count(input.ItemId) + input.Quantity > int.MaxValue)
             {
-                error = "Item count limit exceeded.";
+                error = "已超出物品数量上限。";
                 return false;
             }
             if (!CanCarry(CalculateWeight(items) + (double)definition.UnitWeight * input.Quantity))
             {
-                error = "Weight limit exceeded.";
+                error = "已超出负重上限。";
                 return false;
             }
 
@@ -392,7 +392,7 @@ namespace Dustline
             candidate.Slot = EquipmentSlot.None;
             if (!TryPlace(candidate, definition, items))
             {
-                error = "Not enough backpack space.";
+                error = "背包空间不足。";
                 return false;
             }
 
@@ -407,19 +407,19 @@ namespace Dustline
             if (stack == null || string.IsNullOrWhiteSpace(stack.InstanceId)
                 || string.IsNullOrWhiteSpace(stack.ItemId))
             {
-                error = "An item needs non-empty instance and definition IDs.";
+                error = "物品的实例 ID 和定义 ID 不能为空。";
                 return false;
             }
 
             definition = Catalog.Find(stack.ItemId);
             if (definition == null)
             {
-                error = "Unknown item ID: " + stack.ItemId;
+                error = "未知物品 ID：" + stack.ItemId;
                 return false;
             }
             if (stack.Quantity < 1 || stack.Quantity > StackLimit(definition))
             {
-                error = "Invalid stack quantity.";
+                error = "物品堆叠数量无效。";
                 return false;
             }
             if (stack.LoadedAmmo < -1
@@ -427,7 +427,7 @@ namespace Dustline
                 || (definition.Kind == ItemKind.Weapon && definition.Weapon != null
                     && stack.LoadedAmmo > definition.Weapon.MagazineSize))
             {
-                error = "Invalid magazine ammunition count.";
+                error = "弹匣内的弹药数量无效。";
                 return false;
             }
             return true;

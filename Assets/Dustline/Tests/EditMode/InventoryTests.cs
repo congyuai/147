@@ -102,7 +102,7 @@ namespace Dustline
             inventory.Changed += () => changed++;
 
             Assert.That(inventory.TryAdd("ammo", 3, out string error), Is.False);
-            Assert.That(error, Is.Not.Empty);
+            Assert.That(error, Is.EqualTo("背包空间不足。"));
             Assert.That(inventory.TryAdd("unknown", 1, out _), Is.False);
             Assert.That(inventory.TryAdd("ammo", 0, out _), Is.False);
             Assert.That(inventory.TryAdd("ammo", -1, out _), Is.False);
@@ -128,7 +128,7 @@ namespace Dustline
             inventory.Changed += () => changed++;
 
             Assert.That(inventory.TryAdd("ammo", 1, out string error), Is.False);
-            Assert.That(error, Does.Contain("Weight"));
+            Assert.That(error, Is.EqualTo("已超出负重上限。"));
             Assert.That(inventory.Count("ammo"), Is.EqualTo(4));
             Assert.That(inventory.Weight, Is.EqualTo(3f));
             Assert.That(changed, Is.Zero);
@@ -152,7 +152,7 @@ namespace Dustline
             Assert.That(inventory.TryEquip(first.InstanceId, EquipmentSlot.None, out _), Is.False);
             Assert.That(inventory.TryEquip(first.InstanceId, EquipmentSlot.Weapon, out _), Is.True);
             Assert.That(inventory.TryEquip(second.InstanceId, EquipmentSlot.Weapon, out string error), Is.False);
-            Assert.That(error, Is.Not.Empty);
+            Assert.That(error, Is.EqualTo("请先卸下已装备的物品。"));
             Assert.That(inventory.Equipped(EquipmentSlot.Weapon), Is.SameAs(first));
             Assert.That(second.Slot, Is.EqualTo(EquipmentSlot.None));
             Assert.That(inventory.TryMove(first.InstanceId, 0, 1, false, out _), Is.False);

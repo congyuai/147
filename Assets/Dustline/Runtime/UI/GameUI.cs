@@ -27,7 +27,7 @@ namespace Dustline
         public void Initialize(GameSession owner)
         {
             session = owner;
-            font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            font = Resources.Load<Font>("Dustline/Fonts/NotoSansSC-Regular");
             var canvasObject = new GameObject("Dustline UI", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             canvasObject.transform.SetParent(transform, false);
             canvasObject.GetComponent<Canvas>().renderMode = RenderMode.ScreenSpaceOverlay;
@@ -127,17 +127,17 @@ namespace Dustline
             touch.gameObject.SetActive(false);
             session.SetCursor(true);
             inventory = CenterPanel("Loadout and stash");
-            Label(inventory, "DUSTLINE / EXTRACTION", 30, 24, 16, 780, 48);
+            Label(inventory, "尘线：撤离行动", 30, 24, 16, 780, 48);
             balance = Label(inventory, "", 23, 820, 22, 390, 40, TextAnchor.UpperRight);
-            Label(inventory, "LOCAL RAID  /  14 AI  /  15 MIN\nEquip a rifle, load ammo with R, reach the green NORTH-EAST exit. No online players in this build.", 18, 24, 65, 1170, 56);
+            Label(inventory, "本地突袭 / 14 名电脑对手 / 15 分钟\n装备步枪，按 R 或点击“换弹”装填，前往东北方绿色撤离区。本版本不含真人联机。", 18, 24, 65, 1170, 56);
             BuildInventoryBody();
-            Button(inventory, "DEPLOY", 1010, 604, 205, 54, session.StartRaid, new Color(0.37f, 0.3f, 0.12f));
-            Button(inventory, "Emergency gear", 785, 604, 205, 54, session.EmergencyKit);
-            Button(inventory, "AR-20 / 240", 24, 604, 140, 54, () => session.Buy("rifle", 1));
-            Button(inventory, "Ammo x30 / 60", 174, 604, 150, 54, () => session.Buy("ammo", 30));
-            Button(inventory, "Medkit / 40", 334, 604, 140, 54, () => session.Buy("medkit", 1));
-            Button(inventory, "Vest / 160", 484, 604, 140, 54, () => session.Buy("armor", 1));
-            Button(inventory, "Touch preview", 634, 604, 140, 54, () => { session.Input.ForceTouch = !session.Input.ForceTouch; Notify("Touch preview " + (session.Input.ForceTouch ? "on" : "off")); });
+            Button(inventory, "开始突袭", 1010, 604, 205, 54, session.StartRaid, new Color(0.37f, 0.3f, 0.12f));
+            Button(inventory, "应急装备", 785, 604, 205, 54, session.EmergencyKit);
+            Button(inventory, "AR-20步枪 / 240", 24, 604, 140, 54, () => session.Buy("rifle", 1));
+            Button(inventory, "弹药×30 / 60", 174, 604, 150, 54, () => session.Buy("ammo", 30));
+            Button(inventory, "医疗包 / 40", 334, 604, 140, 54, () => session.Buy("medkit", 1));
+            Button(inventory, "防弹衣 / 160", 484, 604, 140, 54, () => session.Buy("armor", 1));
+            Button(inventory, "触控预览", 634, 604, 140, 54, () => { session.Input.ForceTouch = !session.Input.ForceTouch; Notify("触控预览已" + (session.Input.ForceTouch ? "开启" : "关闭")); });
             RefreshInventory();
             if (!string.IsNullOrEmpty(session.Notice)) Notify(session.Notice);
         }
@@ -151,7 +151,9 @@ namespace Dustline
             selectedId = null;
             hud.gameObject.SetActive(true);
             touch.gameObject.SetActive(session.Input.TouchMode);
-            Notify("WASD move | Mouse look/fire | R reload | C crouch | E loot | Tab bag | H heal | B fire mode");
+            Notify(session.Input.TouchMode
+                ? "左侧摇杆移动，右侧拖动转向；点击换弹装填，对准物资后点击交互。"
+                : "WASD 移动 | 鼠标转向/射击 | R 换弹 | C 蹲下 | E 搜刮 | Tab 背包 | H 治疗 | B 射击模式");
         }
         public void ToggleInventory()
         {
@@ -186,13 +188,13 @@ namespace Dustline
             session.SetCursor(true);
             session.Input.Gameplay = false;
             inventory = CenterPanel("Inventory");
-            Label(inventory, "FIELD INVENTORY / RAID CONTINUES", 28, 24, 16, 930, 50);
-            Label(inventory, "Tap an item, then an action. Move: choose a destination cell. Rotate changes the orientation for your next placement.", 18, 24, 68, 1170, 50);
-            Button(inventory, "CLOSE [TAB]", 1025, 20, 185, 44, ToggleInventory);
+            Label(inventory, "战地背包 / 突袭仍在继续", 28, 24, 16, 930, 50);
+            Label(inventory, "先选择物品，再选择操作。移动：点击目标格子。旋转：更改下一次放置的方向。", 18, 24, 68, 1170, 50);
+            Button(inventory, "关闭 [Tab]", 1025, 20, 185, 44, ToggleInventory);
             BuildInventoryBody();
-            Button(inventory, "Use medicine [H]", 24, 604, 215, 54, () => session.UseMedicine());
-            Button(inventory, "Fire mode", 249, 604, 180, 54, () => { session.Player.Weapon.ToggleFireMode(); Notify(session.Player.Weapon.Automatic ? "Automatic" : "Semi automatic"); });
-            Label(inventory, "Opening the bag does not pause combat or extraction.", 19, 455, 616, 745, 40);
+            Button(inventory, "使用医疗品 [H]", 24, 604, 215, 54, () => session.UseMedicine());
+            Button(inventory, "射击模式", 249, 604, 180, 54, () => { session.Player.Weapon.ToggleFireMode(); Notify(session.Player.Weapon.Automatic ? "全自动" : "半自动"); });
+            Label(inventory, "打开背包不会暂停战斗或撤离倒计时。", 19, 455, 616, 745, 40);
             RefreshInventory();
         }
         void BuildInventoryBody()
@@ -208,12 +210,12 @@ namespace Dustline
             Clear(detailsRoot);
             if (session.Phase == SessionPhase.Menu)
             {
-                balance.text = session.Profile.Credits + " CREDITS";
-                DrawGrid(session.Stash, "STASH", 0, 0, 32);
+                balance.text = session.Profile.Credits + " 信用点";
+                DrawGrid(session.Stash, "仓库", 0, 0, 32);
             }
             else if (loot != null) DrawGrid(loot.Inventory, loot.DisplayName, 0, 0, 52);
-            else Label(gridRoot, "FIELD OPERATIONS\n\nLocate yellow supply crates and fallen enemies. Aim at a container and press USE.\n\nThe extraction zone is the green pad in the north-east corner. Stay inside for 8 seconds.\n\nLeaving the zone resets the timer. Death or raid timeout loses your loadout.", 21, 0, 10, 360, 420);
-            DrawGrid(session.Loadout, "BACKPACK", 420, 0, 52);
+            else Label(gridRoot, "行动指引\n\n寻找黄色物资箱和倒地敌人的物资。对准容器后按 E 或点击“交互”搜刮。\n\n撤离区位于地图东北角的绿色地面。连续停留 8 秒即可撤离。\n\n离开撤离区会重置倒计时。死亡或突袭超时将失去所有随身装备与物资。", 21, 0, 10, 360, 420);
+            DrawGrid(session.Loadout, "背包", 420, 0, 52);
             DrawEquipment(EquipmentSlot.Weapon, 420, 365);
             DrawEquipment(EquipmentSlot.Armor, 420, 410);
             ShowSelection();
@@ -221,7 +223,7 @@ namespace Dustline
 
         void DrawGrid(GridInventory bag, string title, float x, float y, float cell)
         {
-            Label(gridRoot, title + "  " + bag.Weight.ToString("0.0") + "/" + bag.MaxWeight.ToString("0") + " kg", 19, x, y, 390, 30);
+            Label(gridRoot, title + "  " + bag.Weight.ToString("0.0") + "/" + bag.MaxWeight.ToString("0") + " 千克", 19, x, y, 390, 30);
             var board = At(title, gridRoot, x, y + 35, bag.Width * cell, bag.Height * cell);
             for (int row = 0; row < bag.Height; row++)
                 for (int col = 0; col < bag.Width; col++)
@@ -237,14 +239,22 @@ namespace Dustline
                 int height = item.Rotated ? definition.Width : definition.Height;
                 string id = item.InstanceId;
                 Color color = selectedBag == bag && selectedId == id ? accent : definition.Tint;
-                Button(board, definition.DisplayName + (item.Quantity > 1 ? " x" + item.Quantity : ""), item.X * cell, item.Y * cell,
+                string titleText = definition.DisplayName;
+                if (width == 1 && height == 1 && definition.Kind == ItemKind.Ammo)
+                    titleText = cell < 40 ? "弹" : "弹药\n" + item.Quantity;
+                else
+                {
+                    if (width == 1 && definition.Kind == ItemKind.Medicine) titleText = "医疗包";
+                    if (cell >= 40 && item.Quantity > 1) titleText += " ×" + item.Quantity;
+                }
+                Button(board, titleText, item.X * cell, item.Y * cell,
                     width * cell - 2, height * cell - 2, () => SelectItem(bag, id), color);
             }
         }
         void DrawEquipment(EquipmentSlot slot, float x, float y)
         {
             var item = session.Loadout.Equipped(slot);
-            string text = slot.ToString().ToUpper() + ": " + (item == null ? "EMPTY" : session.Catalog.Find(item.ItemId).DisplayName);
+            string text = (slot == EquipmentSlot.Weapon ? "武器" : "护甲") + "：" + (item == null ? "未装备" : session.Catalog.Find(item.ItemId).DisplayName);
             Button(gridRoot, text, x, y, 312, 40, () => { if (item != null) SelectItem(session.Loadout, item.InstanceId); });
         }
         void SelectItem(GridInventory bag, string id)
@@ -272,9 +282,9 @@ namespace Dustline
         void ShowSelection()
         {
             var item = selectedBag?.Find(selectedId);
-            if (item == null) { Label(detailsRoot, "SELECT AN ITEM\n\nMove, rotate, equip, transfer or sell items here.", 20, 0, 0, 235, 150); return; }
+            if (item == null) { Label(detailsRoot, "请选择物品\n\n可在此移动、旋转、装备、转移或出售物品。", 20, 0, 0, 235, 150); return; }
             var definition = session.Catalog.Find(item.ItemId);
-            description = Label(detailsRoot, definition.DisplayName + "\n" + definition.Kind + " / x" + item.Quantity + "\n" + (definition.UnitWeight * item.Quantity).ToString("0.00") + " kg" + (definition.Kind == ItemKind.Weapon ? "\nMagazine: " + Mathf.Max(0, item.LoadedAmmo) : ""), 21, 0, 0, 235, 120);
+            description = Label(detailsRoot, definition.DisplayName + "\n" + definition.KindName + " / 数量：" + item.Quantity + "\n" + (definition.UnitWeight * item.Quantity).ToString("0.00") + " 千克" + (definition.Kind == ItemKind.Weapon ? "\n弹匣：" + Mathf.Max(0, item.LoadedAmmo) : ""), 21, 0, 0, 235, 120);
             float y = 128;
             GridInventory target = null;
             if (session.Phase == SessionPhase.Menu) target = selectedBag == session.Stash ? session.Loadout : session.Stash;
@@ -282,7 +292,7 @@ namespace Dustline
             if (target != null)
             {
                 var destination = target;
-                ActionButton("TRANSFER", ref y, () =>
+                ActionButton("转移", ref y, () =>
                 {
                     if (!selectedBag.TryTransferTo(selectedId, destination, out var error)) Notify(error);
                     else { selectedId = null; placing = false; session.InventoryChanged(); }
@@ -291,12 +301,12 @@ namespace Dustline
             }
             if (item.Slot == EquipmentSlot.None)
             {
-                ActionButton(placing ? "CANCEL MOVE" : "MOVE", ref y, () => { placing = !placing; RefreshInventory(); });
-                ActionButton(rotated ? "ROTATE: 90" : "ROTATE: 0", ref y, () => { rotated = !rotated; placing = true; RefreshInventory(); });
+                ActionButton(placing ? "取消移动" : "移动", ref y, () => { placing = !placing; RefreshInventory(); });
+                ActionButton(rotated ? "旋转：90度" : "旋转：0度", ref y, () => { rotated = !rotated; placing = true; RefreshInventory(); });
             }
             if (selectedBag == session.Loadout && (definition.Kind == ItemKind.Weapon || definition.Kind == ItemKind.Armor))
             {
-                ActionButton(item.Slot == EquipmentSlot.None ? "EQUIP" : "UNEQUIP", ref y, () =>
+                ActionButton(item.Slot == EquipmentSlot.None ? "装备" : "卸下", ref y, () =>
                 {
                     string error;
                     bool ok = item.Slot != EquipmentSlot.None ? selectedBag.TryUnequip(item.Slot, out error)
@@ -306,9 +316,9 @@ namespace Dustline
                     RefreshInventory();
                 });
             }
-            if (session.Phase == SessionPhase.Menu) ActionButton("SELL / " + Mathf.Max(1, definition.Value / 2) * item.Quantity, ref y, () => session.Sell(selectedBag, selectedId));
-            else if (selectedBag == session.Loadout && definition.Kind == ItemKind.Medicine) ActionButton("USE", ref y, () => session.UseMedicine(selectedId));
-            if (placing) Label(detailsRoot, "Choose a cell in the same grid.\nRotation: " + (rotated ? "90 degrees" : "0 degrees"), 17, 0, y + 4, 235, 75);
+            if (session.Phase == SessionPhase.Menu) ActionButton("出售 / " + Mathf.Max(1, definition.Value / 2) * item.Quantity, ref y, () => session.Sell(selectedBag, selectedId));
+            else if (selectedBag == session.Loadout && definition.Kind == ItemKind.Medicine) ActionButton("使用", ref y, () => session.UseMedicine(selectedId));
+            if (placing) Label(detailsRoot, "请在当前背包中选择目标格子。\n放置方向：" + (rotated ? "90度" : "0度"), 17, 0, y + 4, 235, 75);
         }
         void ActionButton(string title, ref float y, Action action)
         {
@@ -324,9 +334,9 @@ namespace Dustline
             hud.gameObject.SetActive(false);
             touch.gameObject.SetActive(false);
             var root = CenterPanel("Raid result");
-            Label(root, "RAID REPORT", 38, 55, 55, 1100, 60);
+            Label(root, "突袭结算", 38, 55, 55, 1100, 60);
             Label(root, session.Result, 26, 55, 155, 1100, 310);
-            Button(root, "RETURN TO STASH", 55, 540, 360, 70, session.ReturnToMenu);
+            Button(root, "返回仓库", 55, 540, 360, 70, session.ReturnToMenu);
         }
         public void ShowError()
         {
@@ -336,7 +346,7 @@ namespace Dustline
             hud.gameObject.SetActive(false);
             touch.gameObject.SetActive(false);
             var root = CenterPanel("Error");
-            Label(root, "SESSION STOPPED", 36, 50, 50, 1100, 65);
+            Label(root, "行动已停止", 36, 50, 50, 1100, 65);
             Label(root, session.Error, 23, 50, 150, 1100, 440);
         }
         public void Notify(string message) { toast.text = message; toastUntil = Time.unscaledTime + 5; toast.transform.SetAsLastSibling(); }
@@ -356,14 +366,14 @@ namespace Dustline
             knob.anchoredPosition = Vector2.zero;
             var image = knob.gameObject.AddComponent<Image>(); image.color = new Color(0.8f, 0.8f, 0.7f, 0.35f); image.raycastTarget = false;
             stick.Knob = knob;
-            TouchButton(bottomLeft, "Sprint", "SPRINT", 235, -105, 100, 70);
-            TouchButton(bottomRight, "Fire", "FIRE", -150, -225, 125, 115);
-            TouchButton(bottomRight, "Aim", "AIM", -280, -165, 105, 80);
-            TouchButton(bottomRight, "Reload", "RELOAD", -150, -98, 125, 65);
-            TouchButton(bottomRight, "Crouch", "CROUCH", -395, -100, 105, 65);
-            TouchButton(bottomRight, "Interact", "USE", -280, -260, 105, 70);
-            TouchButton(bottomRight, "Heal", "HEAL", -395, -190, 105, 65);
-            TouchButton(bottomRight, "Inventory", "BAG", -150, -320, 125, 65);
+            TouchButton(bottomLeft, "Sprint", "冲刺", 235, -105, 100, 70);
+            TouchButton(bottomRight, "Fire", "开火", -150, -225, 125, 115);
+            TouchButton(bottomRight, "Aim", "瞄准", -280, -165, 105, 80);
+            TouchButton(bottomRight, "Reload", "换弹", -150, -98, 125, 65);
+            TouchButton(bottomRight, "Crouch", "蹲下", -395, -100, 105, 65);
+            TouchButton(bottomRight, "Interact", "交互", -280, -260, 105, 70);
+            TouchButton(bottomRight, "Heal", "治疗", -395, -190, 105, 65);
+            TouchButton(bottomRight, "Inventory", "背包", -150, -320, 125, 65);
         }
         TouchControl TouchButton(Transform parent, string action, string title, float x, float y, float w, float h)
         {
@@ -388,13 +398,13 @@ namespace Dustline
             if (session.Phase != SessionPhase.Raid || session.Player == null) return;
             var player = session.Player;
             var weapon = player.Weapon;
-            string ammo = weapon.Magazine == null ? "NO WEAPON" : weapon.Magazine.Reloading ? "RELOADING" : weapon.Magazine.Rounds + " / " + weapon.Reserve + (weapon.Automatic ? " AUTO" : " SEMI");
-            hudStatus.text = "HP " + player.Health.Current.ToString("0") + "  /  STA " + player.Stamina.ToString("0") + "  /  " + session.Loadout.Weight.ToString("0.0") + " kg\n" + ammo;
+            string ammo = weapon.Magazine == null ? "未装备武器" : weapon.Magazine.Reloading ? "正在换弹" : weapon.Magazine.Rounds + " / " + weapon.Reserve + (weapon.Automatic ? " 全自动" : " 半自动");
+            hudStatus.text = "生命 " + player.Health.Current.ToString("0") + " / 体力 " + player.Stamina.ToString("0") + " / " + session.Loadout.Weight.ToString("0.0") + " 千克\n" + ammo;
             var exit = session.World.Exit;
             float distance = Vector3.Distance(player.transform.position, exit.transform.position);
             float angle = Mathf.Repeat(player.transform.eulerAngles.y, 360);
-            compass.text = "HEADING " + angle.ToString("000") + "  |  EXIT NE " + distance.ToString("0") + "m\nRAID " + Mathf.FloorToInt(session.RaidRemaining / 60).ToString("00") + ":" + Mathf.FloorToInt(session.RaidRemaining % 60).ToString("00") + "  |  KILLS " + session.Kills;
-            prompt.text = exit.Inside ? "EXTRACTING " + exit.Timer.Remaining.ToString("0.0") + "s / Stay in the green zone" : player.InteractionHint;
+            compass.text = "朝向 " + angle.ToString("000") + "度 | 东北撤离区 " + distance.ToString("0") + "米\n剩余 " + Mathf.FloorToInt(session.RaidRemaining / 60).ToString("00") + ":" + Mathf.FloorToInt(session.RaidRemaining % 60).ToString("00") + " | 击败 " + session.Kills;
+            prompt.text = exit.Inside ? "撤离倒计时 " + exit.Timer.Remaining.ToString("0.0") + "秒 / 请留在绿色区域内" : player.InteractionHint;
             crosshair.text = Time.unscaledTime < hitUntil ? "x" : "+";
             crosshair.color = Time.unscaledTime < hitUntil ? accent : textColor;
             if (loot != null && Vector3.Distance(loot.transform.position, player.transform.position) > 4)

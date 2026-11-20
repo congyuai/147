@@ -41,7 +41,7 @@ namespace Dustline
             {
                 Catalog = Resources.Load<ItemCatalog>("Dustline/Items");
                 LootTable = Resources.Load<LootTable>("Dustline/Loot");
-                if (Catalog == null || LootTable == null) throw new InvalidDataException("Game assets are missing. In the Editor, run Dustline > Prepare Project.");
+                if (Catalog == null || LootTable == null) throw new InvalidDataException("缺少游戏资源，请在编辑器中执行 Dustline > Prepare Project。");
                 Catalog.RebuildIndex();
                 Stash = new GridInventory(12, 10, 300, Catalog);
                 Loadout = new GridInventory(6, 6, 30, Catalog);
@@ -62,7 +62,7 @@ namespace Dustline
                     {
                         Profile.Loadout.Clear();
                         Profile.RaidInProgress = false;
-                        Notice = "Previous raid was interrupted: carried gear was lost.";
+                        Notice = "上次突袭中断，随身装备与物资已丢失。";
                         store.Save(Profile);
                     }
                     Loadout.Restore(Profile.Loadout);
@@ -92,13 +92,13 @@ namespace Dustline
             if (Input.InventoryPressed || Input.EscapePressed) UI.ToggleInventory();
             Input.Gameplay = !UI.InventoryOpen && focused;
             RaidRemaining = Mathf.Max(0, RaidRemaining - Time.deltaTime);
-            if (RaidRemaining <= 0) EndRaid(false, "Missing in action: raid time expired");
+            if (RaidRemaining <= 0) EndRaid(false, "撤离失败：突袭时间已耗尽");
         }
 
         public void StartRaid()
         {
             if (Phase != SessionPhase.Menu) return;
-            if (Loadout.Equipped(EquipmentSlot.Weapon) == null) { UI.Notify("Equip a weapon before deployment."); return; }
+            if (Loadout.Equipped(EquipmentSlot.Weapon) == null) { UI.Notify("请先装备武器，再开始突袭。"); return; }
             try
             {
                 // The durable profile relinquishes carried items before the raid can begin.
@@ -146,7 +146,7 @@ namespace Dustline
                 else Loadout = new GridInventory(6, 6, 30, Catalog);
                 Profile.RaidInProgress = false;
                 PersistSafeState();
-                Result = reason + "\nEliminations: " + Kills + (extracted ? "\nRecovered gear is in your stash. Overflow stays in your safe loadout.\nReward: " + (150 + Kills * 25) + " credits" : "\nAll carried equipment and loot were lost.");
+                Result = reason + "\n击败敌人：" + Kills + (extracted ? "\n带回的装备与物资已存入仓库，放不下的仍安全保留在整备背包中。\n奖励：" + (150 + Kills * 25) + " 信用点" : "\n所有随身装备与搜刮物资均已丢失。");
                 UI.ShowResults();
             }
             catch (Exception error) { Fail(error); }
@@ -186,7 +186,7 @@ namespace Dustline
             if (Phase != SessionPhase.Menu) return;
             var item = Catalog.Find(itemId);
             int cost = item.Value * quantity;
-            if (Profile.Credits < cost) { UI.Notify("Not enough credits."); return; }
+            if (Profile.Credits < cost) { UI.Notify("信用点不足。"); return; }
             if (!Stash.TryAdd(itemId, quantity, out var error)) { UI.Notify(error); return; }
             Profile.Credits -= cost;
             InventoryChanged();
@@ -208,7 +208,7 @@ namespace Dustline
         {
             if (Phase != SessionPhase.Menu) return;
             if (Profile.Credits >= Catalog.Find("rifle").Value || Stash.Count("rifle") + Loadout.Count("rifle") > 0)
-            { UI.Notify("Emergency gear is available only when you have no rifle and cannot afford one."); return; }
+            { UI.Notify("仅在没有步枪且信用点不足以购买时，才能领取应急装备。"); return; }
             if (!Loadout.TryAdd("rifle", 1, out var error)) { UI.Notify(error); return; }
             Loadout.TryAdd("ammo", 30, out _);
             InventoryChanged();
@@ -218,10 +218,10 @@ namespace Dustline
         public void UseMedicine(string id = null)
         {
             if (Phase != SessionPhase.Raid || !Player.Health.Alive) return;
-            if (Player.Health.Current >= Player.Health.Maximum) { UI.Notify("Health is already full."); return; }
+            if (Player.Health.Current >= Player.Health.Maximum) { UI.Notify("生命值已满，无需治疗。"); return; }
             ItemStack item = id == null ? null : Loadout.Find(id);
             if (id == null) foreach (var candidate in Loadout.Items) if (Catalog.Find(candidate.ItemId).Kind == ItemKind.Medicine) { item = candidate; break; }
-            if (item == null || Catalog.Find(item.ItemId).Kind != ItemKind.Medicine) { UI.Notify("No medical supplies."); return; }
+            if (item == null || Catalog.Find(item.ItemId).Kind != ItemKind.Medicine) { UI.Notify("没有可用的医疗品。"); return; }
             var definition = Catalog.Find(item.ItemId);
             if (Loadout.Consume(item.ItemId, 1)) Player.Health.Heal(definition.HealAmount);
             UI.RefreshInventory();
@@ -251,7 +251,7 @@ namespace Dustline
             Phase = SessionPhase.Error;
             Input.Gameplay = false;
             SetCursor(true);
-            Error = "Could not continue safely. Your existing save has not been reset.\n" + error.Message;
+            Error = "无法安全继续本次行动，现有存档未被重置。\n请检查存储权限、剩余空间和游戏资源，详细原因见日志。";
             Debug.LogException(error);
             UI.ShowError();
         }

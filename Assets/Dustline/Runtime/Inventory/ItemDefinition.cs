@@ -24,6 +24,15 @@ namespace Dustline
         public string Id;
         public string DisplayName;
         public ItemKind Kind;
+        public string KindName => Kind switch
+        {
+            ItemKind.Weapon => "武器",
+            ItemKind.Ammo => "弹药",
+            ItemKind.Medicine => "医疗品",
+            ItemKind.Armor => "护甲",
+            ItemKind.Valuable => "贵重物品",
+            _ => "物品"
+        };
         public int Width = 1;
         public int Height = 1;
         public int MaxStack = 1;

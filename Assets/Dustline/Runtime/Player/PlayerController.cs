@@ -32,7 +32,7 @@ namespace Dustline
                 var armor = session.Loadout.Equipped(EquipmentSlot.Armor);
                 return armor == null ? 0 : session.Catalog.Find(armor.ItemId).DamageReduction;
             };
-            Health.Died += _ => session.EndRaid(false, "Killed in action");
+            Health.Died += _ => session.EndRaid(false, "撤离失败：你已阵亡");
             var cameraObject = new GameObject("First person camera", typeof(Camera), typeof(AudioListener));
             cameraObject.tag = "MainCamera";
             cameraObject.transform.SetParent(transform, false);
@@ -90,7 +90,7 @@ namespace Dustline
             if (Physics.Raycast(View.transform.position, View.transform.forward, out var hit, 3.2f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
             {
                 FocusedLoot = hit.collider.GetComponentInParent<LootContainer>();
-                if (FocusedLoot != null) InteractionHint = "[E / USE] " + FocusedLoot.DisplayName;
+                if (FocusedLoot != null) InteractionHint = "[E / 交互] " + FocusedLoot.DisplayName;
             }
         }
 

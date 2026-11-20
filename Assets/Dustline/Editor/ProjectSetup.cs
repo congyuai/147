@@ -14,6 +14,12 @@ namespace Dustline.Editor
     {
         const string Root = "Assets/Dustline/Resources/Dustline";
         const string Scene = "Assets/Dustline/Scenes/Bootstrap.unity";
+        const string Version = "0.1.1";
+        static readonly Dictionary<string, string> ItemNames = new Dictionary<string, string> {
+            { "rifle", "AR-20突击步枪" }, { "ammo", "5.56毫米弹药" },
+            { "medkit", "战地医疗包" }, { "armor", "战术防弹衣" },
+            { "circuit", "电路板" }, { "relic", "勘测模块" }
+        };
         static ProjectSetup() { EditorApplication.delayCall += PrepareIfMissing; }
 
         static void PrepareIfMissing()
@@ -21,9 +27,21 @@ namespace Dustline.Editor
             if (EditorApplication.isCompiling || EditorApplication.isUpdating)
             { EditorApplication.delayCall += PrepareIfMissing; return; }
             if (EditorApplication.isPlayingOrWillChangePlaymode) return;
-            if (AssetDatabase.LoadAssetAtPath<ItemCatalog>(Root + "/Items.asset") == null
+            var catalog = AssetDatabase.LoadAssetAtPath<ItemCatalog>(Root + "/Items.asset");
+            if (catalog == null
                 || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/Loot.asset") == null
-                || GraphicsSettings.defaultRenderPipeline == null) Prepare();
+                || GraphicsSettings.defaultRenderPipeline == null
+                || PlayerSettings.bundleVersion != Version)
+            {
+                Prepare();
+                return;
+            }
+            foreach (var item in catalog.Items)
+                if (ItemNames.TryGetValue(item.Id, out var displayName) && item.DisplayName != displayName)
+                {
+                    Prepare();
+                    return;
+                }
         }
 
         [MenuItem("Dustline/Prepare Project")]
@@ -32,6 +50,8 @@ namespace Dustline.Editor
             Directory.CreateDirectory(Root);
             Directory.CreateDirectory("Assets/Dustline/Settings");
             AssetDatabase.Refresh();
+            if (AssetDatabase.LoadAssetAtPath<Font>(Root + "/Fonts/NotoSansSC-Regular.otf") == null)
+                throw new BuildFailedException("缺少随包中文字体，请恢复 NotoSansSC-Regular.otf 后重试。");
             var renderer = AssetDatabase.LoadAssetAtPath<UniversalRendererData>("Assets/Dustline/Settings/MobileRenderer.asset");
             if (renderer == null)
             {
@@ -85,12 +105,12 @@ namespace Dustline.Editor
                 AssetDatabase.CreateAsset(weapon, Root + "/RifleWeapon.asset");
                 catalog = ScriptableObject.CreateInstance<ItemCatalog>();
                 catalog.Items = new List<ItemDefinition> {
-                    Item("rifle", "AR-20", ItemKind.Weapon, 3, 2, 1, 3.2f, 240, new Color(0.28f,0.43f,0.52f)),
-                    Item("ammo", "5.56 ammo", ItemKind.Ammo, 1, 1, 60, 0.012f, 2, new Color(0.68f,0.55f,0.24f)),
-                    Item("medkit", "Field medkit", ItemKind.Medicine, 1, 2, 3, 0.4f, 40, new Color(0.58f,0.25f,0.24f)),
-                    Item("armor", "Field vest", ItemKind.Armor, 2, 3, 1, 4.5f, 160, new Color(0.32f,0.45f,0.29f)),
-                    Item("circuit", "Circuit board", ItemKind.Valuable, 2, 1, 2, 0.3f, 120, new Color(0.2f,0.55f,0.48f)),
-                    Item("relic", "Survey module", ItemKind.Valuable, 2, 2, 1, 1.2f, 350, new Color(0.58f,0.36f,0.65f))
+                    Item("rifle", ItemNames["rifle"], ItemKind.Weapon, 3, 2, 1, 3.2f, 240, new Color(0.28f,0.43f,0.52f)),
+                    Item("ammo", ItemNames["ammo"], ItemKind.Ammo, 1, 1, 60, 0.012f, 2, new Color(0.68f,0.55f,0.24f)),
+                    Item("medkit", ItemNames["medkit"], ItemKind.Medicine, 1, 2, 3, 0.4f, 40, new Color(0.58f,0.25f,0.24f)),
+                    Item("armor", ItemNames["armor"], ItemKind.Armor, 2, 3, 1, 4.5f, 160, new Color(0.32f,0.45f,0.29f)),
+                    Item("circuit", ItemNames["circuit"], ItemKind.Valuable, 2, 1, 2, 0.3f, 120, new Color(0.2f,0.55f,0.48f)),
+                    Item("relic", ItemNames["relic"], ItemKind.Valuable, 2, 2, 1, 1.2f, 350, new Color(0.58f,0.36f,0.65f))
                 };
                 catalog.Items[0].Weapon = weapon;
                 catalog.Items[2].HealAmount = 45;
@@ -98,6 +118,12 @@ namespace Dustline.Editor
                 foreach (var item in catalog.Items) EditorUtility.SetDirty(item);
                 AssetDatabase.CreateAsset(catalog, Root + "/Items.asset");
             }
+            foreach (var item in catalog.Items)
+                if (ItemNames.TryGetValue(item.Id, out var displayName) && item.DisplayName != displayName)
+                {
+                    item.DisplayName = displayName;
+                    EditorUtility.SetDirty(item);
+                }
             var table = AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/Loot.asset");
             if (table == null)
             {
@@ -115,7 +141,8 @@ namespace Dustline.Editor
             }
             PlayerSettings.companyName = "Dustline";
             PlayerSettings.productName = "Dustline Extraction";
-            PlayerSettings.bundleVersion = "0.1.0";
+            PlayerSettings.bundleVersion = Version;
+            PlayerSettings.Android.bundleVersionCode = 2;
             PlayerSettings.defaultInterfaceOrientation = UIOrientation.LandscapeLeft;
             PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, "com.dustline.extraction");
             PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, ScriptingImplementation.IL2CPP);
@@ -139,7 +166,7 @@ namespace Dustline.Editor
         [MenuItem("Dustline/Build Windows")]
         public static void BuildWindows() { Build(BuildTarget.StandaloneWindows64, "Builds/Windows/Dustline.exe"); }
         [MenuItem("Dustline/Build Android")]
-        public static void BuildAndroid() { Build(BuildTarget.Android, "Builds/Android/dustline-extraction-v0.1.0.apk"); }
+        public static void BuildAndroid() { Build(BuildTarget.Android, "Builds/Android/dustline-extraction-v" + Version + ".apk"); }
         static void Build(BuildTarget target, string output)
         {
             Prepare();
