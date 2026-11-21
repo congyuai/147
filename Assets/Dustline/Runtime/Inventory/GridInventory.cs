@@ -430,6 +430,12 @@ namespace Dustline
                 error = "弹匣内的弹药数量无效。";
                 return false;
             }
+            if (!WeaponTuning.IsValidForItem(stack.ItemId, stack.Mods)
+                || (!stack.Mods.IsEmpty && (definition.Kind != ItemKind.Weapon || !WeaponTuning.SupportsUpgrades(definition.Weapon))))
+            {
+                error = "武器改装等级无效。";
+                return false;
+            }
             return true;
         }
 
@@ -525,6 +531,7 @@ namespace Dustline
                 current.Rotated = update.Rotated;
                 current.Slot = update.Slot;
                 current.LoadedAmmo = update.LoadedAmmo;
+                current.Mods = update.Mods;
                 replacement[i] = current;
             }
 

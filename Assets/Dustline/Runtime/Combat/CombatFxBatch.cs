@@ -6,11 +6,12 @@ namespace Dustline
 {
     sealed class CombatFxBatch
     {
-        public enum Ink { Glow, Vapor, Tongue, Core, Dust, Signal, Streak, CoreEdge }
+        public enum Ink { Glow, Vapor, Tongue, Core, Dust, Signal, Streak, CoreEdge, Hole, Scrape, Ding }
         const int QuadsPerBurst = 18;
         const int Levels = 16;
-        const int Tile = 24;
-        const int AtlasWidth = 8 * Tile;
+        const int Tile = 32;
+        const int Swatches = (int)Ink.Ding + 1;
+        const int AtlasWidth = Swatches * Tile;
         const int AtlasHeight = Levels * Tile;
         const MeshUpdateFlags WriteFlags = MeshUpdateFlags.DontValidateIndices | MeshUpdateFlags.DontRecalculateBounds;
 
@@ -30,7 +31,7 @@ namespace Dustline
         Vector3 eye, right, up, minimum, maximum;
         int cursor;
 
-        public CombatFxBatch(GameObject node, int capacity)
+        public CombatFxBatch(GameObject node, int bursts, int marks)
         {
             var shader = Shader.Find("Universal Render Pipeline/Unlit");
             if (shader == null) throw new System.InvalidOperationException("Missing URP Unlit shader for raid combat effects.");
@@ -57,7 +58,7 @@ namespace Dustline
             material.renderQueue = (int)RenderQueue.Transparent;
             renderer.sharedMaterial = material;
 
-            int quads = capacity * QuadsPerBurst;
+            int quads = bursts * QuadsPerBurst + marks;
             vertices = new Vertex[quads * 4];
             var indices = new ushort[quads * 6];
             for (int i = 0; i < quads; i++)
@@ -162,7 +163,7 @@ namespace Dustline
             };
             // Opacity rows let the stock URP Unlit shader fade one batch without vertex colors or per-effect materials.
             var pixels = new Color32[AtlasWidth * AtlasHeight];
-            for (int type = 0; type < 8; type++)
+            for (int type = 0; type < Swatches; type++)
                 for (int y = 0; y < Tile; y++)
                     for (int x = 0; x < Tile; x++)
                     {
@@ -222,6 +223,28 @@ namespace Dustline
                 {
                     float core = 1 - Mathf.SmoothStep(0, 1, r);
                     return new Color(0.58f + 0.4f * core, 0.86f + 0.13f * core, 1, core * core);
+                }
+                case Ink.Hole:
+                case Ink.Ding:
+                {
+                    float angle = Mathf.Atan2(y, x);
+                    float chipped = r * (1 + 0.12f * Mathf.Sin(angle * 7) + 0.075f * Mathf.Cos(angle * 13));
+                    float core = 1 - Mathf.SmoothStep(0, 1, (chipped - 0.22f) / 0.25f);
+                    float rim = 1 - Mathf.SmoothStep(0, 1, Mathf.Abs(chipped - 0.51f) / 0.14f);
+                    float crack = Mathf.Pow(Mathf.Max(0, Mathf.Sin(angle * 6 + r * 2)), 14) * (1 - r * r);
+                    var tint = Color.Lerp(new Color(0.075f, 0.066f, 0.055f), new Color(0.55f, 0.47f, 0.37f), rim * (1 - core));
+                    tint.a = (core + 0.66f * rim * (1 - core) + 0.23f * crack) * (1 - Mathf.SmoothStep(0.72f, 1, r));
+                    if (ink == Ink.Ding) tint.a *= 0.66f;
+                    return tint;
+                }
+                case Ink.Scrape:
+                {
+                    float taper = 1 - Mathf.SmoothStep(0, 1, (Mathf.Abs(y) - 0.30f) / 0.70f);
+                    float edge = Mathf.Abs(x + y * 0.17f - Mathf.Sin(8 * y) * 0.06f) / (0.19f + 0.49f * taper);
+                    float mask = (1 - Mathf.SmoothStep(0, 1, edge)) * taper;
+                    var tint = Color.Lerp(new Color(0.18f, 0.15f, 0.12f), new Color(0.68f, 0.60f, 0.48f), Mathf.Clamp01(edge * 1.5f));
+                    tint.a = mask * 0.91f;
+                    return tint;
                 }
                 default:
                 {

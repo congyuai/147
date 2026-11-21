@@ -15,7 +15,9 @@ namespace Dustline.Editor
         const string Root = "Assets/Dustline/Resources/Dustline";
         const string Scene = "Assets/Dustline/Scenes/Bootstrap.unity";
         const string PipelinePath = "Assets/Dustline/Settings/MobilePipeline.asset";
-        const string Version = "0.2.0";
+        const string RenderingRoot = Root + "/Rendering";
+        const string Version = "0.3.0";
+        const int AndroidVersionCode = 4;
         static readonly Dictionary<string, string> ItemNames = new Dictionary<string, string> {
             { "rifle", "AR-20突击步枪" }, { "ammo", "5.56毫米弹药" },
             { "medkit", "战地医疗包" }, { "armor", "战术防弹衣" },
@@ -30,16 +32,23 @@ namespace Dustline.Editor
             { EditorApplication.delayCall += PrepareIfMissing; return; }
             if (EditorApplication.isPlayingOrWillChangePlaymode) return;
             var catalog = AssetDatabase.LoadAssetAtPath<ItemCatalog>(Root + "/Items.asset");
+            var blades = AssetDatabase.LoadAssetAtPath<BladeCatalog>(Root + "/Blades.asset");
             var renderer = AssetDatabase.LoadAssetAtPath<UniversalRendererData>("Assets/Dustline/Settings/MobileRenderer.asset");
             var pipeline = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(PipelinePath);
             if (catalog == null
                 || renderer == null
                 || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/Loot.asset") == null
+                || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/HighValueLoot.asset") == null
+                || blades == null || blades.Resolve(null)?.Form != WeaponForm.Tangdao
+                || blades.Resolve(BladeCatalog.ShortBladeId)?.Form != WeaponForm.ShortBlade
                 || pipeline == null || GraphicsSettings.defaultRenderPipeline != pipeline
                 || !pipeline.supportsSoftShadows || pipeline.shadowCascadeCount != 2
+                || AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(RenderingRoot + "/Low.asset") == null
+                || AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(RenderingRoot + "/High.asset") == null
                 || pipeline.additionalLightsRenderingMode != LightRenderingMode.PerPixel
-                || catalog.Find(WeaponDefinition.BatonId) == null
-                || PlayerSettings.bundleVersion != Version)
+                || catalog.Find(WeaponDefinition.BatonId)?.Weapon?.Form != WeaponForm.Baton
+                || PlayerSettings.bundleVersion != Version
+                || PlayerSettings.Android.bundleVersionCode != AndroidVersionCode)
             {
                 Prepare();
                 return;
@@ -55,7 +64,7 @@ namespace Dustline.Editor
         [MenuItem("Dustline/Prepare Project")]
         public static void Prepare()
         {
-            Directory.CreateDirectory(Root);
+            Directory.CreateDirectory(RenderingRoot);
             Directory.CreateDirectory("Assets/Dustline/Settings");
             AssetDatabase.Refresh();
             if (AssetDatabase.LoadAssetAtPath<Font>(Root + "/Fonts/NotoSansSC-Regular.otf") == null)
@@ -68,42 +77,20 @@ namespace Dustline.Editor
             }
             ResourceReloader.ReloadAllNullIn(renderer, "Packages/com.unity.render-pipelines.universal");
             EditorUtility.SetDirty(renderer);
-            var pipeline = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(PipelinePath);
-            if (pipeline == null)
-            {
-                pipeline = UniversalRenderPipelineAsset.Create(renderer);
-                pipeline.name = "Dustline Mobile";
-                AssetDatabase.CreateAsset(pipeline, PipelinePath);
-            }
-            pipeline.renderScale = 1f;
-            pipeline.msaaSampleCount = 2;
-            pipeline.supportsHDR = false;
-            pipeline.shadowDistance = 82;
-            pipeline.shadowCascadeCount = 2;
-            pipeline.maxAdditionalLightsCount = 2;
-            var pipelineSettings = new SerializedObject(pipeline);
-            var rendererList = pipelineSettings.FindProperty("m_RendererDataList");
-            if (rendererList != null)
-            {
-                rendererList.arraySize = Mathf.Max(1, rendererList.arraySize);
-                rendererList.GetArrayElementAtIndex(0).objectReferenceValue = renderer;
-            }
-            pipelineSettings.FindProperty("m_MainLightShadowsSupported").boolValue = true;
-            pipelineSettings.FindProperty("m_MainLightShadowmapResolution").intValue = 2048;
-            pipelineSettings.FindProperty("m_SoftShadowsSupported").boolValue = true;
-            pipelineSettings.FindProperty("m_AdditionalLightsRenderingMode").intValue = (int)LightRenderingMode.PerPixel;
-            pipelineSettings.FindProperty("m_AdditionalLightShadowsSupported").boolValue = false;
-            pipelineSettings.ApplyModifiedPropertiesWithoutUndo();
-            EditorUtility.SetDirty(pipeline);
+            var pipeline = PrepareRendering(PipelinePath, "Dustline Balanced", renderer, 2, 2048, 83f, 2, 2);
+            PrepareRendering(RenderingRoot + "/Low.asset", "Dustline Performance", renderer, 2, 1024, 51f, 2, 1);
+            PrepareRendering(RenderingRoot + "/High.asset", "Dustline Detail", renderer, 4, 4096, 122f, 4, 3);
             GraphicsSettings.defaultRenderPipeline = pipeline;
             QualitySettings.renderPipeline = pipeline;
             QualitySettings.vSyncCount = 0;
             QualitySettings.antiAliasing = 0;
+            QualitySettings.anisotropicFiltering = AnisotropicFiltering.Enable;
             var settings = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/GraphicsSettings.asset")[0]);
             var shaders = settings.FindProperty("m_AlwaysIncludedShaders");
-            foreach (var shaderName in new[] { "Universal Render Pipeline/Lit", "Universal Render Pipeline/Unlit", "Skybox/Procedural", "UI/Default" })
+            foreach (var shaderName in new[] { "Universal Render Pipeline/Lit", "Universal Render Pipeline/Unlit", "Dustline/Harbor Sky", "UI/Default" })
             {
                 var shader = Shader.Find(shaderName);
+                if (shader == null) throw new BuildFailedException("无法加载构建所需的着色器：" + shaderName);
                 bool present = false;
                 for (int i = 0; i < shaders.arraySize; i++) if (shaders.GetArrayElementAtIndex(i).objectReferenceValue == shader) present = true;
                 if (!present) { int i = shaders.arraySize++; shaders.GetArrayElementAtIndex(i).objectReferenceValue = shader; }
@@ -113,6 +100,7 @@ namespace Dustline.Editor
             if (catalog == null)
             {
                 var weapon = ScriptableObject.CreateInstance<WeaponDefinition>();
+                weapon.Form = WeaponForm.Rifle;
                 weapon.AmmoId = "ammo";
                 weapon.MagazineSize = 20;
                 weapon.Damage = 26;
@@ -160,10 +148,12 @@ namespace Dustline.Editor
                 AssetDatabase.CreateAsset(table, Root + "/Loot.asset");
             }
             EnsureBatonLoot(table);
+            EnsureHighValueLoot();
+            EnsureBoundBlades();
             PlayerSettings.companyName = "Dustline";
             PlayerSettings.productName = "Dustline Extraction";
             PlayerSettings.bundleVersion = Version;
-            PlayerSettings.Android.bundleVersionCode = 3;
+            PlayerSettings.Android.bundleVersionCode = AndroidVersionCode;
             PlayerSettings.defaultInterfaceOrientation = UIOrientation.LandscapeLeft;
             PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, "com.dustline.extraction");
             PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, ScriptingImplementation.IL2CPP);
@@ -172,6 +162,50 @@ namespace Dustline.Editor
             PlayerSettings.colorSpace = ColorSpace.Linear;
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(Scene, true) };
             AssetDatabase.SaveAssets();
+        }
+
+        static UniversalRenderPipelineAsset PrepareRendering(string path, string title, UniversalRendererData renderer,
+            int samples, int atlas, float distance, int cascades, int localLights)
+        {
+            var asset = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(path);
+            if (asset == null)
+            {
+                asset = UniversalRenderPipelineAsset.Create(renderer);
+                AssetDatabase.CreateAsset(asset, path);
+            }
+            asset.name = title;
+            asset.renderScale = 1f;
+            asset.msaaSampleCount = samples;
+            asset.supportsHDR = false;
+            asset.supportsCameraOpaqueTexture = false;
+            asset.shadowDistance = distance;
+            asset.shadowCascadeCount = cascades;
+            asset.cascadeBorder = 0.16f;
+            asset.shadowDepthBias = 0.77f;
+            asset.shadowNormalBias = 0.58f;
+            asset.conservativeEnclosingSphere = true;
+            asset.maxAdditionalLightsCount = localLights;
+            asset.useSRPBatcher = true;
+
+            var serialized = new SerializedObject(asset);
+            var list = serialized.FindProperty("m_RendererDataList");
+            list.arraySize = Mathf.Max(1, list.arraySize);
+            list.GetArrayElementAtIndex(0).objectReferenceValue = renderer;
+            serialized.FindProperty("m_DefaultRendererIndex").intValue = 0;
+            serialized.FindProperty("m_MainLightShadowsSupported").boolValue = true;
+            serialized.FindProperty("m_MainLightShadowmapResolution").intValue = atlas;
+            serialized.FindProperty("m_SoftShadowsSupported").boolValue = true;
+            serialized.FindProperty("m_AdditionalLightsRenderingMode").intValue = (int)LightRenderingMode.PerPixel;
+            serialized.FindProperty("m_AdditionalLightShadowsSupported").boolValue = false;
+            var split2 = serialized.FindProperty("m_Cascade2Split");
+            if (split2 != null) split2.floatValue = 0.22f;
+            var split4 = serialized.FindProperty("m_Cascade4Split");
+            if (split4 != null) split4.vector3Value = new Vector3(0.095f, 0.235f, 0.50f);
+            var softness = serialized.FindProperty("m_SoftShadowQuality");
+            if (softness != null) softness.intValue = 1;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(asset);
+            return asset;
         }
 
         static void EnsureBaton(ItemCatalog catalog)
@@ -203,6 +237,11 @@ namespace Dustline.Editor
                 item.Weapon = definition;
                 EditorUtility.SetDirty(item);
             }
+            if (item.Weapon.Form != WeaponForm.Baton)
+            {
+                item.Weapon.Form = WeaponForm.Baton;
+                EditorUtility.SetDirty(item.Weapon);
+            }
             catalog.RebuildIndex();
         }
 
@@ -213,6 +252,67 @@ namespace Dustline.Editor
                 if (entry != null && entry.ItemId == WeaponDefinition.BatonId) return;
             table.Entries.Add(new LootEntry { ItemId = WeaponDefinition.BatonId, Min = 1, Max = 1, Weight = 1 });
             EditorUtility.SetDirty(table);
+        }
+
+        static void EnsureHighValueLoot()
+        {
+            var table = AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/HighValueLoot.asset");
+            if (table != null) return;
+            table = ScriptableObject.CreateInstance<LootTable>();
+            table.Rolls = 3;
+            table.Entries = new List<LootEntry> {
+                new LootEntry { ItemId = "relic", Min = 1, Max = 1, Weight = 14 },
+                new LootEntry { ItemId = "armor", Min = 1, Max = 1, Weight = 4 },
+                new LootEntry { ItemId = "rifle", Min = 1, Max = 1, Weight = 3 },
+                new LootEntry { ItemId = "circuit", Min = 1, Max = 2, Weight = 4 },
+                new LootEntry { ItemId = "medkit", Min = 1, Max = 1, Weight = 3 },
+                new LootEntry { ItemId = "ammo", Min = 20, Max = 45, Weight = 4 }
+            };
+            AssetDatabase.CreateAsset(table, Root + "/HighValueLoot.asset");
+        }
+
+        static void EnsureBoundBlades()
+        {
+            var catalog = AssetDatabase.LoadAssetAtPath<BladeCatalog>(Root + "/Blades.asset");
+            if (catalog == null)
+            {
+                catalog = ScriptableObject.CreateInstance<BladeCatalog>();
+                AssetDatabase.CreateAsset(catalog, Root + "/Blades.asset");
+            }
+            catalog.Blades = new[] {
+                new BladeChoice {
+                    Id = BladeCatalog.DefaultId, DisplayName = "唐刀",
+                    Weapon = PrepareBlade("TangdaoWeapon", WeaponForm.Tangdao, 40f, 0.68f, 2f)
+                },
+                new BladeChoice {
+                    Id = BladeCatalog.ShortBladeId, DisplayName = "砂影短刀",
+                    Weapon = PrepareBlade("ShortBladeWeapon", WeaponForm.ShortBlade, 28f, 0.42f, 1.48f)
+                }
+            };
+            EditorUtility.SetDirty(catalog);
+        }
+
+        static WeaponDefinition PrepareBlade(string name, WeaponForm form, float damage, float interval, float range)
+        {
+            string path = Root + "/" + name + ".asset";
+            var blade = AssetDatabase.LoadAssetAtPath<WeaponDefinition>(path);
+            if (blade == null)
+            {
+                blade = ScriptableObject.CreateInstance<WeaponDefinition>();
+                AssetDatabase.CreateAsset(blade, path);
+            }
+            blade.Form = form;
+            blade.Melee = true;
+            blade.AmmoId = "";
+            blade.MagazineSize = 0;
+            blade.Damage = damage;
+            blade.FireInterval = interval;
+            blade.Range = range;
+            blade.ReloadSeconds = 0f;
+            blade.Recoil = 0f;
+            blade.Automatic = false;
+            EditorUtility.SetDirty(blade);
+            return blade;
         }
 
         static ItemDefinition Item(string id, string title, ItemKind kind, int width, int height, int max, float weight, int value, Color tint)

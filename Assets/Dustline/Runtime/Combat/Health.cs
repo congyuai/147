@@ -17,6 +17,7 @@ namespace Dustline
         public Func<float> ArmorReduction;
         public event Action<Health> Hurt;
         public event Action<Health> Died;
+        public event System.Action<Vector3, float> Damaged;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         static void ResetStatics() { actors.Clear(); }
@@ -32,12 +33,18 @@ namespace Dustline
 
         public void Damage(float amount, Health attacker)
         {
-            if (!Alive || amount <= 0) return;
+            if (!Alive || !(amount > 0)) return;
             if (attacker != null && attacker != this && attacker.Team == Team) return;
             float protection = Mathf.Clamp(ArmorReduction?.Invoke() ?? 0, 0, 0.8f);
-            Current = Mathf.Max(0, Current - amount * (1 - protection));
+            float remaining = Mathf.Max(0, Current - amount * (1 - protection));
+            float lost = Current - remaining;
+            if (!(lost > 0)) return;
+
+            Current = remaining;
+            Vector3 direction = attacker != null ? (attacker.transform.position - transform.position).normalized : Vector3.zero;
+            Damaged?.Invoke(direction, lost);
             Hurt?.Invoke(attacker);
-            if (!Alive) Died?.Invoke(attacker);
+            if (remaining == 0) Died?.Invoke(attacker);
         }
 
         public void Heal(float amount)

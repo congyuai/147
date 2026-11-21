@@ -13,8 +13,9 @@ namespace Dustline
         const float Tau = 2 * Mathf.PI;
         readonly System.Random variation = new System.Random();
         readonly List<AudioClip> owned = new List<AudioClip>();
-        readonly AudioClip[,] footsteps = new AudioClip[5, Variants];
-        readonly int[] previousVariant = { -1, -1, -1, -1, -1 };
+        const int SurfaceCount = (int)SurfaceKind.Dirt + 1;
+        readonly AudioClip[,] footsteps = new AudioClip[SurfaceCount, Variants];
+        readonly int[] previousVariant = new int[SurfaceCount];
         readonly AudioSource[] voices = new AudioSource[6];
         readonly LoopSource[] loops = new LoopSource[4];
         readonly AudioClip[] melee = new AudioClip[3];
@@ -33,18 +34,22 @@ namespace Dustline
         {
             session = owner;
             localStep = Source("Player footsteps", Vector3.zero, false, 1);
+            localStep.priority = 68;
             meleeVoice = Source("Melee foley", Vector3.zero, false, 1);
             meleeVoice.priority = 72;
             for (int i = 0; i < melee.Length; i++) melee[i] = CreateMelee((MeleeSound)i);
             for (int i = 0; i < voices.Length; i++) voices[i] = Source("Nearby footsteps", Vector3.zero, true, 29);
             for (int surface = 0; surface < footsteps.GetLength(0); surface++)
+            {
+                previousVariant[surface] = -1;
                 for (int take = 0; take < Variants; take++)
                     footsteps[surface, take] = CreateStep((SurfaceKind)surface, take);
+            }
 
             loops[0] = Loop("Harbor wind", Vector3.zero, 0, 0.17f, 0);
             loops[1] = Loop("Workshop ventilation", PortLayout.Districts[2].Center + Vector3.up * 3, 105, 0.29f, 1);
             loops[2] = Loop("Freight yard rumble", PortLayout.Districts[3].Center + Vector3.up * 2, 143, 0.30f, 2);
-            loops[3] = Loop("Quay waves", new Vector3(PortLayout.Shore, -0.6f, PortLayout.Districts[4].Center.z), 153, 0.32f, 3);
+            loops[3] = Loop("Quay waves", new Vector3(PortLayout.Shore, PortTerrain.SeaY, PortLayout.Districts[4].Center.z), 153, 0.32f, 3);
         }
 
         AudioSource Source(string title, Vector3 position, bool spatial, float range)
@@ -95,7 +100,7 @@ namespace Dustline
 
         internal void PlayFootstep(Vector3 feet, float strength, bool local)
         {
-            if (!local && (feet - session.Player.transform.position).sqrMagnitude > 29 * 29) return;
+            if (!local && (session.Player == null || (feet - session.Player.transform.position).sqrMagnitude > 29 * 29)) return;
             var source = localStep;
             if (!local)
             {
@@ -170,7 +175,8 @@ namespace Dustline
                 switch (surface)
                 {
                     case SurfaceKind.Asphalt:
-                        sample = 0.29f * body + 0.65f * mid * (heel + 0.63f * toe) + 0.17f * grain * toe;
+                        sample = 0.32f * body + 0.58f * mid * (heel + 0.61f * toe)
+                            + 0.28f * grain * Pulse(t - .054f, .011f, .048f);
                         break;
                     case SurfaceKind.Gravel:
                         float chips = 0;
@@ -187,8 +193,18 @@ namespace Dustline
                         float knock = Mathf.Sin(Tau * shift * 173 * t) + 0.48f * Mathf.Sin(Tau * shift * 289 * t);
                         sample = 0.31f * knock * heel + 0.52f * low * (heel + toe) + 0.1f * grain * toe;
                         break;
+                    case SurfaceKind.Grass:
+                        float sweep = Pulse(t - .012f, .018f, .055f) + .64f * Pulse(t - .079f, .012f, .053f);
+                        float blades = Pulse(t - chipTimes[0], .002f, .009f) + Pulse(t - chipTimes[4], .002f, .012f);
+                        sample = .24f * body + (mid - low) * (.66f * sweep) + grain * (.33f * sweep + .18f * blades);
+                        break;
+                    case SurfaceKind.Dirt:
+                        float press = Pulse(t, .006f, .044f) + .64f * Pulse(t - .062f, .009f, .038f);
+                        float thud = Mathf.Sin(Tau * shift * 72 * t) * press;
+                        sample = .39f * thud + .61f * low * press + .42f * (mid - low) * Pulse(t - .033f, .013f, .034f);
+                        break;
                     default:
-                        sample = 0.25f * body + 0.61f * mid * (heel + 0.49f * toe) + 0.37f * grain * Pulse(t, 0.001f, 0.019f);
+                        sample = 0.30f * body + 0.45f * mid * (heel + 0.45f * toe) + 0.45f * grain * Pulse(t, 0.001f, 0.015f);
                         break;
                 }
                 float tail = Mathf.Clamp01((length - 1 - i) / (Rate * 0.024f));

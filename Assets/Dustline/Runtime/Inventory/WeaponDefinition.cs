@@ -2,10 +2,14 @@ using UnityEngine;
 
 namespace Dustline
 {
+    public enum WeaponForm { Rifle, Baton, Tangdao, ShortBlade }
+
     [CreateAssetMenu(menuName = "Dustline/Weapon Definition")]
     public sealed class WeaponDefinition : ScriptableObject
     {
+        public const string RifleId = "rifle";
         public const string BatonId = "baton";
+        public WeaponForm Form;
         public bool Melee;
         public string AmmoId;
         public int MagazineSize = 20;

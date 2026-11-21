@@ -18,6 +18,11 @@ namespace Dustline
             ItemDefinition rifle = Define("rifle", ItemKind.Weapon, 2, 1, 50, 2f);
             rifle.Weapon = Create<WeaponDefinition>();
             rifle.Weapon.AmmoId = "ammo";
+            ItemDefinition baton = Define(WeaponDefinition.BatonId, ItemKind.Weapon, 1, 1, 1, 0.8f);
+            baton.Weapon = Create<WeaponDefinition>();
+            baton.Weapon.Form = WeaponForm.Baton;
+            baton.Weapon.Melee = true;
+            baton.Weapon.MagazineSize = 0;
             Define("armor", ItemKind.Armor, 1, 1, 50, 3f);
             Define("ammo", ItemKind.Ammo, 1, 1, 10, 0.25f);
             Define("medicine", ItemKind.Medicine, 1, 1, 3, 0.5f);
@@ -188,7 +193,7 @@ namespace Dustline
         }
 
         [Test]
-        public void InsertClonesInputIgnoresLocationAndPreservesMagazine()
+        public void InsertClonesInputIgnoresLocationAndPreservesMagazineAndMods()
         {
             var inventory = new GridInventory(1, 2, 20f, catalog);
             var input = new ItemStack
@@ -196,6 +201,7 @@ namespace Dustline
                 InstanceId = "fixed-instance",
                 ItemId = "rifle",
                 LoadedAmmo = 7,
+                Mods = new WeaponMods { Grip = 1, OwnedGrip = 2, OwnedStock = 1 },
                 X = int.MinValue,
                 Y = int.MaxValue,
                 Slot = EquipmentSlot.Armor
@@ -204,6 +210,9 @@ namespace Dustline
             ItemStack inserted = inventory.Find(input.InstanceId);
             Assert.That(inserted, Is.Not.SameAs(input));
             Assert.That(inserted.LoadedAmmo, Is.EqualTo(7));
+            Assert.That(inserted.Mods, Is.EqualTo(input.Mods));
+            input.Mods.Grip = 0;
+            Assert.That(inserted.Mods.Grip, Is.EqualTo(1));
             Assert.That(inserted.Slot, Is.EqualTo(EquipmentSlot.None));
             Assert.That(inserted.Rotated, Is.True);
             Assert.That(input.Slot, Is.EqualTo(EquipmentSlot.Armor));
@@ -213,13 +222,15 @@ namespace Dustline
         }
 
         [Test]
-        public void TransferIsAtomicAndPreservesInstanceAndLoadedAmmo()
+        public void TransferIsAtomicAndPreservesInstanceLoadedAmmoAndMods()
         {
             var source = new GridInventory(2, 1, 20f, catalog);
             var destination = new GridInventory(2, 1, 20f, catalog);
             Assert.That(source.TryAdd("rifle", 1, out _), Is.True);
             ItemStack rifle = source.Items[0];
             rifle.LoadedAmmo = 9;
+            var mods = new WeaponMods { Sight = 1, OwnedSight = 2, Stock = 2, OwnedStock = 2 };
+            rifle.Mods = mods;
             Assert.That(source.TryEquip(rifle.InstanceId, EquipmentSlot.Weapon, out _), Is.True);
             Assert.That(destination.TryAdd("bar", 1, out _), Is.True);
             string blocker = destination.Items[0].InstanceId;
@@ -237,6 +248,8 @@ namespace Dustline
             Assert.That(error, Is.Not.Empty);
             Assert.That(source.Equipped(EquipmentSlot.Weapon), Is.SameAs(rifle));
             Assert.That(rifle.LoadedAmmo, Is.EqualTo(9));
+            Assert.That(rifle.Mods, Is.EqualTo(mods));
+            Assert.That(source.Weight, Is.EqualTo(2f));
             Assert.That(source.TryTransferTo(rifle.InstanceId, source, out _), Is.False);
             Assert.That(source.TryTransferTo(rifle.InstanceId, null, out _), Is.False);
             Assert.That(sourceChanges, Is.Zero);
@@ -250,9 +263,52 @@ namespace Dustline
             Assert.That(received.ItemId, Is.EqualTo("rifle"));
             Assert.That(received.Quantity, Is.EqualTo(1));
             Assert.That(received.LoadedAmmo, Is.EqualTo(9));
+            Assert.That(received.Mods, Is.EqualTo(mods));
+            rifle.Mods.Sight = 2;
+            Assert.That(received.Mods.Sight, Is.EqualTo(1));
+            Assert.That(destination.Weight, Is.EqualTo(2f));
             Assert.That(received.Slot, Is.EqualTo(EquipmentSlot.None));
             Assert.That(sourceChanges, Is.EqualTo(1));
             Assert.That(destinationChanges, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void RestoreCommitsModsWithoutSharingTheSnapshotOrResettingAmmo()
+        {
+            var inventory = new GridInventory(3, 1, 20f, catalog);
+            Assert.That(inventory.TryAdd(WeaponDefinition.RifleId, 1, out _), Is.True);
+            var rifle = inventory.Items[0];
+            rifle.LoadedAmmo = 11;
+            var snapshot = inventory.Snapshot();
+            snapshot[0].Mods = new WeaponMods { Grip = 1, OwnedGrip = 2 };
+            Assert.That(rifle.Mods, Is.EqualTo(default(WeaponMods)));
+            inventory.Restore(snapshot);
+            Assert.That(inventory.Find(rifle.InstanceId), Is.SameAs(rifle));
+            Assert.That(rifle.Mods, Is.EqualTo(snapshot[0].Mods));
+            snapshot[0].Mods.Grip = 2;
+            Assert.That(rifle.Mods.Grip, Is.EqualTo(1));
+            Assert.That(rifle.LoadedAmmo, Is.EqualTo(11));
+            Assert.That(inventory.Weight, Is.EqualTo(2f));
+        }
+
+        [TestCase("ammo", 0, 1)]
+        [TestCase(WeaponDefinition.BatonId, 1, 1)]
+        [TestCase(WeaponDefinition.RifleId, 2, 1)]
+        [TestCase(WeaponDefinition.RifleId, 0, 3)]
+        public void InventoryRejectsInvalidOrNonRifleModsWithoutChangingContents(string itemId, int level, int owned)
+        {
+            var inventory = new GridInventory(4, 2, 20f, catalog);
+            Assert.That(inventory.TryAdd("coin", 1, out _), Is.True);
+            var coin = inventory.Items[0];
+            var item = new ItemStack
+            {
+                ItemId = itemId, InstanceId = "invalid", X = 1,
+                Mods = new WeaponMods { Grip = level, OwnedGrip = owned }
+            };
+            Assert.That(inventory.TryInsert(item, out _), Is.False);
+            Assert.Throws<InvalidDataException>(() => inventory.Restore(new List<ItemStack> { item }));
+            Assert.That(inventory.Items.Count, Is.EqualTo(1));
+            Assert.That(inventory.Items[0], Is.SameAs(coin));
         }
 
         [Test]

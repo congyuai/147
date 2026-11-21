@@ -70,7 +70,7 @@ namespace Dustline
             model.transform.localRotation = Quaternion.Euler(0, -16, 0);
             model.SetMotion(0, false, false, 0.016f);
             if (loadout == null) return;
-            weapon = WeaponVisual.Create(model.WeaponMount, false, loadout.Melee);
+            weapon = WeaponVisual.Create(model.WeaponMount, false, loadout.Form);
             model.PoseArms(weapon.RightGrip, weapon.LeftGrip);
         }
 

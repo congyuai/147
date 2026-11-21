@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace Dustline
 {
-    public enum SurfaceKind { Concrete, Asphalt, Gravel, Metal, Wood }
+    public enum SurfaceKind { Concrete, Asphalt, Gravel, Metal, Wood, Grass, Dirt }
 
     public struct StepCadence
     {
@@ -22,7 +22,10 @@ namespace Dustline
     public sealed class FootstepSurface : MonoBehaviour
     {
         public SurfaceKind Kind = SurfaceKind.Concrete;
-        static readonly RaycastHit[] hits = new RaycastHit[12];
+        internal bool UsesPortGround;
+        internal bool IsNavigationFloor => UsesPortGround || IsBridgeDeck;
+        internal bool IsBridgeDeck;
+        static readonly RaycastHit[] hits = new RaycastHit[16];
 
         public static SurfaceKind Underfoot(Vector3 feet)
         {
@@ -30,16 +33,19 @@ namespace Dustline
                 Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
             float distance = float.PositiveInfinity;
             Collider floor = null;
+            Vector3 contact = feet;
             for (int i = 0; i < count; i++)
             {
                 var hit = hits[i];
                 if (hit.distance >= distance || hit.normal.y < 0.5f || hit.collider is CharacterController) continue;
                 distance = hit.distance;
                 floor = hit.collider;
+                contact = hit.point;
             }
             if (floor == null) return SurfaceKind.Concrete;
             var surface = floor.GetComponentInParent<FootstepSurface>();
-            return surface != null ? surface.Kind : SurfaceKind.Concrete;
+            return surface == null ? SurfaceKind.Concrete : surface.UsesPortGround
+                ? PortTerrain.Surface(contact.x, contact.z) : surface.Kind;
         }
     }
 }

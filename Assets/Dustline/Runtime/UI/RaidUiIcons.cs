@@ -3,7 +3,8 @@ using UnityEngine;
 
 namespace Dustline
 {
-    enum RaidIcon { Dial, Knob, Aim, Fire, Reload, Crouch, Search, Heal, Bag, Gear, Reticle, Hit, Strike, Prone, Jump, Lean }
+    enum RaidIcon { Dial, Knob, Aim, Fire, Reload, Crouch, Search, Heal, Bag, Gear, Reticle, Hit, Strike, Prone, Jump, LeanLeft, LeanRight,
+        InteractDoor, Map, Heading, Danger, Exit, Switch, ControlRing, DamageArc }
 
     sealed class RaidUiIcons : IDisposable
     {
@@ -58,19 +59,44 @@ namespace Dustline
                 case RaidIcon.Aim:
                     return Cover(Mathf.Min(Ring(p, 0, 0, 16.5f, 1.9f), Cross(p, 9, 24, 1.9f)));
                 case RaidIcon.Fire:
-                    return Cover(Mathf.Min(Cross(p, 10, 25, 2.15f), Mathf.Min(Ring(p, 0, 0, 12, 1.7f), p.magnitude - 4)));
+                    return Cover(Mathf.Min(Box(p, -1, 4, 16, 5), Mathf.Min(Box(p, 16, 5, 8, 2.4f),
+                        Segment(p, -8, 2, -14, -15, 4.5f))));
                 case RaidIcon.Strike:
                     return Cover(Mathf.Min(Segment(p, -16, -17, 15, 15, 4.0f), Mathf.Min(
                         Segment(p, 7, 20, 15, 20, 21, 14), Segment(p, 16, 0, 23, 7, 24, 13))));
                 case RaidIcon.Prone:
-                    return Cover(Mathf.Min(Segment(p, -19, 6, 18, 6, 5), Mathf.Min(
-                        Segment(p, -13, -3, 13, -3, 4), Circle(p, -16, 6, 3.8f))));
+                    return Cover(Mathf.Min(Circle(p, 16, 7, 4.6f), Mathf.Min(Segment(p, -19, -6, 8, 1, 4.5f),
+                        Mathf.Min(Segment(p, 6, 2, 21, -6, 2.7f), Segment(p, -22, -14, 24, -14, 1.3f)))));
                 case RaidIcon.Jump:
-                    return Cover(Mathf.Min(Segment(p, -19, 4, -5, 16, 4), Mathf.Min(
-                        Segment(p, -5, 16, 10, 4, 4), Segment(p, 10, 4, 20, 14, 4))));
-                case RaidIcon.Lean:
-                    return Cover(Mathf.Min(Segment(p, -12, 18, 12, 18, 4), Mathf.Min(
-                        Segment(p, 12, 18, 8, -15, 4), Segment(p, 8, -15, 18, -7, 4))));
+                    return Cover(Mathf.Min(Segment(p, 0, -11, 0, 20, 3.3f), Mathf.Min(
+                        Segment(p, -13, 7, 0, 21, 13, 7), Segment(p, -20, -19, 20, -19, 2))));
+                case RaidIcon.LeanLeft:
+                case RaidIcon.LeanRight:
+                    if (icon == RaidIcon.LeanRight) p.x = -p.x;
+                    return Cover(Mathf.Min(Circle(p, 7, 15, 4.2f), Mathf.Min(Segment(p, 17, -19, 8, 7, 3.4f),
+                        Segment(p, -6, 7, -19, -2, -6, -11))));
+                case RaidIcon.InteractDoor:
+                    return Cover(Mathf.Min(Outline(p, 0, 0, 16, 22, 2), Mathf.Min(Ring(p, 7, 0, 2.7f, 1.4f), Segment(p, -25, -23, 24, -23, 1.7f))));
+                case RaidIcon.Map:
+                    return Cover(Mathf.Min(Outline(p, 0, 0, 22, 17, 1.9f), Mathf.Min(
+                        Segment(p, -7, -15, -7, 15, 1.8f), Segment(p, 8, -15, 8, 15, 1.8f))));
+                case RaidIcon.Heading:
+                    float headingWidth = Mathf.Max(0f, (20f - p.y) * 0.41f);
+                    return Cover(Mathf.Max(Mathf.Max(Mathf.Abs(p.x) - headingWidth, p.y - 20f), -11f - p.y + Mathf.Max(0f, 7f - Mathf.Abs(p.x))));
+                case RaidIcon.Danger:
+                    return Cover(Mathf.Min(Mathf.Abs(Mathf.Abs(p.x) + Mathf.Abs(p.y) - 22f) - 2.7f,
+                        Mathf.Min(Segment(p, 0, -1, 0, 10, 2.3f), Circle(p, 0, -8, 2.4f))));
+                case RaidIcon.Exit:
+                    return Cover(Mathf.Min(Outline(p, 1, 0, 22, 20, 2.2f), Mathf.Min(Segment(p, -10, 0, 13, 0, 2.8f),
+                        Segment(p, 3, 10, 13, 0, 3, -10))));
+                case RaidIcon.Switch:
+                    return Cover(Mathf.Min(Mathf.Min(Segment(p, -20, 8, 19, 8, 2.8f), Segment(p, 10, 17, 19, 8, 10, -1)),
+                        Mathf.Min(Segment(p, -19, -11, 20, -11, 2.8f), Segment(p, -10, -2, -19, -11, -10, -20))));
+                case RaidIcon.ControlRing:
+                    return Cover(Ring(p, 0, 0, 29, 1.45f));
+                case RaidIcon.DamageArc:
+                    float arcY = 16f - p.x * p.x * 0.016f;
+                    return Cover(Mathf.Max(Mathf.Abs(p.y - arcY) - 3.25f, Mathf.Abs(p.x) - 26f));
                 case RaidIcon.Reload:
                     float arc = Ring(p, 0, 0, 19, 2.1f);
                     if (p.x > 5 && p.y > 3) arc = 50;

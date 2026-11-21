@@ -13,6 +13,7 @@ namespace Dustline
         public bool Rotated;
         public EquipmentSlot Slot;
         public int LoadedAmmo = -1;
+        public WeaponMods Mods;
 
         public ItemStack Clone()
         {

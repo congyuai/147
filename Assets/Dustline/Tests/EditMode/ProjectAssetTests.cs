@@ -30,7 +30,87 @@ namespace Dustline.Tests
                     }
                     else Assert.That(catalog.Find(item.Weapon.AmmoId).Kind, Is.EqualTo(ItemKind.Ammo));
                 }
-            foreach (var entry in loot.Entries) Assert.That(catalog.Find(entry.ItemId), Is.Not.Null);
+            Assert.That(catalog.Find(WeaponDefinition.RifleId).Weapon.Form, Is.EqualTo(WeaponForm.Rifle));
+            Assert.That(catalog.Find(WeaponDefinition.BatonId).Weapon.Form, Is.EqualTo(WeaponForm.Baton));
+            Assert.That(loot.Entries.Exists(entry => entry != null && entry.ItemId == WeaponDefinition.BatonId), Is.True);
+            Assert.That(RollProbability(loot, catalog, "relic"), Is.GreaterThan(0d));
+        }
+
+        [Test]
+        public void HighValueLootHasGreaterRareDropProbabilityAndValidEntries()
+        {
+            var catalog = Resources.Load<ItemCatalog>("Dustline/Items");
+            var ordinary = Resources.Load<LootTable>("Dustline/Loot");
+            var highValue = Resources.Load<LootTable>("Dustline/HighValueLoot");
+            Assert.That(catalog, Is.Not.Null);
+            Assert.That(highValue, Is.Not.SameAs(ordinary));
+            double ordinaryRare = RollProbability(ordinary, catalog, "relic");
+            double highValueRare = RollProbability(highValue, catalog, "relic");
+            Assert.That(highValueRare, Is.GreaterThan(ordinaryRare * 2d));
+            double ordinaryChest = 1d - System.Math.Pow(1d - ordinaryRare, ordinary.Rolls);
+            double highValueChest = 1d - System.Math.Pow(1d - highValueRare, highValue.Rolls);
+            Assert.That(highValueChest, Is.GreaterThan(ordinaryChest));
+        }
+
+        static double RollProbability(LootTable table, ItemCatalog catalog, string id)
+        {
+            Assert.That(table, Is.Not.Null, "Run Dustline > Prepare Project first.");
+            Assert.That(table.Rolls, Is.Positive);
+            Assert.That(table.Entries, Is.Not.Empty);
+            int total = 0, matching = 0;
+            foreach (var entry in table.Entries)
+            {
+                Assert.That(entry, Is.Not.Null);
+                Assert.That(catalog.Find(entry.ItemId), Is.Not.Null, entry.ItemId);
+                Assert.That(entry.Weight, Is.Positive, entry.ItemId);
+                Assert.That(entry.Min, Is.Positive, entry.ItemId);
+                Assert.That(entry.Max, Is.GreaterThanOrEqualTo(entry.Min), entry.ItemId);
+                total += entry.Weight;
+                if (entry.ItemId == id) matching += entry.Weight;
+            }
+            return (double)matching / total;
+        }
+
+        [Test]
+        public void BoundBladesAreIndependentOfTradeableItemsAndDefaultToTangdao()
+        {
+            var catalog = Resources.Load<ItemCatalog>("Dustline/Items");
+            var blades = Resources.Load<BladeCatalog>("Dustline/Blades");
+            Assert.That(catalog, Is.Not.Null);
+            Assert.That(blades, Is.Not.Null, "Run Dustline > Prepare Project first.");
+            Assert.That(blades.Blades.Length, Is.EqualTo(2));
+            var tangdao = blades.Resolve(BladeCatalog.DefaultId);
+            var shortBlade = blades.Resolve(BladeCatalog.ShortBladeId);
+            Assert.That(tangdao, Is.Not.Null);
+            Assert.That(shortBlade, Is.Not.Null);
+            Assert.That(tangdao.Form, Is.EqualTo(WeaponForm.Tangdao));
+            Assert.That(shortBlade.Form, Is.EqualTo(WeaponForm.ShortBlade));
+            Assert.That(blades.Resolve(null), Is.SameAs(tangdao));
+            Assert.That(blades.Resolve(""), Is.SameAs(tangdao));
+            Assert.That(blades.Resolve("unknown-blade"), Is.SameAs(tangdao));
+            Assert.That(tangdao.Range, Is.GreaterThan(shortBlade.Range));
+            Assert.That(shortBlade.FireInterval, Is.LessThan(tangdao.FireInterval));
+            foreach (var choice in blades.Blades)
+            {
+                Assert.That(choice.DisplayName, Is.Not.Empty);
+                Assert.That(choice.Weapon.Melee, Is.True);
+                Assert.That(choice.Weapon.MagazineSize, Is.Zero);
+                Assert.That(string.IsNullOrEmpty(choice.Weapon.AmmoId), Is.True);
+                Assert.That(catalog.Find(choice.Id), Is.Null);
+                var emptyLoadout = new GridInventory(1, 1, 0f, catalog);
+                Assert.That(emptyLoadout.TryAdd(choice.Id, 1, out _), Is.False);
+                Assert.That(emptyLoadout.Equipped(EquipmentSlot.Weapon), Is.Null);
+            }
+        }
+
+        [Test]
+        public void BuildVersionAdvancesWithoutChangingSaveIdentity()
+        {
+            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.3.0"));
+            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(4));
+            Assert.That(PlayerSettings.companyName, Is.EqualTo("Dustline"));
+            Assert.That(PlayerSettings.productName, Is.EqualTo("Dustline Extraction"));
+            Assert.That(PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android), Is.EqualTo("com.dustline.extraction"));
         }
 
         [TestCase("rifle", "AR-20突击步枪")]

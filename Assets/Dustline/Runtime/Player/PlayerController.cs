@@ -16,16 +16,20 @@ namespace Dustline
         public bool Sprinting { get; private set; }
         public float MoveSpeed { get; private set; }
         public float Lean { get; private set; }
+        public float AimProgress => WeaponView != null ? WeaponView.VisibleAim : 0f;
         public string InteractionHint { get; private set; }
         public LootContainer FocusedLoot { get; private set; }
+        public bool LookingAtDoor => focusedDoor != null;
         public LootContainer SearchingLoot { get; private set; }
         public float SearchProgress => SearchingLoot == null ? 0 : Mathf.Clamp01(searchElapsed / SearchingLoot.SearchSeconds);
         GameSession session;
         CharacterController motor;
         StepCadence steps;
         readonly Collider[] stanceHits = new Collider[16];
-        readonly RaycastHit[] leanHits = new RaycastHit[8];
-        float pitch, verticalSpeed, noiseAt, focusAt, searchElapsed;
+        float pitch, verticalSpeed, noiseAt, focusAt, searchElapsed, staminaResumeAt;
+        Vector2 recoilImpulse, recoilView;
+        int recoilPattern;
+        HarborDoor focusedDoor;
         bool sprintLocked;
         float currentHeight = 1.8f;
 
@@ -45,6 +49,7 @@ namespace Dustline
                 var armor = session.Loadout.Equipped(EquipmentSlot.Armor);
                 return armor == null ? 0 : session.Catalog.Find(armor.ItemId).DamageReduction;
             };
+            Health.Damaged += session.UI.ShowDamage;
             Health.Died += _ => session.EndRaid(false, "撤离失败：你已阵亡");
             Operator = OperatorVisual.Create(transform, session.SelectedOperator, 0, gameObject.layer);
             Operator.ShadowsOnly();
@@ -54,9 +59,9 @@ namespace Dustline
             cameraObject.transform.SetParent(transform, false);
             cameraObject.transform.localPosition = Vector3.up * 1.6f;
             View = cameraObject.GetComponent<Camera>();
-            View.nearClipPlane = 0.07f;
-            View.farClipPlane = 300;
-            View.allowDynamicResolution = true;
+            View.nearClipPlane = 0.09f;
+            View.farClipPlane = 1450f;
+            View.clearFlags = CameraClearFlags.Skybox;
             View.fieldOfView = 75;
             WeaponView = WeaponVisual.Create(cameraObject.transform, true);
             Weapon = gameObject.AddComponent<WeaponController>();
@@ -65,12 +70,9 @@ namespace Dustline
 
         public void SetWeaponView(WeaponDefinition definition)
         {
-            bool melee = definition != null && definition.Melee;
-            if (WeaponView == null || WeaponView.IsMelee != melee)
-            {
-                if (WeaponView != null) Destroy(WeaponView.gameObject);
-                WeaponView = WeaponVisual.Create(View.transform, true, melee);
-            }
+            WeaponForm form = definition == null ? WeaponForm.Rifle : definition.Form;
+            if (WeaponView == null) WeaponView = WeaponVisual.Create(View.transform, true, form);
+            else WeaponView.SetForm(form);
             WeaponView.SetEquipped(definition != null);
         }
 
@@ -100,17 +102,10 @@ namespace Dustline
             }
             bool sprint = input.Gameplay && input.Sprint && !sprintLocked && input.Move.y > 0.1f
                 && Stamina > 0.01f && !lowProfile;
-            Sprinting = sprint;
             float speed = Prone ? 1.25f : lowProfile ? 2f : sprint ? 6.5f : 3.8f;
             speed *= Mathf.Lerp(1, 0.65f, session.Loadout.Weight / session.Loadout.MaxWeight);
             Vector2 move = input.Gameplay ? input.Move : Vector2.zero;
             Vector3 movement = transform.right * move.x + transform.forward * move.y;
-            MoveSpeed = movement.magnitude * speed;
-            Stamina = Mathf.Clamp(Stamina + (sprint && movement.sqrMagnitude > 0.1f ? -18 : 12) * Time.deltaTime, 0, 100);
-            if (Stamina <= 0.01f) sprintLocked = true;
-            else if (Stamina >= 25f) sprintLocked = false;
-            input.SprintAllowed = !sprintLocked && !lowProfile;
-
             UpdateStanceHeight(Time.deltaTime);
             if (motor.isGrounded && verticalSpeed < 0) verticalSpeed = -2;
             verticalSpeed -= 20 * Time.deltaTime;
@@ -118,32 +113,52 @@ namespace Dustline
             CollisionFlags collision = motor.Move((movement * speed + Vector3.up * verticalSpeed) * Time.deltaTime);
             if ((collision & CollisionFlags.Above) != 0 && verticalSpeed > 0) verticalSpeed = 0;
             Vector3 displacement = transform.position - before;
-            if (steps.Advance(new Vector2(displacement.x, displacement.z).magnitude, motor.isGrounded,
-                Prone ? 0.76f : lowProfile ? 0.91f : sprint ? 1.67f : 1.42f))
+            float travel = new Vector2(displacement.x, displacement.z).magnitude;
+            MoveSpeed = Time.deltaTime > 0f ? travel / Time.deltaTime : 0f;
+            bool running = sprint && MoveSpeed > 1.5f;
+            Sprinting = running;
+            if (running)
+            {
+                Stamina = Mathf.Max(0f, Stamina - 9.5f * Time.deltaTime);
+                staminaResumeAt = Time.time + 0.35f;
+            }
+            else if (Time.time >= staminaResumeAt) Stamina = Mathf.Min(100f, Stamina + 15f * Time.deltaTime);
+            if (Stamina <= 0.01f) sprintLocked = true;
+            else if (Stamina >= 25f) sprintLocked = false;
+            input.SprintAllowed = !sprintLocked && !lowProfile;
+            if (steps.Advance(travel, motor.isGrounded,
+                Prone ? 0.76f : lowProfile ? 0.91f : running ? 1.67f : 1.42f))
                 session.EnvironmentAudio.PlayFootstep(transform.position,
-                    Prone ? 0.22f : lowProfile ? 0.34f : sprint ? 0.97f : 0.72f, true);
+                    Prone ? 0.30f : lowProfile ? 0.46f : running ? 1f : 0.83f, true);
 
             float leanTarget = input.Gameplay && !Prone
                 ? (input.LeanRight ? 1 : input.LeanLeft ? -1 : 0) : 0;
-            if (Mathf.Abs(leanTarget) > 0.5f && LeanBlocked(leanTarget)) leanTarget = 0;
-            Lean = Mathf.Lerp(Lean, leanTarget, 1 - Mathf.Exp(-12 * Time.deltaTime));
+            float frame = Time.deltaTime;
+            float cameraEase = 1f - Mathf.Exp(-12f * frame);
             float cameraHeight = Prone ? 0.56f : Crouched ? 0.98f : Mathf.Min(currentHeight, 1.6f);
-            Vector3 cameraTarget = new Vector3(Lean * 0.22f, cameraHeight, 0);
-            View.transform.localPosition = Vector3.Lerp(View.transform.localPosition, cameraTarget, 1 - Mathf.Exp(-12 * Time.deltaTime));
-            View.transform.localRotation = Quaternion.Euler(pitch, 0, -Lean * 6.5f);
-            View.fieldOfView = Mathf.Lerp(View.fieldOfView, input.Gameplay && input.Aim ? 48 : 75, 1 - Mathf.Exp(-12 * Time.deltaTime));
+            float eyeY = Mathf.Min(currentHeight - 0.14f, Mathf.Lerp(View.transform.localPosition.y, cameraHeight, cameraEase));
+            float offset = FitLean(eyeY, Mathf.Lerp(Lean, leanTarget, cameraEase) * 0.22f);
+            Lean = offset / 0.22f;
+            View.transform.localPosition = new Vector3(offset, eyeY, 0f);
+            recoilView = Vector2.Lerp(recoilView, recoilImpulse, 1f - Mathf.Exp(-34f * frame));
+            recoilImpulse *= Mathf.Exp(-9f * frame);
+            View.transform.localRotation = Quaternion.Euler(Mathf.Clamp(pitch - recoilView.x, -87f, 87f), recoilView.y, -Lean * 6.5f);
+            UpdateLoot(input, move.sqrMagnitude > 0.04f);
+            bool aiming = input.Gameplay && input.Aim && Weapon.Magazine != null;
+            bool wasObstructed = WeaponView.RifleObstructed;
+            WeaponView.SetPose(aiming, MoveSpeed, running, lowProfile, frame);
+            if (!wasObstructed && WeaponView.RifleObstructed) session.Effects?.CancelMuzzle(WeaponView.Muzzle);
+            View.fieldOfView = Mathf.Lerp(75f, Weapon.AimFov, Mathf.SmoothStep(0f, 1f, AimProgress));
 
-            Operator.SetMotion(MoveSpeed, sprint, lowProfile, Time.deltaTime);
-            Operator.SetProne(Prone, Time.deltaTime);
-            bool moving = movement.sqrMagnitude > 0.1f;
-            WeaponView.SetPose(input.Gameplay && input.Aim, MoveSpeed, sprint, lowProfile, Time.deltaTime);
+            Operator.SetMotion(MoveSpeed, running, lowProfile, frame);
+            Operator.SetProne(Prone, frame);
             Operator.PoseArms(WeaponView.RightGrip, WeaponView.LeftGrip);
+            bool moving = MoveSpeed > 0.35f;
             if (moving && Time.time > noiseAt)
             {
-                CombatNoise.Emit(transform.position, Prone ? 3 : lowProfile ? 4 : sprint ? 22 : 10, Health);
-                noiseAt = Time.time + (sprint ? 0.32f : Prone ? 0.72f : 0.55f);
+                CombatNoise.Emit(transform.position, Prone ? 3 : lowProfile ? 4 : running ? 22 : 10, Health);
+                noiseAt = Time.time + (running ? 0.32f : Prone ? 0.72f : 0.55f);
             }
-            UpdateLoot(input, move.sqrMagnitude > 0.04f);
         }
 
         void UpdateStanceHeight(float delta)
@@ -172,24 +187,26 @@ namespace Dustline
             return true;
         }
 
-        bool LeanBlocked(float side)
+        float FitLean(float eyeHeight, float offset)
         {
-            float eyeHeight = Prone ? 0.56f : Crouched ? 0.98f : Mathf.Min(currentHeight, 1.6f);
-            Vector3 origin = transform.position + Vector3.up * eyeHeight;
-            int count = Physics.SphereCastNonAlloc(origin, 0.17f, transform.right * side, leanHits, 0.27f,
-                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
-            for (int i = 0; i < count; i++)
-            {
-                Collider collider = leanHits[i].collider;
-                if (collider != null && collider != motor && !collider.transform.IsChildOf(transform)) return true;
-            }
-            return false;
+            float distance = Mathf.Abs(offset);
+            if (distance < 0.001f) return 0f;
+            Vector3 origin = transform.TransformPoint(new Vector3(0f, eyeHeight, 0f));
+            const float radius = 0.17f;
+            const int mask = Physics.DefaultRaycastLayers;
+            const QueryTriggerInteraction triggers = QueryTriggerInteraction.Ignore;
+            if (Physics.CheckSphere(origin, radius, mask, triggers)) return 0f;
+            float sign = Mathf.Sign(offset);
+            if (Physics.SphereCast(origin, radius, transform.right * sign, out var hit, distance, mask, triggers))
+                return sign * Mathf.Max(0f, hit.distance - 0.009f);
+            return offset;
         }
 
         void UpdateLoot(PlayerInputReader input, bool moving)
         {
             if (!input.Gameplay)
             {
+                focusedDoor = null;
                 FocusedLoot = SearchingLoot = null;
                 InteractionHint = string.Empty;
                 return;
@@ -197,13 +214,22 @@ namespace Dustline
             if (input.InteractPressed || Time.time >= focusAt)
             {
                 focusAt = Time.time + 0.033f;
-                FocusedLoot = Physics.Raycast(View.transform.position, View.transform.forward, out var hit, 3.2f,
-                    Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide)
-                    ? hit.collider.GetComponentInParent<LootContainer>() : null;
-                string verb = FocusedLoot == null ? "" : !FocusedLoot.Searched ? "搜索  " : FocusedLoot.Inventory.Items.Count == 0 ? "已搜空  " : "查看  ";
-                InteractionHint = FocusedLoot == null ? string.Empty : (input.TouchMode ? "" : "[F] ") + verb + FocusedLoot.DisplayName;
+                bool found = Physics.Raycast(View.transform.position, View.transform.forward, out var hit, 3.2f,
+                    Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide);
+                focusedDoor = found ? hit.collider.GetComponentInParent<HarborDoor>() : null;
+                FocusedLoot = found && focusedDoor == null ? hit.collider.GetComponentInParent<LootContainer>() : null;
+                string key = input.TouchMode ? "" : "[F] ";
+                if (focusedDoor != null) InteractionHint = key + (focusedDoor.IsOpen ? "关闭门" : "打开门");
+                else if (FocusedLoot == null) InteractionHint = string.Empty;
+                else InteractionHint = key + (FocusedLoot.Searched ? (FocusedLoot.Inventory.Items.Count == 0 ? "已搜空  " : "查看  ") : "搜索  ") + FocusedLoot.DisplayName;
             }
-            if (moving || SearchingLoot != FocusedLoot) SearchingLoot = null;
+            if (moving || !motor.isGrounded || SearchingLoot != FocusedLoot) SearchingLoot = null;
+            if (input.InteractPressed && focusedDoor != null)
+            {
+                if (!focusedDoor.TryToggle()) session.UI.Notify("门的通道被挡住了。");
+                focusAt = 0f;
+                return;
+            }
             if (input.InteractPressed && FocusedLoot != null)
             {
                 if (FocusedLoot.Searched || FocusedLoot.SearchSeconds <= 0)
@@ -211,7 +237,7 @@ namespace Dustline
                     OpenLoot(FocusedLoot);
                     return;
                 }
-                if (!moving && SearchingLoot == null)
+                if (!moving && motor.isGrounded && SearchingLoot == null)
                 {
                     SearchingLoot = FocusedLoot;
                     searchElapsed = 0;
@@ -268,6 +294,11 @@ namespace Dustline
             }
         }
 
-        public void Recoil(float amount) { pitch = Mathf.Clamp(pitch - amount, -85, 85); }
+        public void Recoil(float amount)
+        {
+            recoilPattern = (recoilPattern + 1) & 31;
+            recoilImpulse.x = Mathf.Min(9f, recoilImpulse.x + amount);
+            recoilImpulse.y = Mathf.Clamp(recoilImpulse.y + Mathf.Sin(recoilPattern * 1.73f) * amount * 0.17f, -2f, 2f);
+        }
     }
 }

@@ -2,6 +2,8 @@ using System;
 using System.Collections;
 using System.IO;
 using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
 
 namespace Dustline
 {
@@ -11,6 +13,19 @@ namespace Dustline
         public SessionPhase Phase { get; private set; } = SessionPhase.Menu;
         public ItemCatalog Catalog { get; private set; }
         public LootTable LootTable { get; private set; }
+        public LootTable HighValueLootTable { get; private set; }
+        public BladeCatalog Blades { get; private set; }
+        public string BoundBladeId => string.IsNullOrEmpty(Profile.BoundBladeId) ? BladeCatalog.DefaultId : Profile.BoundBladeId;
+        public WeaponDefinition BoundBlade => Blades.Resolve(BoundBladeId);
+        public string BoundBladeName
+        {
+            get
+            {
+                foreach (var entry in Blades.Blades)
+                    if (entry != null && entry.Weapon == BoundBlade) return entry.DisplayName;
+                return "唐刀";
+            }
+        }
         public GridInventory Stash { get; private set; }
         public GridInventory Loadout { get; private set; }
         public ProfileData Profile { get; private set; }
@@ -33,9 +48,15 @@ namespace Dustline
         const string SprintPreference = "Dustline.TouchSprintThreshold.v1";
         const string QualityPreference = "Dustline.QualityLevel.v1";
         const string ResolutionPreference = "Dustline.ResolutionScale.v1";
+        const string LookPreference = "Dustline.ViewSensitivity.v1";
+        const string GyroPreference = "Dustline.GyroSensitivity.v1";
+        const string GyroUsagePreference = "Dustline.GyroUsage.v1";
+        const string AimPreference = "Dustline.AimGesture.v1";
         ProfileStore store;
         Camera menuCamera;
-        bool focused = true, paused, sprintPreferenceDirty;
+        RenderPipelineAsset originalPipeline;
+        readonly UniversalRenderPipelineAsset[] graphics = new UniversalRenderPipelineAsset[3];
+        bool focused = true, paused, preferencesDirty;
         float refreshCheckAt;
 
         void Awake()
@@ -45,10 +66,13 @@ namespace Dustline
             SelectedOperator = PlayerPrefs.GetInt(OperatorPreference, 0) == 1 ? OperatorStyle.Female : OperatorStyle.Male;
             Input = gameObject.AddComponent<PlayerInputReader>();
             Input.SprintThreshold = PlayerInputReader.ClampSprintThreshold(PlayerPrefs.GetInt(SprintPreference, PlayerInputReader.DefaultSprintThreshold));
-            int qualityCount = Mathf.Max(1, Mathf.Min(3, QualitySettings.names.Length));
-            QualityLevel = Mathf.Clamp(PlayerPrefs.GetInt(QualityPreference, QualitySettings.GetQualityLevel()), 0, qualityCount - 1);
-            QualitySettings.SetQualityLevel(QualityLevel, true);
-            ResolutionScale = Mathf.Clamp(PlayerPrefs.GetFloat(ResolutionPreference, 1f), 0.65f, 1f);
+            Input.LookSensitivity = Sensitivity(PlayerPrefs.GetFloat(LookPreference, 1f));
+            Input.GyroSensitivity = Sensitivity(PlayerPrefs.GetFloat(GyroPreference, 1f));
+            Input.GyroUsage = (GyroMode)Mathf.Clamp(PlayerPrefs.GetInt(GyroUsagePreference, 0), 0, 2);
+            Input.SetAimMode((AimMode)Mathf.Clamp(PlayerPrefs.GetInt(AimPreference, 0), 0, 2));
+            QualityLevel = Mathf.Clamp(PlayerPrefs.GetInt(QualityPreference, 1), 0, 2);
+            ResolutionScale = NormalizeScale(PlayerPrefs.GetFloat(ResolutionPreference, 1f));
+            originalPipeline = QualitySettings.renderPipeline;
             var cameraObject = new GameObject("Menu camera", typeof(Camera));
             cameraObject.transform.SetParent(transform);
             menuCamera = cameraObject.GetComponent<Camera>();
@@ -61,7 +85,10 @@ namespace Dustline
             {
                 Catalog = Resources.Load<ItemCatalog>("Dustline/Items");
                 LootTable = Resources.Load<LootTable>("Dustline/Loot");
-                if (Catalog == null || LootTable == null) throw new InvalidDataException("缺少游戏资源，请在编辑器中执行 Dustline > Prepare Project。");
+                HighValueLootTable = Resources.Load<LootTable>("Dustline/HighValueLoot");
+                Blades = Resources.Load<BladeCatalog>("Dustline/Blades");
+                if (Catalog == null || LootTable == null || HighValueLootTable == null || Blades == null || Blades.Resolve(null) == null)
+                    throw new InvalidDataException("缺少游戏资源，请在编辑器中执行 Dustline > Prepare Project。");
                 Catalog.RebuildIndex();
                 Stash = new GridInventory(12, 10, 300, Catalog);
                 Loadout = new GridInventory(6, 6, 30, Catalog);
@@ -115,6 +142,7 @@ namespace Dustline
             if (focused && !paused)
             {
                 if (Input.EscapePressed || Input.SettingsPressed) UI.BackOrSettings();
+                else if (Phase == SessionPhase.Raid && Input.MapPressed) UI.ToggleMap();
                 else if (Phase == SessionPhase.Raid && Input.InventoryPressed) UI.ToggleInventory();
             }
             Input.Gameplay = AcceptsGameplay;
@@ -134,26 +162,56 @@ namespace Dustline
 
         internal void SelectQuality(int value)
         {
-            QualityLevel = Mathf.Clamp(value, 0, Mathf.Max(0, Mathf.Min(2, QualitySettings.names.Length - 1)));
-            QualitySettings.SetQualityLevel(QualityLevel, true);
+            QualityLevel = Mathf.Clamp(value, 0, 2);
             ApplyDisplayPreferences();
             PlayerPrefs.SetInt(QualityPreference, QualityLevel);
-            sprintPreferenceDirty = true;
+            preferencesDirty = true;
         }
 
         internal void SelectResolution(float value)
         {
-            ResolutionScale = Mathf.Clamp(value, 0.65f, 1f);
+            ResolutionScale = NormalizeScale(value);
             ApplyDisplayPreferences();
             PlayerPrefs.SetFloat(ResolutionPreference, ResolutionScale);
-            sprintPreferenceDirty = true;
+            preferencesDirty = true;
         }
+
+        static float NormalizeScale(float value) => value < 0.725f ? 0.65f : value < 0.9f ? 0.80f : 1f;
+        static float Sensitivity(float value) => float.IsNaN(value) ? 1f : Mathf.Clamp(value, 0.25f, 3f);
 
         void ApplyDisplayPreferences()
         {
-            UnityEngine.ScalableBufferManager.ResizeBuffers(ResolutionScale, ResolutionScale);
-            if (menuCamera != null) menuCamera.allowDynamicResolution = true;
-            if (Player != null && Player.View != null) Player.View.allowDynamicResolution = true;
+            if (graphics[QualityLevel] == null)
+            {
+                var baseline = GraphicsSettings.defaultRenderPipeline as UniversalRenderPipelineAsset;
+                var asset = QualityLevel == 1 ? baseline : Resources.Load<UniversalRenderPipelineAsset>(
+                    QualityLevel == 0 ? "Dustline/Rendering/Low" : "Dustline/Rendering/High");
+                if (asset == null) asset = baseline;
+                if (asset != null)
+                {
+                    graphics[QualityLevel] = Instantiate(asset);
+                    graphics[QualityLevel].hideFlags = HideFlags.DontSave;
+                }
+            }
+            var active = graphics[QualityLevel];
+            if (active != null)
+            {
+                active.renderScale = ResolutionScale;
+                if (QualitySettings.renderPipeline != active) QualitySettings.renderPipeline = active;
+            }
+        }
+
+        internal void SelectControlOptions(float look, float gyro, GyroMode usage, AimMode aim)
+        {
+            Input.LookSensitivity = Sensitivity(look);
+            Input.GyroSensitivity = Sensitivity(gyro);
+            Input.GyroUsage = (GyroMode)Mathf.Clamp((int)usage, 0, 2);
+            Input.SetAimMode((AimMode)Mathf.Clamp((int)aim, 0, 2));
+            PlayerPrefs.SetFloat(LookPreference, Input.LookSensitivity);
+            PlayerPrefs.SetFloat(GyroPreference, Input.GyroSensitivity);
+            PlayerPrefs.SetInt(GyroUsagePreference, (int)Input.GyroUsage);
+            PlayerPrefs.SetInt(AimPreference, (int)Input.AimBehavior);
+            preferencesDirty = true;
         }
 
         internal void SelectSprintThreshold(int value)
@@ -162,14 +220,14 @@ namespace Dustline
             if (Input.SprintThreshold == value) return;
             Input.SprintThreshold = value;
             PlayerPrefs.SetInt(SprintPreference, value);
-            sprintPreferenceDirty = true;
+            preferencesDirty = true;
         }
 
         internal void SaveControlPreferences()
         {
-            if (!sprintPreferenceDirty) return;
+            if (!preferencesDirty) return;
             PlayerPrefs.Save();
-            sprintPreferenceDirty = false;
+            preferencesDirty = false;
         }
 
         internal void SelectOperator(OperatorStyle style)
@@ -180,10 +238,47 @@ namespace Dustline
             PlayerPrefs.Save();
         }
 
+        internal bool SelectBlade(string id)
+        {
+            if (Phase != SessionPhase.Menu) return false;
+            foreach (var choice in Blades.Blades)
+            {
+                if (choice == null || choice.Id != id || choice.Weapon == null) continue;
+                if (id == BoundBladeId) return true;
+                var prior = Profile.BoundBladeId;
+                Profile.BoundBladeId = id;
+                try { PersistSafeState(); }
+                catch (Exception error) { Profile.BoundBladeId = prior; Fail(error); return false; }
+                return true;
+            }
+            return false;
+        }
+
+        internal bool SelectWeaponPart(GridInventory bag, string instanceId, WeaponModSlot slot, int level)
+        {
+            if (Phase != SessionPhase.Menu || (bag != Stash && bag != Loadout)) return false;
+            var item = bag.Find(instanceId);
+            if (item == null || !WeaponTuning.SupportsUpgrades(Catalog.Find(item.ItemId)?.Weapon)
+                || !WeaponTuning.TrySelect(item.Mods, slot, level, out var updated, out int cost)) return false;
+            if (Profile.Credits < cost) { UI.Notify("信用点不足。"); return false; }
+            var prior = item.Mods;
+            item.Mods = updated;
+            Profile.Credits -= cost;
+            try { PersistSafeState(); }
+            catch (Exception error)
+            {
+                item.Mods = prior;
+                Profile.Credits += cost;
+                Fail(error);
+                return false;
+            }
+            bag.Touch();
+            return true;
+        }
+
         public void StartRaid()
         {
             if (Phase != SessionPhase.Menu) return;
-            if (Loadout.Equipped(EquipmentSlot.Weapon) == null) { UI.Notify("请先在仓库装备武器，再开始突袭。"); return; }
             Phase = SessionPhase.Loading;
             UI.ShowLoading();
             StartCoroutine(BuildRaid());
@@ -200,6 +295,7 @@ namespace Dustline
                 worldObject.transform.SetParent(transform);
                 World = worldObject.AddComponent<WorldBuilder>();
                 World.Build(this);
+                worldObject.AddComponent<HarborAtmosphere>().Initialize(this, World.Sun);
                 Effects = worldObject.AddComponent<RaidCombatEffects>();
                 Effects.Initialize();
                 var actor = new GameObject("Player");
@@ -244,7 +340,7 @@ namespace Dustline
                 else Loadout = new GridInventory(6, 6, 30, Catalog);
                 Profile.RaidInProgress = false;
                 PersistSafeState();
-                Result = reason + "\n击败敌人：" + Kills + (extracted ? "\n带回的装备与物资已存入仓库，放不下的仍安全保留在整备背包中。\n奖励：" + (150 + Kills * 25) + " 信用点" : "\n所有随身装备与搜刮物资均已丢失。");
+                Result = reason + "\n击败敌人：" + Kills + (extracted ? "\n带回的装备与物资已存入仓库，放不下的仍安全保留在整备背包中。\n奖励：" + (150 + Kills * 25) + " 信用点" : "\n随身装备与搜刮物资已丢失，绑定近战武器已保留。");
                 UI.ShowResults();
             }
             catch (Exception error) { Fail(error); }
@@ -372,6 +468,12 @@ namespace Dustline
         void OnDestroy()
         {
             SaveControlPreferences();
+            foreach (var asset in graphics)
+                if (asset != null)
+                {
+                    if (QualitySettings.renderPipeline == asset) QualitySettings.renderPipeline = originalPipeline;
+                    Destroy(asset);
+                }
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
         }

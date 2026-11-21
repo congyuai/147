@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using UnityEngine;
 
@@ -17,11 +18,12 @@ namespace Dustline
         public bool RaidInProgress;
         public int Raids;
         public int Extractions;
+        public string BoundBladeId = "";
     }
 
     public sealed class ProfileStore
     {
-        private static readonly UTF8Encoding Encoding = new UTF8Encoding(false, true);
+        private static readonly UTF8Encoding Encoding = new UTF8Encoding(true, true);
 
         public ProfileStore(string path)
         {
@@ -32,13 +34,17 @@ namespace Dustline
         }
 
         public string Path { get; }
+        public string LegacyBackupPath => Path + ".v1.bak";
 
-        public ProfileData Load()
+        public ProfileData Load() => ReadProfile(out _, out _);
+
+        private ProfileData ReadProfile(out byte[] bytes, out bool requiresUpgrade)
         {
-            string json;
+            bytes = null;
+            requiresUpgrade = false;
             try
             {
-                json = File.ReadAllText(Path, Encoding);
+                bytes = File.ReadAllBytes(Path);
             }
             catch (FileNotFoundException)
             {
@@ -48,12 +54,20 @@ namespace Dustline
             {
                 return null;
             }
+
+            string json;
+            try
+            {
+                using (var reader = new StreamReader(new MemoryStream(bytes), Encoding))
+                    json = reader.ReadToEnd();
+            }
             catch (DecoderFallbackException exception)
             {
                 throw new InvalidDataException("Profile is not valid UTF-8.", exception);
             }
 
-            new ProfileJsonValidator(json).Validate();
+            var validator = new ProfileJsonValidator(json);
+            validator.Validate();
             ProfileData profile;
             try
             {
@@ -64,7 +78,10 @@ namespace Dustline
                 throw new InvalidDataException("Profile JSON cannot be deserialized.", exception);
             }
 
+            if (profile != null && profile.BoundBladeId == null)
+                profile.BoundBladeId = "";
             ValidateProfile(profile);
+            requiresUpgrade = validator.RequiresUpgrade;
             return profile;
         }
 
@@ -75,23 +92,17 @@ namespace Dustline
             new ProfileJsonValidator(json).Validate();
             Load();
 
-            string directory = System.IO.Path.GetDirectoryName(Path);
-            Directory.CreateDirectory(directory);
-            string temporary = System.IO.Path.Combine(directory,
-                "." + System.IO.Path.GetFileName(Path) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path));
+            string temporary = TemporaryPath(Path);
             try
             {
-                byte[] bytes = Encoding.GetBytes(json);
-                using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                {
-                    stream.Write(bytes, 0, bytes.Length);
-                    stream.Flush(true);
-                }
+                WriteNewFile(temporary, Encoding.GetBytes(json));
 
                 // Never fall back to deleting the only durable save before the rename.
-                if (File.Exists(Path))
+                if (ReadProfile(out byte[] original, out bool requiresUpgrade) != null)
                 {
-                    Load();
+                    if (requiresUpgrade)
+                        BackupLegacy(original);
                     File.Replace(temporary, Path, null);
                 }
                 else
@@ -106,17 +117,55 @@ namespace Dustline
             }
         }
 
+        private void BackupLegacy(byte[] original)
+        {
+            if (File.Exists(LegacyBackupPath))
+            {
+                if (!original.SequenceEqual(File.ReadAllBytes(LegacyBackupPath)))
+                    throw new IOException("The legacy backup already exists and does not match the profile being upgraded.");
+                return;
+            }
+
+            string temporary = TemporaryPath(LegacyBackupPath);
+            try
+            {
+                WriteNewFile(temporary, original);
+                File.Move(temporary, LegacyBackupPath);
+            }
+            finally
+            {
+                if (File.Exists(temporary))
+                    File.Delete(temporary);
+            }
+        }
+
+        private static string TemporaryPath(string path) => System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path),
+            "." + System.IO.Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+
+        private static void WriteNewFile(string path, byte[] bytes)
+        {
+            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(bytes, 0, bytes.Length);
+                stream.Flush(true);
+            }
+        }
+
         private static void ValidateProfile(ProfileData profile)
         {
             if (profile == null || profile.Version != 1 || profile.Credits < 0
                 || profile.Raids < 0 || profile.Extractions < 0 || profile.Extractions > profile.Raids
                 || profile.Stash == null || profile.Loadout == null)
                 throw new InvalidDataException("Invalid profile version, balances, counters or item lists.");
+            if (!IsValidBladeId(profile.BoundBladeId))
+                throw new InvalidDataException("Invalid bound blade ID.");
 
             var ids = new HashSet<string>(StringComparer.Ordinal);
             ValidateItems(profile.Stash, ids);
             ValidateItems(profile.Loadout, ids);
         }
+
+        private static bool IsValidBladeId(string id) => id == "" || !string.IsNullOrWhiteSpace(id);
 
         private static void ValidateItems(List<ItemStack> items, HashSet<string> ids)
         {
@@ -128,6 +177,8 @@ namespace Dustline
                     || item.Quantity < 1 || item.X < 0 || item.Y < 0 || item.LoadedAmmo < -1
                     || !Enum.IsDefined(typeof(EquipmentSlot), item.Slot))
                     throw new InvalidDataException("Invalid profile item or duplicate instance ID.");
+                if (!WeaponTuning.IsValidForItem(item.ItemId, item.Mods))
+                    throw new InvalidDataException("Invalid weapon upgrade levels.");
                 if (item.Slot != EquipmentSlot.None && (item.Quantity != 1 || !slots.Add(item.Slot)))
                     throw new InvalidDataException("Invalid or duplicate equipped item.");
             }
@@ -137,6 +188,9 @@ namespace Dustline
         {
             private readonly string json;
             private int position;
+            private bool hasItemWithoutMods;
+
+            public bool RequiresUpgrade { get; private set; }
 
             public ProfileJsonValidator(string json)
             {
@@ -170,6 +224,10 @@ namespace Dustline
                             case "RaidInProgress":
                                 ReadBoolean();
                                 break;
+                            case "BoundBladeId":
+                                if (!IsValidBladeId(ReadString()))
+                                    Fail("Invalid bound blade ID.");
+                                break;
                             case "Stash":
                             case "Loadout":
                                 ReadItems();
@@ -188,6 +246,7 @@ namespace Dustline
                 SkipWhitespace();
                 if (position != json.Length)
                     Fail("Unexpected data after the profile.");
+                RequiresUpgrade = !fields.Contains("BoundBladeId") || hasItemWithoutMods;
             }
 
             private void ReadItems()
@@ -200,6 +259,8 @@ namespace Dustline
                 {
                     Require('{');
                     var fields = new HashSet<string>(StringComparer.Ordinal);
+                    string itemId = null;
+                    WeaponMods mods = default;
                     if (!Take('}'))
                     {
                         do
@@ -211,9 +272,16 @@ namespace Dustline
                             switch (field)
                             {
                                 case "InstanceId":
-                                case "ItemId":
                                     if (string.IsNullOrWhiteSpace(ReadString()))
                                         Fail("Empty item ID.");
+                                    break;
+                                case "ItemId":
+                                    itemId = ReadString();
+                                    if (string.IsNullOrWhiteSpace(itemId))
+                                        Fail("Empty item ID.");
+                                    break;
+                                case "Mods":
+                                    mods = ReadMods();
                                     break;
                                 case "Quantity":
                                     if (ReadInteger() < 1)
@@ -248,8 +316,39 @@ namespace Dustline
                         || !fields.Contains("Quantity") || !fields.Contains("X") || !fields.Contains("Y")
                         || !fields.Contains("Rotated") || !fields.Contains("Slot") || !fields.Contains("LoadedAmmo"))
                         Fail("Required item fields are missing.");
+                    if (!WeaponTuning.IsValidForItem(itemId, mods))
+                        Fail("Invalid weapon upgrade levels.");
+                    hasItemWithoutMods |= !fields.Contains("Mods");
                 } while (Take(','));
                 Require(']');
+            }
+
+            private WeaponMods ReadMods()
+            {
+                Require('{');
+                var mods = new WeaponMods();
+                if (Take('}')) return mods;
+
+                var fields = new HashSet<string>(StringComparer.Ordinal);
+                do
+                {
+                    string field = ReadString();
+                    if (!fields.Add(field))
+                        Fail("Duplicate weapon mod field.");
+                    Require(':');
+                    switch (field)
+                    {
+                        case "Sight": mods.Sight = ReadInteger(); break;
+                        case "Grip": mods.Grip = ReadInteger(); break;
+                        case "Stock": mods.Stock = ReadInteger(); break;
+                        case "OwnedSight": mods.OwnedSight = ReadInteger(); break;
+                        case "OwnedGrip": mods.OwnedGrip = ReadInteger(); break;
+                        case "OwnedStock": mods.OwnedStock = ReadInteger(); break;
+                        default: SkipValue(0); break;
+                    }
+                } while (Take(','));
+                Require('}');
+                return mods;
             }
 
             private int ReadInteger()

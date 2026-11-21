@@ -12,13 +12,16 @@ namespace Dustline
         {
             Canvas, CanvasDark, Seam, Twill, TwillDark, Shell, ShellRim, Webbing,
             Ink, Rubber, Leather, Metal, Amber, Chalk, Team, TeamDark,
-            Skin, SkinShade, Hair, HairLine, Eye
+            Skin, SkinShade, Hair, HairLine, Eye, Stitch, CoatTrim, GlovePlate
         }
 
         static readonly Mesh[] shapes = new Mesh[2];
+        static readonly Mesh[] sleeves = new Mesh[2];
         static readonly int[] shapeUsers = new int[2];
+        static readonly int[] sleeveUsers = new int[2];
         static readonly Material[] materials = new Material[3];
         static readonly Texture2D[] palettes = new Texture2D[3];
+        static readonly Texture2D[] finishes = new Texture2D[3];
         static readonly int[] paletteUsers = new int[3];
 
         public static void Acquire(OperatorStyle style, int team, out Mesh mesh, out Material material)
@@ -40,13 +43,45 @@ namespace Dustline
                 Dispose(shapes[shape]);
                 shapes[shape] = null;
             }
-            if (--paletteUsers[team] == 0)
+            ReleasePalette(team);
+        }
+
+        public static void AcquireArms(OperatorStyle style, out Mesh mesh, out Material material)
+        {
+            int shape = (int)style;
+            if (materials[0] == null) CreatePalette(0);
+            if (sleeves[shape] == null)
             {
-                Dispose(materials[team]);
-                Dispose(palettes[team]);
-                materials[team] = null;
-                palettes[team] = null;
+                var b = new Sculpt(1500);
+                Arm(b, style, 1f, Bone.RightUpper, Bone.RightLower, Bone.RightHand);
+                Arm(b, style, -1f, Bone.LeftUpper, Bone.LeftLower, Bone.LeftHand);
+                sleeves[shape] = b.ToMesh(style, armsOnly: true);
             }
+            sleeveUsers[shape]++;
+            paletteUsers[0]++;
+            mesh = sleeves[shape];
+            material = materials[0];
+        }
+
+        public static void ReleaseArms(OperatorStyle style)
+        {
+            int shape = (int)style;
+            if (--sleeveUsers[shape] == 0)
+            {
+                Dispose(sleeves[shape]);
+                sleeves[shape] = null;
+            }
+            ReleasePalette(0);
+        }
+
+        static void ReleasePalette(int team)
+        {
+            if (--paletteUsers[team] != 0) return;
+            Dispose(materials[team]);
+            Dispose(palettes[team]);
+            Dispose(finishes[team]);
+            materials[team] = null;
+            palettes[team] = finishes[team] = null;
         }
 
         static void Dispose(Object asset)
@@ -65,11 +100,10 @@ namespace Dustline
 
             int signal = team == 1 ? 0xBD503F : team == 2 ? 0xA8B057 : 0x50A6B3;
             int backing = team == 1 ? 0x693A34 : team == 2 ? 0x565D39 : 0x315B67;
-            // Each UV addresses one solid swatch: all trim, silhouette, and facial relief are geometry.
             int[] colors = {
-                0x416166, 0x31464C, 0x678086, 0x57615B, 0x3D4947, 0x41525C, 0x6A7779, 0x3F4240,
-                0x253035, 0x22282B, 0x4A4340, 0x95A49F, 0xE2A14C, 0xDAD2AA, signal, backing,
-                0xB78C74, 0x986854, 0x322A26, 0x524239, 0x3B3331
+                0x416166, 0x31464C, 0x678086, 0x57615B, 0x3D4947, 0x465760, 0x748386, 0x3F4240,
+                0x253035, 0x22282B, 0x514742, 0x95A49F, 0xE2A14C, 0xDAD2AA, signal, backing,
+                0xB78C74, 0x986854, 0x322A26, 0x524239, 0x3B3331, 0x9B8E72, 0x516F74, 0x596265
             };
             var pixels = new Color32[PaletteWidth];
             for (int i = 0; i < colors.Length; i++)
@@ -89,7 +123,32 @@ namespace Dustline
             var material = new Material(shader) { name = "Operator fabric " + team, hideFlags = HideFlags.DontSave };
             material.SetTexture("_BaseMap", palette);
             material.SetColor("_BaseColor", Color.white);
-            if (material.HasProperty("_Smoothness")) material.SetFloat("_Smoothness", 0.22f);
+            if (material.HasProperty("_MetallicGlossMap"))
+            {
+                var finish = new Texture2D(PaletteWidth, 1, TextureFormat.RGBA32, false, true) {
+                    name = "Operator surface finishes " + team, filterMode = FilterMode.Point,
+                    wrapMode = TextureWrapMode.Clamp, hideFlags = HideFlags.DontSave
+                };
+                var gloss = new Color32[PaletteWidth];
+                for (int i = 0; i < gloss.Length; i++)
+                {
+                    switch ((Finish)i)
+                    {
+                        case Finish.Metal: gloss[i] = new Color32(138, 0, 0, 149); break;
+                        case Finish.Shell: case Finish.ShellRim: case Finish.GlovePlate:
+                            gloss[i] = new Color32(18, 0, 0, 107); break;
+                        case Finish.Skin: case Finish.SkinShade: case Finish.Leather:
+                            gloss[i] = new Color32(0, 0, 0, 76); break;
+                        default: gloss[i] = new Color32(0, 0, 0, 34); break;
+                    }
+                }
+                finish.SetPixels32(gloss);
+                finish.Apply(false, true);
+                material.SetTexture("_MetallicGlossMap", finish);
+                material.SetFloat("_Smoothness", 1f);
+                material.EnableKeyword("_METALLICSPECGLOSSMAP");
+                finishes[team] = finish;
+            }
             palettes[team] = palette;
             materials[team] = material;
         }
@@ -123,7 +182,7 @@ namespace Dustline
                 R(Bone.Head, 1.554f, 0f, 0.011f, 0.053f, 0.047f, 0.047f),
                 R(Bone.Head, 1.582f, 0f, 0.011f, 0.062f, 0.052f, 0.055f));
 
-            Gear(b, w);
+            Gear(b, w, f);
             Head(b, f);
             Arm(b, style, 1f, Bone.RightUpper, Bone.RightLower, Bone.RightHand);
             Arm(b, style, -1f, Bone.LeftUpper, Bone.LeftLower, Bone.LeftHand);
@@ -132,7 +191,7 @@ namespace Dustline
             return b.ToMesh(style);
         }
 
-        static void Gear(Sculpt b, float w)
+        static void Gear(Sculpt b, float w, bool trimCut)
         {
             b.Loft(Finish.Webbing, 12, 0.70f,
                 R(Bone.Hips, 0.994f, 0f, -0.005f, w + 0.010f, 0.111f, 0.100f),
@@ -158,8 +217,10 @@ namespace Dustline
                 b.Tile(Finish.CanvasDark, Bone.Chest, V(x, 1.186f, 0.162f), V(0.060f, 0.094f, 0.047f), 0.009f);
                 b.Tile(Finish.Seam, Bone.Chest, V(x, 1.220f, 0.185f), V(0.059f, 0.025f, 0.012f), 0.006f);
             }
-            b.Tile(Finish.Ink, Bone.Chest, V(0f, 1.258f, -0.158f), V(w * 1.80f, 0.320f, 0.176f), 0.027f);
-            b.Tile(Finish.Shell, Bone.Chest, V(0f, 1.268f, -0.221f), V(w * 1.53f, 0.244f, 0.048f), 0.022f);
+            b.Tile(Finish.Ink, Bone.Chest, V(0f, 1.258f, -0.158f), V(w * 1.80f, trimCut ? 0.283f : 0.333f, 0.176f), 0.027f);
+            b.Tile(Finish.Shell, Bone.Chest, V(0f, 1.268f, -0.221f), V(w * 1.58f, trimCut ? 0.208f : 0.252f, 0.048f), 0.022f);
+            b.Tile(Finish.CoatTrim, Bone.Chest, V(0f, 1.428f, trimCut ? -0.135f : -0.168f),
+                V(w * 0.68f, 0.047f, 0.024f), 0.008f, V(21f, 0f, 0f));
             b.Tile(Finish.Team, Bone.Chest, V(0f, 1.343f, 0.005f - BackDepth), V(w * 1.16f, 0.043f, 0.010f), 0.008f);
             b.Tile(Finish.ShellRim, Bone.Chest, V(0f, 1.245f, 0.005f - BackDepth), V(w * 1.16f, 0.013f, 0.010f), 0.004f);
             b.Tile(Finish.ShellRim, Bone.Chest, V(0f, 1.211f, 0.005f - BackDepth), V(w * 0.94f, 0.012f, 0.010f), 0.004f);
@@ -171,6 +232,8 @@ namespace Dustline
                 b.Tile(Finish.Metal, Bone.Chest, V(x, 1.382f, 0.114f), V(0.039f, 0.023f, 0.013f), 0.004f, V(0f, 0f, s * 9f));
                 b.Tile(Finish.CanvasDark, Bone.Hips, V(s * w, 0.986f, 0.034f), V(0.080f, 0.105f, 0.046f), 0.012f,
                     V(-4f, s * 55f, s * 10f));
+                b.Tile(Finish.Stitch, Bone.Chest, V(s * (w - 0.025f), 1.123f, 0.126f),
+                    V(0.009f, 0.094f, 0.005f), 0.003f, V(0f, s * 34f, s * 12f));
             }
             b.Tile(Finish.Amber, Bone.Chest, V(w - 0.038f, 1.252f, 0.158f), V(0.018f, 0.040f, 0.011f), 0.005f, V(0f, 0f, 8f));
         }
@@ -279,7 +342,11 @@ namespace Dustline
                 R(hand, h.y - 0.066f, x - s * 0.035f * k, z + 0.018f, 0.010f * k, 0.013f, 0.014f),
                 R(hand, h.y - 0.048f, x - s * 0.036f * k, z + 0.006f, 0.015f * k, 0.016f, 0.017f),
                 R(hand, h.y - 0.013f, x - s * 0.023f * k, z, 0.013f * k, 0.016f, 0.017f));
-            b.Tile(Finish.Ink, hand, V(x, h.y - 0.049f, z - 0.019f), V(0.054f * k, 0.041f, 0.015f), 0.009f);
+            b.Tile(Finish.Stitch, elbow, V(x + s * 0.039f * k, h.y + 0.039f, z - 0.008f),
+                V(0.022f, 0.006f, 0.008f), 0.003f, V(0f, s * 75f, 0f));
+            b.Tile(Finish.CoatTrim, elbow, V(x + s * 0.037f * k, h.y + 0.025f, z - 0.009f),
+                V(0.026f, 0.017f, 0.010f), 0.004f, V(0f, s * 78f, 0f));
+            b.Tile(Finish.GlovePlate, hand, V(x, h.y - 0.049f, z - 0.019f), V(0.054f * k, 0.041f, 0.015f), 0.009f);
             for (int i = 0; i < 4; i++)
             {
                 float fx = x + s * (i - 1.5f) * (0.014f * k);
@@ -375,10 +442,18 @@ namespace Dustline
 
         sealed class Sculpt
         {
-            readonly List<Vector3> positions = new List<Vector3>(4096);
-            readonly List<Vector2> uv = new List<Vector2>(4096);
-            readonly List<BoneWeight> weights = new List<BoneWeight>(4096);
-            readonly List<int> indices = new List<int>(12288);
+            readonly List<Vector3> positions;
+            readonly List<Vector2> uv;
+            readonly List<BoneWeight> weights;
+            readonly List<int> indices;
+
+            public Sculpt(int capacity = 4096)
+            {
+                positions = new List<Vector3>(capacity);
+                uv = new List<Vector2>(capacity);
+                weights = new List<BoneWeight>(capacity);
+                indices = new List<int>(capacity * 3);
+            }
 
             public void Loft(Finish finish, int sides, float shape, params Ring[] rings)
             {
@@ -468,16 +543,30 @@ namespace Dustline
                 indices.Add(c);
             }
 
-            public Mesh ToMesh(OperatorStyle style)
+            public Mesh ToMesh(OperatorStyle style, bool armsOnly = false)
             {
-                var bind = new Matrix4x4[(int)Bone.Count];
-                for (int i = 0; i < bind.Length; i++) bind[i] = Matrix4x4.Translate(-OperatorVisual.Rest((Bone)i, style));
-                var mesh = new Mesh { name = "Operator mesh / " + style, hideFlags = HideFlags.DontSave };
+                const int firstArm = (int)Bone.RightUpper;
+                int first = armsOnly ? firstArm : 0;
+                var bind = new Matrix4x4[armsOnly ? 6 : (int)Bone.Count];
+                for (int i = 0; i < bind.Length; i++) bind[i] = Matrix4x4.Translate(-OperatorVisual.Rest((Bone)(i + first), style));
+                var skinWeights = weights.ToArray();
+                if (armsOnly)
+                {
+                    for (int i = 0; i < skinWeights.Length; i++)
+                    {
+                        ref var weight = ref skinWeights[i];
+                        int shoulder = positions[i].x >= 0 ? 0 : 3;
+                        weight.boneIndex0 = weight.boneIndex0 < firstArm ? shoulder : weight.boneIndex0 - firstArm;
+                        weight.boneIndex1 = weight.boneIndex1 < firstArm ? shoulder : weight.boneIndex1 - firstArm;
+                        if (weight.boneIndex0 == weight.boneIndex1) { weight.weight0 = 1; weight.weight1 = 0; }
+                    }
+                }
+                var mesh = new Mesh { name = (armsOnly ? "Operator sleeves / " : "Operator mesh / ") + style, hideFlags = HideFlags.DontSave };
                 mesh.SetVertices(positions);
                 mesh.SetUVs(0, uv);
                 mesh.SetTriangles(indices, 0);
                 mesh.bindposes = bind;
-                mesh.boneWeights = weights.ToArray();
+                mesh.boneWeights = skinWeights;
                 mesh.RecalculateNormals();
                 return mesh;
             }

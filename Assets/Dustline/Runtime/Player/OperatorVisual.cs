@@ -23,9 +23,12 @@ namespace Dustline
         static readonly Quaternion LeftGlove = Quaternion.Euler(-70f, 15f, 34f);
 
         public Transform WeaponMount { get; private set; }
+        internal OperatorStyle Style => style;
 
         Transform[] bones;
         SkinnedMeshRenderer skin;
+        WeaponVisual carriedWeapon;
+        CharacterController motor;
         OperatorStyle style;
         int team;
         bool artBound, externalGrip, fallen, basePoseCaptured;
@@ -49,6 +52,7 @@ namespace Dustline
         {
             style = shape;
             team = palette;
+            motor = GetComponentInParent<CharacterController>();
             bones = new Transform[(int)Bone.Count];
             for (int i = 0; i < bones.Length; i++)
             {
@@ -110,7 +114,12 @@ namespace Dustline
         {
             if (fallen || bones == null || !Finite(delta) || delta <= 0f) return;
             CaptureBasePose();
-            float dt = Mathf.Min(delta, 0.25f);
+            float dt = Mathf.Min(delta, 0.10f);
+            if (motor != null && motor.enabled)
+            {
+                Vector3 velocity = motor.velocity;
+                speed = new Vector2(velocity.x, velocity.z).magnitude;
+            }
             float target = Finite(speed) ? Mathf.Clamp(speed, 0f, 8f) : 0f;
             this.speed = Mathf.Lerp(this.speed, target, 1f - Mathf.Exp(-11f * dt));
             duck = Mathf.Lerp(duck, crouched ? 1f : 0f, 1f - Mathf.Exp(-10f * dt));
@@ -131,8 +140,11 @@ namespace Dustline
         public void SetProne(bool prone, float delta)
         {
             if (fallen || bones == null || !Finite(delta) || delta <= 0f) return;
+            float target = prone ? 1f : 0f;
+            if (pronePose == target) return;
             CaptureBasePose();
-            pronePose = Mathf.Lerp(pronePose, prone ? 1f : 0f, 1f - Mathf.Exp(-8f * Mathf.Min(delta, 0.25f)));
+            pronePose = Mathf.Lerp(pronePose, target, 1f - Mathf.Exp(-8f * Mathf.Min(delta, 0.10f)));
+            if (Mathf.Abs(pronePose - target) < 0.001f) pronePose = target;
             ApplyMotion();
         }
 
@@ -152,32 +164,33 @@ namespace Dustline
                 transform.localPosition = baseLocalPosition + baseLocalRotation * (Vector3.up * (OperatorMesh.BackDepth * pronePose));
             }
             float gait = Mathf.SmoothStep(0f, 1f, speed / 0.95f);
-            float stance = Mathf.Lerp(Mathf.Lerp(0.61f, 0.43f, run), 0.66f, duck);
-            float span = Stride() * stance * gait;
-            float lift = Mathf.Lerp(Mathf.Lerp(0.077f, 0.154f, run), 0.057f, duck) * gait;
+            float bend = duck * (1f - pronePose);
+            float stance = Mathf.Lerp(Mathf.Lerp(0.61f, 0.43f, run), 0.66f, bend);
+            float span = Stride() * stance * gait * (1f - 0.68f * pronePose);
+            float lift = Mathf.Lerp(Mathf.Lerp(0.077f, 0.154f, run), 0.057f, bend) * gait * (1f - 0.61f * pronePose);
             Vector3 r = FootTarget(1f, cycle, stance, span, lift, out float rPitch);
             Vector3 l = FootTarget(-1f, Mathf.Repeat(cycle + 0.5f, 1f), stance, span, lift, out float lPitch);
             float wave = Mathf.Sin(Tau * cycle) * gait;
             float rise = 0.5f - 0.5f * Mathf.Cos(2f * Tau * cycle);
             float breathing = Mathf.Sin(breath);
-            float hipZ = -0.13f * duck + 0.033f * run;
-            float hipY = restHips.y - Mathf.Lerp(0.016f, 0.036f, gait) - 0.006f * run - 0.446f * duck;
+            float hipZ = -0.13f * bend + 0.033f * run;
+            float hipY = restHips.y - Mathf.Lerp(0.016f, 0.036f, gait) - 0.006f * run - 0.446f * bend;
             hipY += (rise - 0.45f) * gait * Mathf.Lerp(0.035f, 0.066f, run) + 0.003f * breathing;
             hipY = SoftMin(SoftMin(hipY, HipLimit(r, hipZ)), HipLimit(l, hipZ));
 
             Transform hips = Joint(Bone.Hips);
             hips.localPosition = new Vector3(0.021f * wave, hipY, hipZ);
-            hips.localRotation = Quaternion.Euler(3f * duck, 3.8f * wave, -2.4f * wave);
-            Joint(Bone.Chest).localRotation = Quaternion.Euler(0.6f * breathing + 9f * run + 21f * duck,
+            hips.localRotation = Quaternion.Euler(3f * bend, 3.8f * wave, -2.4f * wave);
+            Joint(Bone.Chest).localRotation = Quaternion.Euler(0.6f * breathing + 9f * run + 21f * bend - 9f * pronePose,
                 -6.5f * wave, 2.9f * wave);
-            Joint(Bone.Head).localRotation = Quaternion.Euler(-7f * run - 18f * duck, 1.6f * wave, -1.2f * wave);
+            Joint(Bone.Head).localRotation = Quaternion.Euler(-7f * run - 18f * bend - 31f * pronePose, 1.6f * wave, -1.2f * wave);
 
             PlaceLeg(Bone.RightThigh, Bone.RightShin, Bone.RightBoot, 1f, r, rPitch);
             PlaceLeg(Bone.LeftThigh, Bone.LeftShin, Bone.LeftBoot, -1f, l, lPitch);
 
             WeaponMount.localPosition = CarryPosition + new Vector3(0.008f * wave + 0.010f * run,
-                0.003f * breathing - 0.033f * run, 0.023f * run + 0.017f * duck);
-            WeaponMount.localRotation = Quaternion.Euler(1.1f * wave + 12f * run - 17f * duck, -11f - 2f * wave - 10f * run,
+                0.003f * breathing - 0.033f * run, 0.023f * run + 0.017f * bend);
+            WeaponMount.localRotation = Quaternion.Euler(1.1f * wave + 12f * run - 17f * bend - 14f * pronePose, -11f - 2f * wave - 10f * run,
                 1.9f * wave - 11f * run);
             if (!externalGrip) ApplyArms(WeaponMount.TransformPoint(RightRestGrip), WeaponMount.TransformPoint(LeftRestGrip));
         }
@@ -227,6 +240,8 @@ namespace Dustline
             Joint(foot).localRotation = Quaternion.Inverse(b) * Quaternion.Euler(pitch, side * (4f + 6f * duck), 0f);
         }
 
+        internal void BindWeaponView(WeaponVisual weapon) => carriedWeapon = weapon;
+
         public void PoseArms(Vector3 rightHand, Vector3 leftHand)
         {
             if (fallen || bones == null) return;
@@ -236,11 +251,23 @@ namespace Dustline
 
         void ApplyArms(Vector3 right, Vector3 left)
         {
-            Quaternion mount = Quaternion.Inverse(transform.rotation) * WeaponMount.rotation;
+            Quaternion rightRotation = WeaponMount.rotation * RightGlove;
+            Quaternion leftRotation = WeaponMount.rotation * LeftGlove;
+            if (carriedWeapon != null && carriedWeapon.isActiveAndEnabled)
+            {
+                if (skin.shadowCastingMode == ShadowCastingMode.ShadowsOnly)
+                    carriedWeapon.ShadowGrips(WeaponMount, out right, out rightRotation, out left, out leftRotation);
+                else
+                {
+                    rightRotation = carriedWeapon.RightGlove;
+                    leftRotation = carriedWeapon.LeftGlove;
+                }
+            }
+            Quaternion body = Quaternion.Inverse(transform.rotation);
             PlaceArm(Bone.RightUpper, Bone.RightLower, Bone.RightHand, 1f,
-                Finite(right) ? right : WeaponMount.TransformPoint(RightRestGrip), mount * RightGlove);
+                Finite(right) ? right : WeaponMount.TransformPoint(RightRestGrip), body * rightRotation);
             PlaceArm(Bone.LeftUpper, Bone.LeftLower, Bone.LeftHand, -1f,
-                Finite(left) ? left : WeaponMount.TransformPoint(LeftRestGrip), mount * LeftGlove);
+                Finite(left) ? left : WeaponMount.TransformPoint(LeftRestGrip), body * leftRotation);
         }
 
         void PlaceArm(Bone top, Bone mid, Bone hand, float side, Vector3 palm, Quaternion glove)
@@ -258,7 +285,7 @@ namespace Dustline
             Joint(hand).localRotation = Quaternion.Inverse(b) * glove;
         }
 
-        static void Solve(Vector3 origin, Vector3 target, Vector3 pole, float a, float b, out Vector3 joint, out Vector3 end)
+        internal static void Solve(Vector3 origin, Vector3 target, Vector3 pole, float a, float b, out Vector3 joint, out Vector3 end)
         {
             Vector3 ray = target - origin;
             float length = ray.magnitude;
@@ -274,7 +301,7 @@ namespace Dustline
 
         static Quaternion LegAxis(Vector3 down) => Quaternion.LookRotation(Vector3.Cross(down, Vector3.right), -down);
 
-        static Quaternion DownAxis(Vector3 down, Vector3 roll)
+        internal static Quaternion DownAxis(Vector3 down, Vector3 roll)
         {
             Vector3 up = -down.normalized;
             Vector3 forward = Vector3.ProjectOnPlane(roll, up);

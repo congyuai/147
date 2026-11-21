@@ -6,8 +6,17 @@ namespace Dustline
     public sealed partial class GameUI
     {
         RectTransform reticleAnchor;
-        Image reticle, lifeBar, staminaBar, progressBar, fireGlyph, sprintRing;
-        GameObject aimButton, reloadButton;
+        Image reticle, lifeBar, staminaBar, progressBar, fireGlyph, interactGlyph, sprintRing;
+        GameObject aimButton, reloadButton, switchButton;
+        readonly DamageCue[] damageCues = new DamageCue[4];
+        int damageCursor;
+
+        struct DamageCue
+        {
+            internal Image Image;
+            internal Vector3 Bearing;
+            internal float Born, Strength;
+        }
         GameObject hintCard;
         Text healthReadout, staminaReadout, ammoReadout, statusReadout, prompt;
         float hudAt, hitUntil;
@@ -15,19 +24,28 @@ namespace Dustline
         void BuildHud()
         {
             var upperLeft = Anchor("Left HUD anchor", hud, 0, 1);
-            var vitals = HudCard(upperLeft, "Vitals", 21, 20, 298, 138);
+            var vitals = HudCard(upperLeft, "Vitals", 21, 20, 276, 136);
             healthReadout = Label(vitals, "", 20, 13, 7, 268, 29);
-            lifeBar = Bar(vitals, 13, 38, 272, 6, new Color32(201, 104, 76, 255));
+            lifeBar = Bar(vitals, 13, 38, 250, 6, new Color32(201, 104, 76, 255));
             staminaReadout = Label(vitals, "", 17, 13, 47, 268, 25, color: Muted);
-            staminaBar = Bar(vitals, 13, 73, 272, 5, Aqua);
-            ammoReadout = Label(vitals, "", 21, 13, 87, 272, 44, color: Amber);
+            staminaBar = Bar(vitals, 13, 73, 250, 5, Aqua);
+            ammoReadout = Label(vitals, "", 20, 13, 87, 250, 44, color: Amber);
 
             var upperRight = Anchor("Right HUD anchor", hud, 1, 1);
-            var status = HudCard(upperRight, "Raid status", -369, 20, 348, 126);
-            statusReadout = Label(status, "", 18, 13, 6, 322, 113, TextAnchor.MiddleRight);
+            miniMap = CreateMap(upperRight, -197, 18, 179, true, false);
+            var status = HudCard(upperRight, "Raid status", -471, 18, 262, 120);
+            statusReadout = Label(status, "", 16, 11, 6, 239, 106, TextAnchor.MiddleRight);
             reticleAnchor = Anchor("Screen centre", hud, 0.5f, 0.5f);
             reticle = Fill(At("Reticle", reticleAnchor, -22, -22, 44, 44), Pale);
             reticle.sprite = icons[RaidIcon.Reticle];
+            for (int i = 0; i < damageCues.Length; i++)
+            {
+                var cue = Anchor("Incoming damage", reticleAnchor, 0.5f, 0.5f);
+                cue.sizeDelta = new Vector2(100f, 80f);
+                damageCues[i].Image = Fill(cue, new Color32(255, 88, 67, 220));
+                damageCues[i].Image.sprite = icons[RaidIcon.DamageArc];
+                cue.gameObject.SetActive(false);
+            }
 
             var bottom = Anchor("Interaction anchor", hud, 0.5f, 0);
             var interaction = HudCard(bottom, "Interaction status", -234, -315, 468, 67);
@@ -71,8 +89,14 @@ namespace Dustline
                 bool firearm = weapon.Magazine != null;
                 SetActive(aimButton, firearm);
                 SetActive(reloadButton, firearm);
+                SetActive(switchButton, session.Loadout.Equipped(EquipmentSlot.Weapon) != null);
+                var interactionIcon = icons[player.LookingAtDoor ? RaidIcon.InteractDoor : RaidIcon.Search];
+                if (interactGlyph.sprite != interactionIcon) interactGlyph.sprite = interactionIcon;
                 SetActive(sprintRing.gameObject, player.Sprinting);
             }
+            bool obstructed = player.WeaponView.RifleObstructed;
+            reticle.enabled = obstructed || (!session.Input.Aim && player.AimProgress < 0.08f);
+            UpdateDamageCues(player.transform);
             bool marker = Time.unscaledTime < hitUntil;
             var sprite = icons[marker ? RaidIcon.Hit : RaidIcon.Reticle];
             if (reticle.sprite != sprite)
@@ -82,13 +106,15 @@ namespace Dustline
             }
             if (!force && Time.unscaledTime < hudAt) return;
             hudAt = Time.unscaledTime + 0.09f;
+            UpdateMiniMap();
 
             healthReadout.text = "生命  " + Mathf.CeilToInt(player.Health.Current);
             staminaReadout.text = "体力  " + Mathf.CeilToInt(player.Stamina);
             SetBar(lifeBar, player.Health.Current / player.Health.Maximum);
             SetBar(staminaBar, player.Stamina * 0.01f);
-            ammoReadout.text = weapon.IsMelee ? "检修短棍 / 近战" : weapon.Magazine == null ? "未装备武器" : weapon.Magazine.Reloading ? "正在换弹"
-                : weapon.Magazine.Rounds + " / " + weapon.Reserve + (weapon.Automatic ? "   全自动" : "   半自动");
+            ammoReadout.text = weapon.IsMelee ? (weapon.ActiveIsBound ? session.BoundBladeName + " / 随身刀" : "检修短棍 / 近战")
+                : weapon.Magazine == null ? "未装备主武器" : weapon.Magazine.Reloading ? "正在换弹"
+                : weapon.Magazine.Rounds + " / " + weapon.Reserve + (obstructed ? "   持枪受阻" : weapon.Automatic ? "   全自动" : "   半自动");
 
             var position = player.transform.position;
             var inZone = session.World.FindExit(position);
@@ -134,60 +160,68 @@ namespace Dustline
             hitUntil = Time.unscaledTime + 0.13f;
         }
 
+        public void ShowDamage(Vector3 bearing, float damage)
+        {
+            bearing.y = 0f;
+            if (damage <= 0f || bearing.sqrMagnitude < 0.001f) return;
+            ref DamageCue cue = ref damageCues[damageCursor++ % damageCues.Length];
+            cue.Bearing = bearing.normalized;
+            cue.Born = Time.unscaledTime;
+            cue.Strength = Mathf.Clamp(0.58f + damage * 0.024f, 0f, 1f);
+            cue.Image.gameObject.SetActive(true);
+        }
+
+        void UpdateDamageCues(Transform actor)
+        {
+            for (int i = 0; i < damageCues.Length; i++)
+            {
+                ref DamageCue cue = ref damageCues[i];
+                if (!cue.Image.gameObject.activeSelf) continue;
+                float age = Time.unscaledTime - cue.Born;
+                if (age >= 1.3f) { cue.Image.gameObject.SetActive(false); continue; }
+                var local = actor.InverseTransformDirection(cue.Bearing);
+                var rect = cue.Image.rectTransform;
+                rect.anchoredPosition = new Vector2(local.x, local.z) * 119f;
+                rect.localRotation = Quaternion.Euler(0f, 0f, -Mathf.Atan2(local.x, local.z) * Mathf.Rad2Deg);
+                cue.Image.color = new Color(1f, 0.31f, 0.24f, cue.Strength * (1f - Mathf.SmoothStep(0f, 1f, (age - 0.22f) / 1.08f)));
+            }
+        }
+
+        void ResetDamageCues()
+        {
+            damageCursor = 0;
+            hitUntil = 0f;
+            for (int i = 0; i < damageCues.Length; i++) damageCues[i].Image.gameObject.SetActive(false);
+        }
+
         void BuildTouch()
         {
             var look = Stretch("Look pad", touch);
-            look.anchorMin = new Vector2(0.40f, 0);
-            look.anchorMax = new Vector2(1, 0.86f);
+            look.anchorMin = new Vector2(0.34f, 0f);
+            look.anchorMax = new Vector2(1f, 0.90f);
             Fill(look, Color.clear, true);
             AttachControl(look, "Look");
-            var left = Anchor("Left touch anchor", touch, 0, 0);
-            var right = Anchor("Right touch anchor", touch, 1, 0);
-            var topRight = Anchor("Top touch anchor", touch, 1, 1);
-            var stick = At("Move", left, 30, -211, 184, 184);
-            var stickFace = Fill(stick, new Color32(85, 120, 124, 138), true);
-            stickFace.sprite = icons[RaidIcon.Dial];
-            var knob = Anchor("Move knob", stick, 0.5f, 0.5f);
-            knob.sizeDelta = new Vector2(69, 69);
-            Fill(knob, new Color32(203, 221, 210, 174)).sprite = icons[RaidIcon.Knob];
-            var move = AttachControl(stick, "Move");
-            move.SetFace(stickFace, new Color32(104, 155, 146, 179));
-            move.Knob = knob;
-            var halo = Stretch("Sprint indicator", stick);
-            halo.SetAsFirstSibling();
-            sprintRing = Fill(halo, new Color32(229, 174, 91, 181));
-            sprintRing.sprite = icons[RaidIcon.Dial];
-            sprintRing.gameObject.SetActive(false);
-            fireGlyph = TouchButton(right, "Fire", RaidIcon.Fire, -145, -195, 117, true);
-            aimButton = TouchButton(right, "Aim", RaidIcon.Aim, -250, -175, 88).GetComponentInParent<TouchControl>().gameObject;
-            reloadButton = TouchButton(right, "Reload", RaidIcon.Reload, -119, -284, 82).GetComponentInParent<TouchControl>().gameObject;
-            TouchButton(right, "Crouch", RaidIcon.Crouch, -352, -118, 83);
-            TouchButton(right, "Prone", RaidIcon.Prone, -448, -118, 83);
-            TouchButton(right, "Jump", RaidIcon.Jump, -448, -210, 83);
-            TouchButton(right, "Interact", RaidIcon.Search, -258, -277, 90);
-            TouchButton(right, "Heal", RaidIcon.Heal, -352, -210, 83);
-            TouchButton(right, "Inventory", RaidIcon.Bag, -124, -377, 85);
-            TouchButton(left, "LeanLeft", RaidIcon.Lean, 219, -109, 72);
-            TouchButton(left, "LeanRight", RaidIcon.Lean, 298, -109, 72);
-            TouchButton(topRight, "Settings", RaidIcon.Gear, -103, 157, 77);
+            AddTouchSlot("Move", "移动摇杆", RaidIcon.Knob, 0.094f, 0.170f, 155f);
+            AddTouchSlot("Fire", "开火或挥击", RaidIcon.Fire, 0.925f, 0.265f, 107f, true);
+            AddTouchSlot("Aim", "开镜", RaidIcon.Aim, 0.827f, 0.319f, 78f);
+            AddTouchSlot("Reload", "换弹", RaidIcon.Reload, 0.922f, 0.104f, 74f);
+            AddTouchSlot("Crouch", "蹲下", RaidIcon.Crouch, 0.720f, 0.111f, 72f);
+            AddTouchSlot("Prone", "趴下", RaidIcon.Prone, 0.645f, 0.111f, 72f);
+            AddTouchSlot("Jump", "跳跃", RaidIcon.Jump, 0.925f, 0.431f, 76f);
+            AddTouchSlot("Interact", "搜索或开关门", RaidIcon.Search, 0.811f, 0.184f, 78f);
+            AddTouchSlot("Heal", "治疗", RaidIcon.Heal, 0.722f, 0.259f, 72f);
+            AddTouchSlot("Inventory", "背包", RaidIcon.Bag, 0.795f, 0.066f, 66f);
+            AddTouchSlot("LeanLeft", "向左探头", RaidIcon.LeanLeft, 0.181f, 0.362f, 66f);
+            AddTouchSlot("LeanRight", "向右探头", RaidIcon.LeanRight, 0.256f, 0.362f, 66f);
+            AddTouchSlot("SwitchWeapon", "切换主武器和随身刀", RaidIcon.Switch, 0.811f, 0.458f, 72f);
+            AddTouchSlot("Settings", "设置", RaidIcon.Gear, 0.944f, 0.545f, 65f);
+            AddTouchSlot("Map", "大地图", RaidIcon.Map, 0.944f, 0.652f, 67f);
+            LoadTouchLayout();
         }
 
         static void SetActive(GameObject target, bool active)
         {
             if (target.activeSelf != active) target.SetActive(active);
-        }
-
-        Image TouchButton(Transform parent, string action, RaidIcon icon, float x, float y, float size, bool primary = false)
-        {
-            var rect = At(action, parent, x, y, size, size);
-            var face = Fill(rect, primary ? new Color32(151, 101, 52, 191) : new Color32(66, 91, 99, 169), true);
-            face.sprite = icons[RaidIcon.Dial];
-            var glyph = Anchor("Icon", rect, 0.5f, 0.5f);
-            glyph.sizeDelta = Vector2.one * (size * (primary ? 0.68f : 0.65f));
-            var image = Fill(glyph, Pale);
-            image.sprite = icons[icon];
-            AttachControl(rect, action).SetFace(face, primary ? Amber : new Color32(108, 166, 156, 236));
-            return image;
         }
 
         TouchControl AttachControl(RectTransform rect, string action)

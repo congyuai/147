@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -112,12 +113,216 @@ namespace Dustline.Tests
                 Assert.That(string.IsNullOrEmpty(exit.Name), Is.False);
                 Assert.That(exit.Position.x, Is.InRange(-480f, 480f));
                 Assert.That(exit.Position.z, Is.InRange(-480f, 480f));
-                Assert.That(exit.Position.y, Is.EqualTo(0));
+                Assert.That(exit.Position.y, Is.GreaterThan(0));
                 Assert.That((exit.Position - PortLayout.Spawn).sqrMagnitude, Is.GreaterThan(120f * 120f));
             }
             Assert.That((PortLayout.Exits[0].Position - PortLayout.Exits[1].Position).sqrMagnitude,
                 Is.GreaterThan(120f * 120f));
+            Assert.That(PortLayout.Exits[0].Position.x, Is.EqualTo(-322));
+            Assert.That(PortLayout.Exits[0].Position.z, Is.EqualTo(315));
+            Assert.That(PortLayout.Exits[1].Position.x, Is.EqualTo(330));
+            Assert.That(PortLayout.Exits[1].Position.z, Is.EqualTo(165));
+            var station = PortLayout.HighValueCenter;
+            Assert.That(PortLayout.HighValueArea.Contains(new Vector2(station.x, station.z)), Is.True);
+            Assert.That(PortLayout.HighValueName, Is.Not.Empty);
+            Assert.That(PortLayout.MapColor(new Vector2(-334, -44)), Is.Not.EqualTo(PortLayout.MapColor(new Vector2(-279, -41))));
+            Assert.That(PortLayout.MapColor(new Vector2(-334, -220)), Is.Not.EqualTo(PortLayout.MapColor(new Vector2(-305, -253))));
             yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator PortRoutesReachOrdinaryLootBothExitsAndTheGuardedStation()
+        {
+            using (var built = new PortWorldFixture())
+            {
+                var world = built.World;
+                var nav = world.Navigation;
+                AssertRoute(nav, world.Spawn, PortWorldFixture.Floor(-261.2f, -217.9f));
+                AssertRoute(nav, world.Spawn, world.Exits[0].transform.position);
+                AssertRoute(nav, world.Spawn, world.Exits[1].transform.position);
+                AssertRoute(nav, world.Spawn, PortLayout.HighValueCenter);
+                Assert.That(nav.CanTraverse(PortWorldFixture.Floor(-334, -73), PortWorldFixture.Floor(-334, -15)), Is.True,
+                    "The service road should continue over the west bridge.");
+                Assert.That(nav.CanTraverse(PortWorldFixture.Floor(-149, -64), PortWorldFixture.Floor(-149, -5)), Is.False,
+                    "The canal is not a shortcut across the uncovered channel.");
+                Assert.That(PortWorldFixture.Floor(-452, 126).y - world.Spawn.y, Is.GreaterThan(20));
+                foreach (var exit in world.Exits) Assert.That(world.FindExit(exit.transform.position), Is.SameAs(exit));
+
+                world.SpawnBots();
+                int regular = 0, elite = 0, boss = 0;
+                int guardTeam = -1;
+                foreach (var bot in world.GetComponentsInChildren<BotController>())
+                {
+                    Vector3 post = bot.transform.position;
+                    int team = bot.GetComponent<Health>().Team;
+                    bool inStation = PortLayout.HighValueArea.Contains(new Vector2(post.x, post.z));
+                    Assert.That(inStation, Is.EqualTo(bot.Rank != BotRank.Regular));
+                    if (bot.Rank == BotRank.Regular)
+                    {
+                        regular++;
+                        Assert.That((world.Spawn - post).sqrMagnitude, Is.GreaterThan(95 * 95));
+                        Assert.That(team, Is.InRange(1, 2));
+                    }
+                    else
+                    {
+                        if (bot.Rank == BotRank.Boss) boss++; else elite++;
+                        if (guardTeam < 0) guardTeam = team;
+                        Assert.That(team, Is.EqualTo(guardTeam).And.GreaterThan(2));
+                        var destination = world.PickGuardPoint(post, new System.Random(7));
+                        Assert.That(PortLayout.HighValueArea.Contains(new Vector2(destination.x, destination.z)), Is.True);
+                    }
+                }
+                Assert.That(regular, Is.EqualTo(10));
+                Assert.That(elite, Is.EqualTo(3));
+                Assert.That(boss, Is.EqualTo(1));
+            }
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator LocalRoutingYieldsToAnActorOnThePlayerLayerWithoutLosingTheGlobalRoute()
+        {
+            var other = new GameObject("Local test actor", typeof(CharacterController));
+            try
+            {
+                var start = new Vector3(1000, 0, 1000);
+                var end = start + Vector3.forward * 6;
+                var navigation = new NavigationGrid(new[] { start, end }, 8);
+                other.layer = 2;
+                other.transform.position = start + Vector3.forward * 1.1f;
+                var motor = other.GetComponent<CharacterController>();
+                motor.radius = .35f; motor.height = 1.8f; motor.center = Vector3.up * .9f;
+                Physics.SyncTransforms();
+                Assert.That(navigation.Path(start, end).Count, Is.EqualTo(1));
+                if (navigation.TryLocalStep(start, end, null, out var route))
+                    Assert.That(Mathf.Abs(route.x), Is.GreaterThan(.3f), "The actor should not push straight into the blocking capsule.");
+                else Assert.That(route, Is.EqualTo(Vector3.zero));
+                motor.enabled = false;
+                Assert.That(navigation.TryLocalStep(start, end, null, out route), Is.True);
+                Assert.That(route, Is.EqualTo(Vector3.forward));
+            }
+            finally { Object.Destroy(other); }
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator AShutterUpdatesCollisionAndRoutingAndDoesNotCloseOnThePlayerLayer()
+        {
+            using (var built = new PortWorldFixture())
+            {
+                var world = built.World;
+                HarborDoor shutter = null;
+                foreach (var door in world.GetComponentsInChildren<HarborDoor>())
+                    if (Vector2.Distance(new Vector2(door.transform.position.x, door.transform.position.z), new Vector2(255, 105)) < .2f)
+                        shutter = door;
+                Assert.That(shutter, Is.Not.Null);
+                Vector3 from = PortWorldFixture.Floor(255, 102), to = PortWorldFixture.Floor(255, 110);
+                Assert.That(shutter.IsOpen, Is.False);
+                Assert.That(world.Navigation.CanTraverse(from, to), Is.False);
+                AssertRoute(world.Navigation, from, to);
+                Assert.That(shutter.TryToggle(), Is.True);
+                Assert.That(world.Navigation.CanTraverse(from, to), Is.True);
+                Assert.That(world.Navigation.Path(from, to).Count, Is.EqualTo(1));
+
+                var blocker = new GameObject("Player in shutter opening", typeof(CharacterController));
+                blocker.transform.SetParent(world.transform, false);
+                blocker.layer = 2;
+                var motor = blocker.GetComponent<CharacterController>();
+                motor.height = 1.8f; motor.radius = .35f; motor.center = Vector3.up * .9f;
+                blocker.transform.position = shutter.transform.position;
+                Assert.That(shutter.TryToggle(), Is.False);
+                Assert.That(shutter.IsOpen, Is.True);
+                motor.enabled = false;
+
+                var bag = world.CreateLoot(PortWorldFixture.Floor(255, 106.3f), "Shutter sightline");
+                Physics.SyncTransforms();
+                Assert.That(Physics.Raycast(new Vector3(from.x, from.y + .18f, 104), Vector3.forward, out var hit, 3.2f,
+                    Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide), Is.True);
+                Assert.That(hit.collider.GetComponentInParent<LootContainer>(), Is.SameAs(bag));
+                Assert.That(shutter.TryToggle(), Is.True);
+                Assert.That(world.Navigation.CanTraverse(from, to), Is.False);
+                AssertRoute(world.Navigation, from, to);
+            }
+            yield return null;
+        }
+
+        static void AssertRoute(NavigationGrid nav, Vector3 start, Vector3 finish)
+        {
+            var route = nav.Path(start, finish);
+            Assert.That(route.Count, Is.GreaterThan(0), $"No route from {start} to {finish}");
+            Assert.That(Vector3.Distance(route[route.Count - 1], finish), Is.LessThan(.18f));
+            var previous = start;
+            foreach (var point in route)
+            {
+                Assert.That(nav.CanTraverse(previous, point), Is.True, $"Blocked route leg {previous} -> {point}");
+                Assert.That(PortWorldFixture.Floor(point.x, point.z).y, Is.EqualTo(point.y).Within(.075f));
+                previous = point;
+            }
+        }
+    }
+
+    internal sealed class PortWorldFixture : System.IDisposable
+    {
+        internal const string HighItem = "test-station-item";
+        readonly GameObject owner = new GameObject("Inactive raid fixture");
+        readonly GameObject world = new GameObject("Port fixture");
+        readonly ItemCatalog catalog = ScriptableObject.CreateInstance<ItemCatalog>();
+        readonly LootTable regular = ScriptableObject.CreateInstance<LootTable>();
+        readonly LootTable high = ScriptableObject.CreateInstance<LootTable>();
+        internal WorldBuilder World { get; }
+
+        internal PortWorldFixture()
+        {
+            try
+            {
+                owner.SetActive(false);
+                var session = owner.AddComponent<GameSession>();
+                foreach (string id in new[] { "ammo", "medkit", "armor", "circuit", HighItem })
+                {
+                    var item = ScriptableObject.CreateInstance<ItemDefinition>();
+                    item.Id = id;
+                    item.MaxStack = 99;
+                    catalog.Items.Add(item);
+                }
+                catalog.RebuildIndex();
+                regular.Rolls = high.Rolls = 1;
+                regular.Entries = Entries("ammo"); high.Entries = Entries(HighItem);
+                World = world.AddComponent<WorldBuilder>();
+                Assign(session, "Catalog", catalog);
+                Assign(session, "LootTable", regular);
+                Assign(session, "HighValueLootTable", high);
+                Assign(session, "World", World);
+                World.Build(session);
+            }
+            catch { Dispose(); throw; }
+        }
+
+        internal static Vector3 Floor(float x, float z)
+        {
+            Vector3 p = new Vector3(x, 190, z);
+            var hits = Physics.RaycastAll(p, Vector3.down, 220, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            float y = float.NegativeInfinity;
+            foreach (var hit in hits)
+                if (hit.collider.TryGetComponent<FootstepSurface>(out _) && hit.collider.GetComponent<LootContainer>() == null)
+                    y = Mathf.Max(y, hit.point.y);
+            Assert.That(float.IsNegativeInfinity(y), Is.False, $"Missing grade at ({x}, {z})");
+            return new Vector3(x, y, z);
+        }
+
+        static List<LootEntry> Entries(string id) => new List<LootEntry> { new LootEntry { ItemId = id, Weight = 1, Min = 1, Max = 1 } };
+
+        static void Assign(GameSession session, string name, object value) => typeof(GameSession).GetProperty(name)
+            .GetSetMethod(true).Invoke(session, new[] { value });
+
+        public void Dispose()
+        {
+            world.SetActive(false);
+            Object.Destroy(world);
+            Object.Destroy(owner);
+            foreach (var item in catalog.Items) Object.Destroy(item);
+            Object.Destroy(catalog);
+            Object.Destroy(regular);
+            Object.Destroy(high);
         }
     }
 }

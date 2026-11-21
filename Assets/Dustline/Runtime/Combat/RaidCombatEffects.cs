@@ -12,7 +12,10 @@ namespace Dustline
         const float LocalImpactRange = 72;
         const int LocalBursts = 6;
         const int RemoteBursts = 22;
+        const int MarkCapacity = 56;
+        const float MarkFadeSeconds = 4f;
         readonly Burst[] bursts = new Burst[LocalBursts + RemoteBursts];
+        readonly SurfaceMark[] marks = new SurfaceMark[MarkCapacity];
         readonly AudioSource[] shots = new AudioSource[LocalVoices + RemoteVoices];
         readonly AudioClip[] shotClips = new AudioClip[4];
         AudioSource foley;
@@ -21,6 +24,7 @@ namespace Dustline
         CombatFxBatch batch;
         Camera eye;
         int localVoice, localBurst, remoteBurst, remoteTracer, lastClip = -1;
+        int nextMark, liveMarks;
         float visualsUntil;
         uint variation = 0x157e9b31;
         bool initialized;
@@ -35,12 +39,20 @@ namespace Dustline
             public bool Flash, Impact, Actor, Trace, Local;
         }
 
+        struct SurfaceMark
+        {
+            public Collider Surface;
+            public Vector3 Center, Along, Across;
+            public CombatFxBatch.Ink Ink;
+            public float Until;
+        }
+
         public void Initialize()
         {
             if (initialized) return;
             presentation = new GameObject("Combat presentation") { layer = 2 };
             presentation.transform.SetParent(transform, false);
-            batch = new CombatFxBatch(presentation, bursts.Length);
+            batch = new CombatFxBatch(presentation, bursts.Length, marks.Length);
             for (int i = 0; i < shotClips.Length; i++) shotClips[i] = CombatFoley.Shot(i);
             reloadClip = CombatFoley.Reload();
             dryClip = CombatFoley.Dry();
@@ -51,12 +63,15 @@ namespace Dustline
         }
 
         public void Shot(Vector3 muzzle, Vector3 end, Vector3 normal, bool hit, bool actorHit, bool local)
-            => EnqueueShot(muzzle, end, normal, hit, actorHit, local, null);
+            => EnqueueShot(muzzle, end, normal, hit, actorHit, local, null, null);
 
-        internal void Shot(Transform muzzle, Vector3 end, Vector3 normal, bool hit, bool actorHit)
-            => EnqueueShot(muzzle.position, end, normal, hit, actorHit, true, muzzle);
+        internal void Shot(Transform muzzle, Vector3 end, in RaycastHit hit, bool actorHit)
+        {
+            var surface = hit.collider;
+            EnqueueShot(muzzle.position, end, hit.normal, surface != null, actorHit, true, muzzle, surface);
+        }
 
-        void EnqueueShot(Vector3 muzzle, Vector3 end, Vector3 normal, bool hit, bool actorHit, bool local, Transform anchor)
+        void EnqueueShot(Vector3 muzzle, Vector3 end, Vector3 normal, bool hit, bool actorHit, bool local, Transform anchor, Collider surface)
         {
             if (!initialized || !isActiveAndEnabled) return;
             var observer = Observer();
@@ -68,6 +83,17 @@ namespace Dustline
             float impactReach = local ? LocalImpactRange : ImpactRange;
             bool showMuzzle = local || sourceDistance <= MuzzleRange * MuzzleRange;
             bool showImpact = hit && (end - observer.position).sqrMagnitude <= impactReach * impactReach;
+            if (hit && !actorHit && (local || showImpact))
+            {
+                // The legacy AI shot call supplies a point and normal, but not the hit collider.
+                if (surface == null && normal.sqrMagnitude > 0.9f
+                    && Physics.Raycast(end + normal * 0.04f, -normal, out var recovered, 0.08f,
+                        Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
+                    && (recovered.point - end).sqrMagnitude < 0.000225f
+                    && Vector3.Dot(recovered.normal, normal) > 0.85f)
+                    surface = recovered.collider;
+                PlaceMark(surface, end, normal, end - muzzle, CombatFxBatch.Ink.Hole, 18f);
+            }
             if (!showMuzzle && !showImpact) return;
             Vector3 delta = end - muzzle;
             float length = delta.magnitude;
@@ -88,6 +114,49 @@ namespace Dustline
             visualsUntil = Mathf.Max(visualsUntil, bursts[index].Until);
         }
 
+        internal void MeleeImpact(in RaycastHit hit, bool actorHit, WeaponForm form, Vector3 swingDirection)
+        {
+            if (!initialized || !isActiveAndEnabled) return;
+            var observer = Observer();
+            if (observer == null || (hit.point - observer.position).sqrMagnitude > LocalImpactRange * LocalImpactRange) return;
+            if (!actorHit)
+                PlaceMark(hit.collider, hit.point, hit.normal, swingDirection,
+                    form == WeaponForm.Baton ? CombatFxBatch.Ink.Ding : CombatFxBatch.Ink.Scrape, 12f);
+            float now = Time.time;
+            int index = localBurst;
+            localBurst = (localBurst + 1) % LocalBursts;
+            bursts[index] = new Burst {
+                End = hit.point, Normal = hit.normal, Born = now, Until = now + (actorHit ? 0.145f : 0.29f),
+                Seed = Next(), Impact = true, Actor = actorHit, Local = true
+            };
+            visualsUntil = Mathf.Max(visualsUntil, bursts[index].Until);
+        }
+
+        void PlaceMark(Collider surface, Vector3 point, Vector3 normal, Vector3 delta, CombatFxBatch.Ink ink, float lifetime)
+        {
+            if (surface == null || surface.isTrigger || surface is CharacterController || normal.sqrMagnitude < 0.5f
+                || surface.GetComponentInParent<Health>() != null) return;
+
+            Vector3 along = Vector3.ProjectOnPlane(delta, normal).normalized;
+            if (along.sqrMagnitude < 0.5f)
+                along = Vector3.Cross(normal, Mathf.Abs(normal.y) > 0.85f ? Vector3.right : Vector3.up).normalized;
+            var spin = ink == CombatFxBatch.Ink.Scrape ? 0f : Next() * 360f;
+            along = Quaternion.AngleAxis(spin, normal) * along;
+            Vector3 across = Vector3.Cross(normal, along);
+            float radius = Mathf.Lerp(0.035f, 0.054f, Next());
+            bool cut = ink == CombatFxBatch.Ink.Scrape;
+            var toLocal = surface.transform.worldToLocalMatrix;
+            ref var mark = ref marks[nextMark];
+            if (mark.Until == 0) liveMarks++;
+            mark = new SurfaceMark {
+                Surface = surface, Center = toLocal.MultiplyPoint3x4(point + normal * 0.003f),
+                Along = toLocal.MultiplyVector(along * (cut ? radius * 2.45f : radius)),
+                Across = toLocal.MultiplyVector(across * (cut ? radius * 0.52f : radius)),
+                Until = Time.time + lifetime, Ink = ink
+            };
+            nextMark = (nextMark + 1) % marks.Length;
+        }
+
         public void Reload(Vector3 position) => Reload(position, CombatFoley.ReloadReference);
 
         internal void Reload(Vector3 position, float seconds)
@@ -105,6 +174,12 @@ namespace Dustline
         internal void CancelReload()
         {
             if (foley != null && foley.clip == reloadClip) foley.Stop();
+        }
+
+        internal void CancelMuzzle(Transform muzzle)
+        {
+            for (int i = 0; i < LocalBursts; i++)
+                if (bursts[i].FlashAnchor == muzzle) { bursts[i].FlashAnchor = null; bursts[i].Flash = false; }
         }
 
         Transform Observer()
@@ -167,15 +242,17 @@ namespace Dustline
             return (variation >> 8) * (1f / 16777216f);
         }
 
-        void LateUpdate()
+        void LateUpdate() => Draw(Time.time);
+
+        void Draw(float now)
         {
             if (!initialized) return;
-            float now = Time.time;
-            if (now >= visualsUntil) { batch.Hide(); return; }
+            if (now >= visualsUntil && liveMarks == 0) { batch.Hide(); return; }
             var observer = Observer();
-            if (observer == null) { batch.Hide(); return; }
+            if (observer == null) { DrawMarks(now, null); batch.Hide(); return; }
             batch.Begin(observer);
-            for (int i = bursts.Length - 1; i >= 0; i--)
+            if (liveMarks != 0) DrawMarks(now, observer);
+            for (int i = now < visualsUntil ? bursts.Length - 1 : -1; i >= 0; i--)
             {
                 ref var shot = ref bursts[i];
                 if (shot.Until <= now) continue;
@@ -185,6 +262,29 @@ namespace Dustline
                 if (shot.Impact) DrawImpact(in shot, age);
             }
             batch.Upload();
+        }
+
+        void DrawMarks(float now, Transform observer)
+        {
+            for (int i = 0; i < marks.Length; i++)
+            {
+                ref var mark = ref marks[(nextMark + i) % marks.Length];
+                if (mark.Until == 0) continue;
+                var surface = mark.Surface;
+                if (now >= mark.Until || surface == null)
+                {
+                    mark = default;
+                    liveMarks--;
+                    continue;
+                }
+                if (observer == null || !surface.enabled || !surface.gameObject.activeInHierarchy) continue;
+                var toWorld = surface.transform.localToWorldMatrix;
+                Vector3 center = toWorld.MultiplyPoint3x4(mark.Center);
+                if ((center - observer.position).sqrMagnitude > LocalImpactRange * LocalImpactRange) continue;
+                Vector3 y = toWorld.MultiplyVector(mark.Along), x = toWorld.MultiplyVector(mark.Across);
+                batch.Quad(center - x - y, center + x - y, center + x + y, center - x + y,
+                    mark.Ink, (mark.Until - now) / MarkFadeSeconds);
+            }
         }
 
         void DrawMuzzle(in Burst shot, float age)
@@ -293,6 +393,8 @@ namespace Dustline
             if (batch != null) batch.Hide();
             visualsUntil = 0;
             System.Array.Clear(bursts, 0, bursts.Length);
+            System.Array.Clear(marks, 0, marks.Length);
+            nextMark = liveMarks = 0;
             foreach (var source in shots) if (source != null) source.Stop();
             if (foley != null) foley.Stop();
         }

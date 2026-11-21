@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -9,6 +10,9 @@ namespace Dustline
         public PlayerInputReader Input;
         public string Action;
         public RectTransform Knob;
+        public Action<TouchControl> SelectForLayout;
+        public Action<TouchControl, PointerEventData, Vector2> DragForLayout;
+        bool editing;
         int pointer = int.MinValue;
         Vector2 lastPosition;
         Image face;
@@ -21,16 +25,24 @@ namespace Dustline
             pressedColor = pressed;
         }
 
+        public void SetEditing(bool value)
+        {
+            if (editing == value) return;
+            Release(true);
+            editing = value;
+        }
+
         public void OnInitializePotentialDrag(PointerEventData data)
         {
-            if (Action == "Move" || Action == "Look") data.useDragThreshold = false;
+            if (editing || Action == "Move" || Action == "Look") data.useDragThreshold = false;
         }
 
         public void OnPointerDown(PointerEventData data)
         {
-            if (pointer != int.MinValue || data.button != PointerEventData.InputButton.Left) return;
+            if (pointer != int.MinValue || data.button != PointerEventData.InputButton.Left || (!editing && !Input.Gameplay)) return;
             pointer = data.pointerId;
             lastPosition = data.position;
+            if (editing) { SelectForLayout?.Invoke(this); return; }
             if (face != null) face.color = pressedColor;
             Input.Hold(Action, true);
             if (Action != "Move" && Action != "Look") Input.Tap(Action);
@@ -39,6 +51,12 @@ namespace Dustline
         public void OnDrag(PointerEventData data)
         {
             if (pointer != data.pointerId) return;
+            if (editing)
+            {
+                DragForLayout?.Invoke(this, data, lastPosition);
+                lastPosition = data.position;
+                return;
+            }
             if (Action == "Look")
             {
                 float scale = GetComponentInParent<Canvas>().scaleFactor;
@@ -60,17 +78,19 @@ namespace Dustline
             if (pointer != data.pointerId) return;
             Release();
         }
-        void Release()
+        void Release(bool cancel = false)
         {
+            bool hadPointer = pointer != int.MinValue;
             pointer = int.MinValue;
             if (face != null) face.color = idleColor;
-            if (Input == null) return;
-            Input.Hold(Action, false);
-            if (Action == "Move") Input.TouchMove = Vector2.zero;
             if (Knob != null) Knob.anchoredPosition = Vector2.zero;
+            if (Input == null || editing || !hadPointer) return;
+            if (cancel && Action == "Aim") Input.CancelAimGesture();
+            else Input.Hold(Action, false);
+            if (Action == "Move") Input.TouchMove = Vector2.zero;
         }
-        void OnDisable() { Release(); }
-        void OnApplicationFocus(bool focus) { if (!focus) Release(); }
-        void OnApplicationPause(bool paused) { if (paused) Release(); }
+        void OnDisable() { Release(true); }
+        void OnApplicationFocus(bool focus) { if (!focus) Release(true); }
+        void OnApplicationPause(bool paused) { if (paused) Release(true); }
     }
 }

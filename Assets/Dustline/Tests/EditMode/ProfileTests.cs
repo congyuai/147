@@ -37,7 +37,8 @@ namespace Dustline
                     Credits = 2468,
                     RaidInProgress = true,
                     Raids = 3,
-                    Extractions = 2
+                    Extractions = 2,
+                    BoundBladeId = BladeCatalog.ShortBladeId
                 };
                 profile.Stash.Add(new ItemStack
                 {
@@ -53,7 +54,8 @@ namespace Dustline
                     InstanceId = "weapon-instance",
                     ItemId = "rifle",
                     Slot = EquipmentSlot.Weapon,
-                    LoadedAmmo = 7
+                    LoadedAmmo = 7,
+                    Mods = new WeaponMods { Sight = 1, OwnedSight = 2, Grip = 2, OwnedGrip = 2, OwnedStock = 1 }
                 });
 
                 store.Save(profile);
@@ -64,6 +66,7 @@ namespace Dustline
                 Assert.That(loaded.RaidInProgress, Is.True);
                 Assert.That(loaded.Raids, Is.EqualTo(3));
                 Assert.That(loaded.Extractions, Is.EqualTo(2));
+                Assert.That(loaded.BoundBladeId, Is.EqualTo(BladeCatalog.ShortBladeId));
                 Assert.That(loaded.Stash.Count, Is.EqualTo(1));
                 Assert.That(loaded.Stash[0].InstanceId, Is.EqualTo("stash-instance"));
                 Assert.That(loaded.Stash[0].ItemId, Is.EqualTo(profile.Stash[0].ItemId));
@@ -75,6 +78,7 @@ namespace Dustline
                 Assert.That(loaded.Loadout[0].InstanceId, Is.EqualTo("weapon-instance"));
                 Assert.That(loaded.Loadout[0].Slot, Is.EqualTo(EquipmentSlot.Weapon));
                 Assert.That(loaded.Loadout[0].LoadedAmmo, Is.EqualTo(7));
+                Assert.That(loaded.Loadout[0].Mods, Is.EqualTo(profile.Loadout[0].Mods));
                 Assert.That(loaded.Stash[0], Is.Not.SameAs(profile.Stash[0]));
 
                 loaded.Credits = 900;
@@ -85,7 +89,154 @@ namespace Dustline
                 Assert.That(replaced.Credits, Is.EqualTo(900));
                 Assert.That(replaced.RaidInProgress, Is.False);
                 Assert.That(replaced.Loadout[0].LoadedAmmo, Is.Zero);
+                Assert.That(replaced.Loadout[0].Mods, Is.EqualTo(profile.Loadout[0].Mods));
+                Assert.That(replaced.BoundBladeId, Is.EqualTo(BladeCatalog.ShortBladeId));
                 Assert.That(Directory.GetFiles(directory), Is.EquivalentTo(new[] { path }));
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
+        }
+
+        private const string V1Rifle = "{\"InstanceId\":\"v1-rifle\",\"ItemId\":\"rifle\",\"Quantity\":1,\"X\":0,\"Y\":0,\"Rotated\":false,\"Slot\":1,\"LoadedAmmo\":8";
+        private const string V1Profile = "{\"Version\":1,\"Credits\":690,\"Stash\":[],\"Loadout\":[" + V1Rifle + "}]}";
+
+        [Test]
+        public void FirstLegacyWriteBackKeepsAnExactRecoverableBackup()
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                Directory.CreateDirectory(directory);
+                string path = System.IO.Path.Combine(directory, "profile.json");
+                File.WriteAllText(path, V1Profile + "\r\n", new System.Text.UTF8Encoding(true));
+                byte[] original = File.ReadAllBytes(path);
+                var store = new ProfileStore(path);
+                var profile = store.Load();
+                Assert.That(profile.BoundBladeId, Is.Empty);
+                Assert.That(profile.Loadout[0].Mods, Is.EqualTo(default(WeaponMods)));
+                Assert.That(profile.Loadout[0].InstanceId, Is.EqualTo("v1-rifle"));
+                Assert.That(profile.Loadout[0].LoadedAmmo, Is.EqualTo(8));
+                Assert.That(Directory.GetFiles(directory), Is.EquivalentTo(new[] { path }));
+
+                profile.BoundBladeId = BladeCatalog.ShortBladeId;
+                store.Save(profile);
+                Assert.That(File.ReadAllBytes(store.LegacyBackupPath), Is.EqualTo(original));
+                Assert.That(store.Load().BoundBladeId, Is.EqualTo(BladeCatalog.ShortBladeId));
+                profile.Loadout.Clear(); // Loss of the raid backpack does not affect the blade choice.
+                profile.Raids++;
+                new ProfileStore(path).Save(profile);
+                Assert.That(store.Load().Loadout, Is.Empty);
+                Assert.That(store.Load().BoundBladeId, Is.EqualTo(BladeCatalog.ShortBladeId));
+                Assert.That(File.ReadAllBytes(store.LegacyBackupPath), Is.EqualTo(original));
+                Assert.That(Directory.GetFiles(directory), Is.EquivalentTo(new[] { path, store.LegacyBackupPath }));
+
+                var recovered = new ProfileStore(store.LegacyBackupPath).Load();
+                Assert.That(recovered.Version, Is.EqualTo(1));
+                Assert.That(recovered.Loadout[0].InstanceId, Is.EqualTo("v1-rifle"));
+                Assert.That(recovered.Loadout[0].LoadedAmmo, Is.EqualTo(8));
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void ExistingLegacyBackupIsNeverOverwritten(bool matchesProfile)
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                Directory.CreateDirectory(directory);
+                string path = System.IO.Path.Combine(directory, "profile.json");
+                var store = new ProfileStore(path);
+                string oldBackup = matchesProfile ? V1Profile : V1Profile.Replace("690", "700");
+                File.WriteAllText(path, V1Profile);
+                File.WriteAllText(store.LegacyBackupPath, oldBackup);
+                var profile = store.Load();
+                profile.Credits = 750;
+                if (matchesProfile)
+                {
+                    store.Save(profile);
+                    Assert.That(store.Load().Credits, Is.EqualTo(750));
+                }
+                else
+                {
+                    Assert.Throws<IOException>(() => store.Save(profile));
+                    Assert.That(File.ReadAllText(path), Is.EqualTo(V1Profile));
+                }
+                Assert.That(File.ReadAllText(store.LegacyBackupPath), Is.EqualTo(oldBackup));
+                Assert.That(Directory.GetFiles(directory), Is.EquivalentTo(new[] { path, store.LegacyBackupPath }));
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
+        }
+
+        [TestCase("\"BoundBladeId\":123")]
+        [TestCase("\"BoundBladeId\":null")]
+        [TestCase("\"BoundBladeId\":[]")]
+        [TestCase("\"BoundBladeId\":\" \"")]
+        [TestCase("\"BoundBladeId\":\"tangdao\",\"\\u0042oundBladeId\":\"short_blade\"")]
+        [TestCase("\"Credits\":10")]
+        public void KnownRootFieldsRejectWrongTypesAndDuplicates(string fields)
+        {
+            string json = V1Profile.Insert(V1Profile.Length - 1, "," + fields);
+            LoadRejectsInvalidJsonOrSchemaWithoutChangingFile(json);
+        }
+
+        [TestCase("\"Mods\":[]")]
+        [TestCase("\"Mods\":null")]
+        [TestCase("\"Mods\":{},\"Mods\":{}")]
+        [TestCase("\"Mods\":{\"Sight\":0,\"\\u0053ight\":0}")]
+        [TestCase("\"Mods\":{\"OwnedSight\":\"1\"}")]
+        [TestCase("\"Mods\":{\"Grip\":1.0,\"OwnedGrip\":2}")]
+        [TestCase("\"Mods\":{\"OwnedGrip\":true}")]
+        [TestCase("\"Mods\":{\"Stock\":-1}")]
+        [TestCase("\"Mods\":{\"OwnedStock\":3}")]
+        [TestCase("\"Mods\":{\"Stock\":2,\"OwnedStock\":1}")]
+        [TestCase("\"Mods\":{},\"LoadedAmmo\":9")]
+        public void KnownItemFieldsRejectWrongTypesDuplicatesAndInvalidLevels(string fields)
+        {
+            string json = "{\"Version\":1,\"Credits\":690,\"Stash\":[],\"Loadout\":[" + V1Rifle + "," + fields + "}]}";
+            LoadRejectsInvalidJsonOrSchemaWithoutChangingFile(json);
+        }
+
+        [TestCase("\"LoadedAmmo\":8", "\"LoadedAmmo\":\"8\"")]
+        [TestCase("\"Rotated\":false", "\"Rotated\":0")]
+        [TestCase("\"Slot\":1", "\"Slot\":1.0")]
+        [TestCase("\"InstanceId\":\"v1-rifle\"", "\"InstanceId\":true")]
+        public void LegacyItemFieldsRemainStrictlyTyped(string original, string replacement)
+        {
+            LoadRejectsInvalidJsonOrSchemaWithoutChangingFile(V1Profile.Replace(original, replacement));
+        }
+
+        [Test]
+        public void AdditiveFieldsDoNotRequireOtherNewFieldsOrAFieldOrder()
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                Directory.CreateDirectory(directory);
+                var store = new ProfileStore(System.IO.Path.Combine(directory, "profile.json"));
+                string item = V1Rifle.Insert(1, "\"Mods\":{\"OwnedStock\":2},");
+                string json = "{\"Version\":1,\"Credits\":690,\"Stash\":[],\"Loadout\":[" + item + "}]}";
+                File.WriteAllText(store.Path, json);
+                var loaded = store.Load();
+                Assert.That(loaded.BoundBladeId, Is.Empty);
+                Assert.That(loaded.Loadout[0].Mods.Stock, Is.Zero);
+                Assert.That(loaded.Loadout[0].Mods.OwnedStock, Is.EqualTo(2));
+                Assert.That(loaded.Loadout[0].LoadedAmmo, Is.EqualTo(8));
+                store.Save(loaded);
+                Assert.That(File.ReadAllText(store.LegacyBackupPath), Is.EqualTo(json));
+                Assert.That(store.Load().Loadout[0].Mods, Is.EqualTo(loaded.Loadout[0].Mods));
             }
             finally
             {
@@ -135,7 +286,9 @@ namespace Dustline
                 File.WriteAllText(path, json);
                 var store = new ProfileStore(path);
                 Assert.Throws<InvalidDataException>(() => store.Load());
+                Assert.Throws<InvalidDataException>(() => store.Save(new ProfileData()));
                 Assert.That(File.ReadAllText(path), Is.EqualTo(json));
+                Assert.That(Directory.GetFiles(directory), Is.EquivalentTo(new[] { path }));
             }
             finally
             {
@@ -156,6 +309,8 @@ namespace Dustline
         [TestCase("equipped-stack")]
         [TestCase("duplicate-slot")]
         [TestCase("invalid-loaded")]
+        [TestCase("non-rifle-mods")]
+        [TestCase("invalid-mod-level")]
         [TestCase("invalid-version")]
         [TestCase("negative-credits")]
         [TestCase("negative-raids")]
@@ -192,6 +347,11 @@ namespace Dustline
                         });
                         break;
                     case "invalid-loaded": profile.Stash[0].LoadedAmmo = -2; break;
+                    case "non-rifle-mods": profile.Stash[0].Mods = new WeaponMods { OwnedGrip = 1 }; break;
+                    case "invalid-mod-level":
+                        profile.Stash[0].ItemId = WeaponDefinition.RifleId;
+                        profile.Stash[0].Mods = new WeaponMods { Grip = 2, OwnedGrip = 1 };
+                        break;
                     case "invalid-version": profile.Version = 2; break;
                     case "negative-credits": profile.Credits = -1; break;
                     case "negative-raids": profile.Raids = -1; break;
@@ -265,19 +425,25 @@ namespace Dustline
             }
         }
 
-        [Test]
-        public void InvalidEncodingIsReportedAsCorruptData()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void InvalidEncodingIsReportedAsCorruptData(bool bom)
         {
             string directory = TemporaryDirectory();
             try
             {
                 Directory.CreateDirectory(directory);
                 string path = System.IO.Path.Combine(directory, "profile.json");
-                byte[] bytes = { 0x7b, 0xff, 0x7d };
+                string json = V1Profile.Insert(V1Profile.Length - 1, ",\"BoundBladeId\":\"tang?dao\"");
+                File.WriteAllText(path, json, new System.Text.UTF8Encoding(bom));
+                byte[] bytes = File.ReadAllBytes(path);
+                bytes[Array.IndexOf(bytes, (byte)'?')] = 0xff;
                 File.WriteAllBytes(path, bytes);
                 var store = new ProfileStore(path);
                 Assert.Throws<InvalidDataException>(() => store.Load());
+                Assert.Throws<InvalidDataException>(() => store.Save(new ProfileData()));
                 Assert.That(File.ReadAllBytes(path), Is.EqualTo(bytes));
+                Assert.That(Directory.GetFiles(directory), Is.EquivalentTo(new[] { path }));
             }
             finally
             {

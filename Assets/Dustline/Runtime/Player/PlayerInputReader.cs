@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using GyroDevice = UnityEngine.InputSystem.Gyroscope;
 
 namespace Dustline
 {
@@ -11,6 +12,11 @@ namespace Dustline
         public const int MaxSprintThreshold = 99;
         public int SprintThreshold { get; set; } = DefaultSprintThreshold;
         public bool SprintAllowed { get; set; } = true;
+        public float LookSensitivity { get; set; } = 1f;
+        public float GyroSensitivity { get; set; } = 1f;
+        public GyroMode GyroUsage { get; set; }
+        public AimMode AimBehavior { get; private set; }
+        public bool HasGyroscope => Application.isMobilePlatform && GyroDevice.current != null;
         public bool Gameplay;
         public bool TouchMode => Application.isMobilePlatform || ForceTouch;
         public bool ForceTouch;
@@ -29,12 +35,17 @@ namespace Dustline
         public bool InteractPressed { get; private set; }
         public bool InventoryPressed { get; private set; }
         public bool SettingsPressed { get; private set; }
+        public bool MapPressed { get; private set; }
+        public bool SwitchWeaponPressed { get; private set; }
         public bool HealPressed { get; private set; }
         public bool EscapePressed { get; private set; }
         public Vector2 TouchMove;
-        Vector2 touchLook;
-        bool touchFire, touchFireTap, touchAim, touchLeanLeft, touchLeanRight, autoSprint, wasFire, mouseArmed;
-        bool reload, crouch, prone, jump, interact, inventory, heal, settings;
+        Vector2 touchLook, gyroSmoothed;
+        GyroDevice gyro;
+        bool ownsGyro, aimAvailable, mouseAimArmed;
+        AimGesture aimGesture;
+        bool touchFire, touchFireTap, touchLeanLeft, touchLeanRight, autoSprint, wasFire, mouseArmed;
+        bool reload, crouch, prone, jump, interact, inventory, heal, settings, map, weaponSwap;
 
         void Update()
         {
@@ -43,6 +54,8 @@ namespace Dustline
             InventoryPressed = inventory || (keyboard?.tabKey.wasPressedThisFrame ?? false);
             EscapePressed = keyboard?.escapeKey.wasPressedThisFrame ?? false;
             SettingsPressed = settings;
+            MapPressed = map || (keyboard?.mKey.wasPressedThisFrame ?? false);
+            SwitchWeaponPressed = Gameplay && (weaponSwap || (keyboard?.xKey.wasPressedThisFrame ?? false));
             ReloadPressed = reload || (keyboard?.rKey.wasPressedThisFrame ?? false);
             CrouchPressed = crouch || (keyboard?.cKey.wasPressedThisFrame ?? false);
             PronePressed = prone || (keyboard?.zKey.wasPressedThisFrame ?? false);
@@ -51,15 +64,15 @@ namespace Dustline
             LeanRight = touchLeanRight || (keyboard?.eKey.isPressed ?? false);
             InteractPressed = interact || (keyboard?.fKey.wasPressedThisFrame ?? false);
             HealPressed = heal || (keyboard?.hKey.wasPressedThisFrame ?? false);
-            inventory = reload = crouch = prone = jump = interact = heal = settings = false;
+            inventory = reload = crouch = prone = jump = interact = heal = settings = map = weaponSwap = false;
             Move = Vector2.zero;
             if (keyboard != null)
                 Move = new Vector2((keyboard.dKey.isPressed ? 1 : 0) - (keyboard.aKey.isPressed ? 1 : 0),
                     (keyboard.wKey.isPressed ? 1 : 0) - (keyboard.sKey.isPressed ? 1 : 0));
             Move = Vector2.ClampMagnitude(Move + TouchMove, 1);
-            Look = touchLook * 0.13f;
+            Look = touchLook * (0.13f * LookSensitivity);
             bool mouseLook = !TouchMode && Cursor.lockState == CursorLockMode.Locked && mouse != null;
-            if (mouseLook) Look += mouse.delta.ReadValue() * 0.08f;
+            if (mouseLook) Look += mouse.delta.ReadValue() * (0.08f * LookSensitivity);
             touchLook = Vector2.zero;
             bool mouseCanFire = mouseLook && mouseArmed;
             bool held = touchFire || (mouseCanFire && mouse.leftButton.isPressed);
@@ -68,10 +81,22 @@ namespace Dustline
             touchFireTap = false;
             Fire = Gameplay && (held || tapped);
             FirePressed = Gameplay && (tapped || held && !wasFire);
-            Aim = touchAim || (mouseLook && mouse.rightButton.isPressed);
+            if (mouseLook && Gameplay && aimAvailable)
+            {
+                var right = mouse.rightButton;
+                double now = Time.unscaledTimeAsDouble;
+                if (mouseAimArmed)
+                {
+                    if (right.wasPressedThisFrame) aimGesture.Set(true, AimBehavior, now);
+                    aimGesture.Set(right.isPressed, AimBehavior, now);
+                }
+                else if (!right.isPressed) mouseAimArmed = true;
+            }
+            Aim = Gameplay && aimAvailable && aimGesture.Active(AimBehavior);
+            Look += ReadGyro();
             if (!SprintAllowed) autoSprint = false;
             else autoSprint = Gameplay && TouchMode && !Aim && AutoSprintForward(TouchMove.y, autoSprint, SprintThreshold);
-            Sprint = SprintAllowed && (TouchMode ? autoSprint : (keyboard?.leftShiftKey.isPressed ?? false));
+            Sprint = SprintAllowed && !Aim && (TouchMode ? autoSprint : (keyboard?.leftShiftKey.isPressed ?? false));
             if (!Gameplay) { Move = Look = Vector2.zero; Aim = Sprint = LeanLeft = LeanRight = false; }
             wasFire = Gameplay && held;
         }
@@ -85,6 +110,69 @@ namespace Dustline
             return forward >= threshold / 100f;
         }
 
+        public void SetAimMode(AimMode mode)
+        {
+            if (AimBehavior == mode) return;
+            AimBehavior = mode;
+            CancelAimGesture();
+        }
+
+        public void SetAimAvailable(bool available)
+        {
+            if (aimAvailable == available) return;
+            aimAvailable = available;
+            CancelAimGesture();
+        }
+
+        public void CancelAimGesture()
+        {
+            aimGesture = default;
+            Aim = mouseAimArmed = false;
+            gyroSmoothed = Vector2.zero;
+        }
+
+        Vector2 ReadGyro()
+        {
+            var device = Gameplay && GyroUsage != GyroMode.Off && HasGyroscope ? GyroDevice.current : null;
+            if (device != gyro)
+            {
+                ReleaseGyro();
+                gyro = device;
+                if (gyro != null && !gyro.enabled)
+                {
+                    InputSystem.EnableDevice(gyro);
+                    ownsGyro = true;
+                }
+            }
+            if (gyro == null || GyroUsage == GyroMode.AimOnly && !Aim)
+            {
+                gyroSmoothed = Vector2.zero;
+                return Vector2.zero;
+            }
+            Vector3 angular = gyro.angularVelocity.ReadValue();
+            Vector2 axes = new Vector2(angular.x, angular.y);
+            if (!InputSystem.settings.compensateForScreenOrientation)
+            {
+                if (Screen.orientation == ScreenOrientation.LandscapeLeft) axes = new Vector2(-axes.y, axes.x);
+                else if (Screen.orientation == ScreenOrientation.LandscapeRight) axes = new Vector2(axes.y, -axes.x);
+                else if (Screen.orientation == ScreenOrientation.PortraitUpsideDown) axes = -axes;
+            }
+            if (float.IsNaN(axes.x) || float.IsInfinity(axes.x) || float.IsNaN(axes.y) || float.IsInfinity(axes.y))
+                return Vector2.zero;
+            if (axes.sqrMagnitude < 0.000196f) axes = Vector2.zero;
+            float delta = Mathf.Min(Time.unscaledDeltaTime, 0.05f);
+            gyroSmoothed = Vector2.Lerp(gyroSmoothed, new Vector2(-axes.y, axes.x), 1 - Mathf.Exp(-32f * delta));
+            return gyroSmoothed * (Mathf.Rad2Deg * delta * GyroSensitivity);
+        }
+
+        void ReleaseGyro()
+        {
+            if (gyro != null && gyro.added && ownsGyro) InputSystem.DisableDevice(gyro);
+            gyro = null;
+            ownsGyro = false;
+            gyroSmoothed = Vector2.zero;
+        }
+
         public void AddLook(Vector2 delta) { touchLook += delta; }
         public void Hold(string action, bool down)
         {
@@ -93,7 +181,8 @@ namespace Dustline
                 touchFireTap |= down && !touchFire;
                 touchFire = down;
             }
-            if (action == "Aim") touchAim = down;
+            if (action == "Aim" && Gameplay && aimAvailable)
+                aimGesture.Set(down, AimBehavior, Time.unscaledTimeAsDouble);
             if (action == "LeanLeft") touchLeanLeft = down;
             if (action == "LeanRight") touchLeanRight = down;
         }
@@ -106,16 +195,22 @@ namespace Dustline
             if (action == "Interact") interact = true;
             if (action == "Inventory") inventory = true;
             if (action == "Settings") settings = true;
+            if (action == "Map") map = true;
+            if (action == "SwitchWeapon") weaponSwap = true;
             if (action == "Heal") heal = true;
         }
         public void ReleaseTouch()
         {
             TouchMove = touchLook = Move = Look = Vector2.zero;
-            Fire = FirePressed = Aim = Sprint = wasFire = mouseArmed = false;
-            touchFire = touchFireTap = touchAim = touchLeanLeft = touchLeanRight = autoSprint = false;
-            LeanLeft = LeanRight = false;
-            reload = crouch = prone = jump = interact = inventory = heal = settings = false;
+            Fire = FirePressed = Sprint = wasFire = mouseArmed = false;
+            touchFire = touchFireTap = touchLeanLeft = touchLeanRight = autoSprint = false;
+            LeanLeft = LeanRight = SwitchWeaponPressed = false;
+            ReloadPressed = CrouchPressed = PronePressed = JumpPressed = InteractPressed = HealPressed = false;
+            reload = crouch = prone = jump = interact = inventory = heal = settings = map = weaponSwap = false;
+            CancelAimGesture();
+            if (!Gameplay) ReleaseGyro();
         }
-        void OnApplicationFocus(bool focus) { if (!focus) ReleaseTouch(); }
+        void OnApplicationFocus(bool focus) { if (!focus) { ReleaseTouch(); ReleaseGyro(); } }
+        void OnDisable() { ReleaseGyro(); }
     }
 }

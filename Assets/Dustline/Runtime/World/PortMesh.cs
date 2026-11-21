@@ -10,7 +10,8 @@ namespace Dustline
         Sand, SandDark, Gravel, Asphalt, Concrete, ConcreteLight, Joint, Plaster,
         Steel, Slate, Zinc, DeepBlue, Glass, SignalBlue, Teal, Emerald,
         Rust, Terra, Ochre, Yellow, Paint, Paper, Canvas, Red,
-        Water, WaterLight, WaterDark, Timber
+        Water, WaterLight, WaterDark, Timber,
+        Rock, RockLichen, Bark, Needles, NeedlesLight, Leaves, DryGrass, FlowerPale, FlowerOchre, Amber
     }
 
     internal sealed class PortMaterials
@@ -26,10 +27,13 @@ namespace Dustline
             new Color32(216,173,71,255), new Color32(211,217,194,255), new Color32(205,177,126,255),
             new Color32(114,118,80,255), new Color32(184,65,58,255),
             new Color32(55,88,104,255), new Color32(77,114,123,255), new Color32(39,68,86,255),
-            new Color32(128,99,69,255)
+            new Color32(128,99,69,255), new Color32(103,106,103,255), new Color32(126,130,112,255),
+            new Color32(77,65,52,255), new Color32(49,74,62,255), new Color32(73,94,69,255),
+            new Color32(89,107,68,255), new Color32(134,132,90,255), new Color32(205,187,153,255),
+            new Color32(199,150,72,255), new Color32(231,180,94,255)
         };
-        const int Tile = 32, Columns = 8, Rows = 4;
-        internal readonly Material Structure, Pavement, Sea, Dark;
+        const int Tile = 32, Columns = 8, Rows = 8;
+        internal readonly Material Structure, Pavement, Sea, Dark, Ground, Lamp;
 
         internal PortMaterials(Action<UnityEngine.Object> keep)
         {
@@ -37,7 +41,7 @@ namespace Dustline
             if (shader == null) shader = Shader.Find("Standard");
             var texture = new Texture2D(Columns * Tile, Rows * Tile, TextureFormat.RGBA32, 5, false)
             {
-                name = "Port swatches", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear
+                name = "Port swatches", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2
             };
             keep(texture);
             var pixels = new Color32[texture.width * texture.height];
@@ -46,15 +50,19 @@ namespace Dustline
                 {
                     int swatch = (y / Tile) * Columns + x / Tile;
                     Color32 c = colors[swatch % colors.Length];
-                    int grit = ((x * 23 + y * 17 + (x ^ y) * 13) % 9) - 4;
-                    grit += ((x % Tile / 5 + y % Tile / 4 * 3) % 5) - 2;
+                    float weather = Mathf.PerlinNoise((x % Tile) * .28f + swatch * 1.09f, (y % Tile) * .21f);
+                    int grit = Mathf.RoundToInt((weather - .5f) * 14);
                     pixels[x + y * texture.width] = new Color32((byte)(c.r + grit), (byte)(c.g + grit), (byte)(c.b + grit), 255);
                 }
             texture.SetPixels32(pixels);
             texture.Apply(true, true);
             Structure = Make("Port structures", texture, 0.18f);
             Pavement = Make("Port pavement", texture, 0.07f);
-            Sea = Make("Port water", texture, 0.36f);
+            Sea = Make("Port water", texture, 0.24f);
+            Ground = Make("Harbor grade atlas", null, 0.065f);
+            Lamp = Make("Weatherproof amber luminaires", texture, 0.16f);
+            Lamp.EnableKeyword("_EMISSION");
+            Lamp.SetColor("_EmissionColor", new Color(.91f, .49f, .17f) * 1.15f);
             Dark = Make("Steel", null, 0.2f);
             Dark.SetColor("_BaseColor", new Color(0.09f, 0.12f, 0.14f));
 
@@ -201,19 +209,21 @@ namespace Dustline
         readonly PortMaterials materials;
         readonly Action<UnityEngine.Object> keep;
 
-        internal PortChunk(Transform parent, string name, PortMaterials materials, Action<UnityEngine.Object> keep)
+        internal PortChunk(Transform parent, string name, PortMaterials materials, Action<UnityEngine.Object> keep, float grade = 0)
         {
             Root = PortMesh.Child(parent, name);
+            Root.transform.localPosition = Vector3.up * grade;
             Root.isStatic = true;
             this.materials = materials;
             this.keep = keep;
         }
 
-        internal void Collider(Vector3 center, Vector3 size)
+        internal BoxCollider Collider(Vector3 center, Vector3 size)
         {
             var box = Root.AddComponent<BoxCollider>();
             box.center = center;
             box.size = size;
+            return box;
         }
 
         internal void Block(Vector3 center, Vector3 size, PortTone tone)

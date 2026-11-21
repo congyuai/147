@@ -41,6 +41,38 @@ namespace Dustline.Tests
             yield return null;
         }
 
+        [UnityTest]
+        public IEnumerator BuiltPortHasAsphaltConcreteGravelWoodSteelGrassAndDirtUnderfoot()
+        {
+            using (var built = new PortWorldFixture())
+            {
+                Check(-334, -232, SurfaceKind.Asphalt);
+                Check(-379, -335, SurfaceKind.Concrete);
+                Check(-290, 240, SurfaceKind.Gravel);
+                Check(-309, 253, SurfaceKind.Wood);
+                Check(-334, -44, SurfaceKind.Metal);
+                bool grass = false, dirt = false;
+                for (float z = 26.4f; z < 158 && !(grass && dirt); z += 6.4f)
+                    for (float x = -428.6f; x < -373; x += 6.4f)
+                    {
+                        var ground = PortWorldFixture.Floor(x, z);
+                        switch (FootstepSurface.Underfoot(ground + Vector3.up * .02f))
+                        {
+                            case SurfaceKind.Grass: grass = true; break;
+                            case SurfaceKind.Dirt: dirt = true; break;
+                        }
+                    }
+                Assert.That(grass && dirt, Is.True, "The natural bank should provide both soft surface types.");
+            }
+            yield return null;
+
+            static void Check(float x, float z, SurfaceKind kind)
+            {
+                var floor = PortWorldFixture.Floor(x, z);
+                Assert.That(FootstepSurface.Underfoot(floor + Vector3.up * .02f), Is.EqualTo(kind), $"Surface at ({x}, {z})");
+            }
+        }
+
         static BoxCollider Floor(Transform parent, string name, Vector3 position, Vector3 size)
         {
             var floor = new GameObject(name);

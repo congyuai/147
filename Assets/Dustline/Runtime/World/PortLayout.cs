@@ -40,6 +40,11 @@ namespace Dustline
         internal const float ExitKeepout = 82f;
         internal const float SpawnKeepout = 96f;
         public static readonly Vector3 Spawn = new Vector3(-366, 0.12f, -326);
+        public static readonly Rect HighValueArea = Rect.MinMaxRect(232, 98, 311, 151);
+        public const string HighValueName = "海事检修站";
+        public static readonly Vector3 HighValueCenter = At(255, 117);
+
+        public static Color32 MapColor(Vector2 mapXZ) => PortTerrain.ColorAt(mapXZ, true);
 
         public static readonly IReadOnlyList<PortDistrict> Districts = Array.AsReadOnly(new[] {
             new PortDistrict("集装箱堆场", At(-183, -154), Rect.MinMaxRect(-318, -271, -55, -42)),
@@ -61,13 +66,18 @@ namespace Dustline
 
         internal static readonly Vector3[] BotPosts = {
             At(-246, -221), At(-179, -259), At(-121, -146),
-            At(-270, 39), At(-179, 78), At(-84, 121),
+            At(-270, 39), At(-153, 81), At(-84, 121),
             At(39, -210), At(104, -111), At(192, -174),
             At(-205, 207), At(-109, 279), At(92, 284),
-            At(251, -33), At(285, 63)
+            At(251, -33), At(285, 48)
         };
 
-        internal static Vector3 At(float x, float z) => new Vector3(x, 0, z);
+        internal static readonly Vector3[] GuardPosts = {
+            At(250, 100), At(279, 104), At(238, 129), At(297, 124), At(255, 138)
+        };
+
+        internal static Vector3 At(float x, float z) => new Vector3(x, PortTerrain.Floor(x, z), z);
+        internal static bool InHighValueArea(Vector3 p) => HighValueArea.Contains(new Vector2(p.x, p.z));
 
         internal static int DistrictIndex(Vector3 position)
         {
@@ -87,7 +97,7 @@ namespace Dustline
 
         internal static bool CanPostBot(Vector3 point)
         {
-            if (DistanceSquared(point, Spawn) < SpawnKeepout * SpawnKeepout) return false;
+            if (InHighValueArea(point) || DistanceSquared(point, Spawn) < SpawnKeepout * SpawnKeepout) return false;
             foreach (var exit in Exits)
                 if (DistanceSquared(point, exit.Position) < ExitKeepout * ExitKeepout) return false;
             return true;
