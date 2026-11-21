@@ -21,7 +21,7 @@ namespace Dustline
         AudioSource foley;
         AudioClip reloadClip, dryClip;
         GameObject presentation;
-        CombatFxBatch batch;
+        CombatFxBatch batch, foregroundFlash;
         Camera eye;
         int localVoice, localBurst, remoteBurst, remoteTracer, lastClip = -1;
         int nextMark, liveMarks;
@@ -53,6 +53,9 @@ namespace Dustline
             presentation = new GameObject("Combat presentation") { layer = 2 };
             presentation.transform.SetParent(transform, false);
             batch = new CombatFxBatch(presentation, bursts.Length, marks.Length);
+            var flashNode = new GameObject("First person muzzle flash") { layer = FirstPersonView.Layer };
+            flashNode.transform.SetParent(presentation.transform, false);
+            foregroundFlash = new CombatFxBatch(flashNode, LocalBursts, 0, batch);
             for (int i = 0; i < shotClips.Length; i++) shotClips[i] = CombatFoley.Shot(i);
             reloadClip = CombatFoley.Reload();
             dryClip = CombatFoley.Dry();
@@ -63,15 +66,15 @@ namespace Dustline
         }
 
         public void Shot(Vector3 muzzle, Vector3 end, Vector3 normal, bool hit, bool actorHit, bool local)
-            => EnqueueShot(muzzle, end, normal, hit, actorHit, local, null, null);
+            => EnqueueShot(muzzle, end, normal, hit, actorHit, local, null, null, true);
 
-        internal void Shot(Transform muzzle, Vector3 end, in RaycastHit hit, bool actorHit)
+        internal void Shot(Transform muzzle, Vector3 end, in RaycastHit hit, bool actorHit, bool clearTracer)
         {
             var surface = hit.collider;
-            EnqueueShot(muzzle.position, end, hit.normal, surface != null, actorHit, true, muzzle, surface);
+            EnqueueShot(muzzle.position, end, hit.normal, surface != null, actorHit, true, muzzle, surface, clearTracer);
         }
 
-        void EnqueueShot(Vector3 muzzle, Vector3 end, Vector3 normal, bool hit, bool actorHit, bool local, Transform anchor, Collider surface)
+        void EnqueueShot(Vector3 muzzle, Vector3 end, Vector3 normal, bool hit, bool actorHit, bool local, Transform anchor, Collider surface, bool clearTracer)
         {
             if (!initialized || !isActiveAndEnabled) return;
             var observer = Observer();
@@ -98,9 +101,10 @@ namespace Dustline
             Vector3 delta = end - muzzle;
             float length = delta.magnitude;
             bool nearSide = local && Vector3.Dot(delta, observer.forward) < 0.035f;
-            Vector3 axis = length > 0.001f && !nearSide ? delta / length : observer.forward;
+            Vector3 axis = anchor != null && !clearTracer ? anchor.forward
+                : length > 0.001f && !nearSide ? delta / length : observer.forward;
             float now = Time.time;
-            bool trace = showMuzzle && !nearSide && length > 0.38f && TracersEnabled && (local || remoteTracer++ % 3 == 0);
+            bool trace = showMuzzle && clearTracer && !nearSide && length > 0.38f && TracersEnabled && (local || remoteTracer++ % 3 == 0);
             int index = local ? localBurst++ : LocalBursts + remoteBurst++;
             if (localBurst == LocalBursts) localBurst = 0;
             if (remoteBurst == RemoteBursts) remoteBurst = 0;
@@ -247,10 +251,11 @@ namespace Dustline
         void Draw(float now)
         {
             if (!initialized) return;
-            if (now >= visualsUntil && liveMarks == 0) { batch.Hide(); return; }
+            if (now >= visualsUntil && liveMarks == 0) { batch.Hide(); foregroundFlash.Hide(); return; }
             var observer = Observer();
-            if (observer == null) { DrawMarks(now, null); batch.Hide(); return; }
+            if (observer == null) { DrawMarks(now, null); batch.Hide(); foregroundFlash.Hide(); return; }
             batch.Begin(observer);
+            foregroundFlash.Begin(observer);
             if (liveMarks != 0) DrawMarks(now, observer);
             for (int i = now < visualsUntil ? bursts.Length - 1 : -1; i >= 0; i--)
             {
@@ -262,6 +267,7 @@ namespace Dustline
                 if (shot.Impact) DrawImpact(in shot, age);
             }
             batch.Upload();
+            foregroundFlash.Upload();
         }
 
         void DrawMarks(float now, Transform observer)
@@ -307,9 +313,11 @@ namespace Dustline
             const float flashLife = 0.058f;
             if (age >= flashLife) return;
             Vector3 start = shot.Start, axis = shot.Axis;
+            var flash = batch;
             if (shot.FlashAnchor != null)
             {
                 if (!shot.FlashAnchor.gameObject.activeInHierarchy) return;
+                flash = foregroundFlash;
                 start = shot.FlashAnchor.position;
                 axis = shot.FlashAnchor.forward;
                 side = shot.FlashAnchor.right;
@@ -320,22 +328,22 @@ namespace Dustline
             float length = (0.15f + shot.Seed * 0.09f) * (1.16f - 0.4f * fade);
             Vector3 rear = start - axis * 0.028f;
             Vector3 tip = start + axis * length;
-            batch.Billboard(start + axis * 0.043f, width * 1.7f, 0, CombatFxBatch.Ink.Glow, 0.7f * fade);
+            flash.Billboard(start + axis * 0.043f, width * 1.7f, 0, CombatFxBatch.Ink.Glow, 0.7f * fade);
             for (int i = 0; i < 3; i++)
             {
                 float phase = shot.Seed * 6.28f + i * Mathf.PI / 3;
                 Vector3 blade = (side * Mathf.Cos(phase) + up * Mathf.Sin(phase)) * width;
-                batch.Quad(rear - blade * 0.66f, rear + blade * 0.66f, tip + blade, tip - blade,
+                flash.Quad(rear - blade * 0.66f, rear + blade * 0.66f, tip + blade, tip - blade,
                     CombatFxBatch.Ink.Tongue, fade);
             }
             Vector3 core = start + axis * 0.033f;
             side *= width * 0.32f;
             up *= width * 0.32f;
             Vector3 front = start + axis * (length * 0.71f);
-            batch.Ridge(rear, front, core + side, core + up, CombatFxBatch.Ink.Core, fade);
-            batch.Ridge(rear, front, core + up, core - side, CombatFxBatch.Ink.CoreEdge, fade);
-            batch.Ridge(rear, front, core - side, core - up, CombatFxBatch.Ink.Core, fade);
-            batch.Ridge(rear, front, core - up, core + side, CombatFxBatch.Ink.CoreEdge, fade);
+            flash.Ridge(rear, front, core + side, core + up, CombatFxBatch.Ink.Core, fade);
+            flash.Ridge(rear, front, core + up, core - side, CombatFxBatch.Ink.CoreEdge, fade);
+            flash.Ridge(rear, front, core - side, core - up, CombatFxBatch.Ink.Core, fade);
+            flash.Ridge(rear, front, core - up, core + side, CombatFxBatch.Ink.CoreEdge, fade);
         }
 
         void DrawTracer(in Burst shot, float age)
@@ -390,7 +398,8 @@ namespace Dustline
 
         void OnDisable()
         {
-            if (batch != null) batch.Hide();
+            batch?.Hide();
+            foregroundFlash?.Hide();
             visualsUntil = 0;
             System.Array.Clear(bursts, 0, bursts.Length);
             System.Array.Clear(marks, 0, marks.Length);
@@ -401,7 +410,8 @@ namespace Dustline
 
         void OnDestroy()
         {
-            if (batch != null) batch.Release();
+            foregroundFlash?.Release();
+            batch?.Release();
             foreach (var clip in shotClips) if (clip != null) Destroy(clip);
             if (reloadClip != null) Destroy(reloadClip);
             if (dryClip != null) Destroy(dryClip);

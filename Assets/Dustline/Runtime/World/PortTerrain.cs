@@ -239,23 +239,31 @@ namespace Dustline
 
         static float TrackDistance(float z) => Mathf.Min(Mathf.Abs(z - 233), Mathf.Min(Mathf.Abs(z - 253), Mathf.Abs(z - 294)));
 
-        internal static Color32 ColorAt(Vector2 p, bool map)
+        internal static Color32 ColorAt(Vector2 p, bool map) => ColorAt(p, map, out _);
+
+        static Color32 ColorAt(Vector2 p, bool map, out SurfaceKind surface)
         {
             float x = p.x, z = p.y;
+            surface = SurfaceKind.Dirt;
             bool bridge = false;
             foreach (var span in Bridges)
                 if (span.Covers(x, z)) { bridge = true; break; }
             if (!bridge && IsWater(x, z)) return new Color32(48, 77, 92, 255);
             if (map)
                 foreach (var roof in roofs)
-                    if (roof.Contains(p)) return new Color32(122, 141, 148, 255);
+                    if (roof.Contains(p))
+                    {
+                        float edge = Mathf.Min(Mathf.Min(x - roof.xMin, roof.xMax - x), Mathf.Min(z - roof.yMin, roof.yMax - z));
+                        return edge < 0.9f ? new Color32(79, 105, 113, 255) : new Color32(140, 157, 159, 255);
+                    }
 
             float noise = Mathf.PerlinNoise(x * .27f + 101.1f, z * .27f + 44.2f) - .5f;
             float patch = Mathf.PerlinNoise(x * .038f + 163.8f, z * .038f + 13.2f);
             Color c;
-            switch (Surface(x, z))
+            surface = Surface(x, z);
+            switch (surface)
             {
-                case SurfaceKind.Asphalt: c = new Color(.295f, .315f, .318f); break;
+                case SurfaceKind.Asphalt: c = map ? new Color(.24f, .29f, .31f) : new Color(.295f, .315f, .318f); break;
                 case SurfaceKind.Concrete: c = new Color(.535f, .55f, .526f); break;
                 case SurfaceKind.Gravel: c = new Color(.436f, .428f, .383f); break;
                 case SurfaceKind.Metal: c = new Color(.41f, .45f, .46f); break;
@@ -268,13 +276,19 @@ namespace Dustline
                     break;
             }
             float shade = noise * (map ? .035f : .115f) + (patch - .5f) * .105f;
-            if (map) shade += Mathf.Clamp(Floor(x, z) * .0015f, -.012f, .12f);
+            if (map)
+            {
+                float floor = Floor(x, z);
+                shade += Mathf.Clamp(floor * .0015f, -.012f, .12f);
+                if (surface == SurfaceKind.Grass || surface == SurfaceKind.Dirt)
+                    shade -= Mathf.Clamp01(1f - Mathf.Abs(Mathf.Repeat(floor + 6f, 12f) - 6f) * 1.9f) * .045f;
+            }
             return new Color(c.r + shade, c.g + shade, c.b + shade, 1);
         }
 
-        internal static Color32 PaintedColor(Vector2 p, float texel)
+        internal static Color32 PaintedColor(Vector2 p, float texel, out SurfaceKind surface)
         {
-            Color32 baseColor = ColorAt(p, false);
+            Color32 baseColor = ColorAt(p, false, out surface);
             for (int i = 0; i < Exits.Count; i++)
             {
                 var exit = Exits[i];
@@ -283,8 +297,8 @@ namespace Dustline
                 float radial = Mathf.Sqrt(x * x + z * z);
                 float pad = Mathf.Clamp01(.5f + (exit.Radius - radial) / texel);
                 float ring = Paint(radial - exit.Radius + .53f, .58f, texel);
-                Color32 surface = Color32.Lerp(baseColor, new Color32(38, 66, 74, 255), pad);
-                return Color32.Lerp(surface, new Color32(93, 190, 146, 255), ring);
+                Color32 padColor = Color32.Lerp(baseColor, new Color32(38, 66, 74, 255), pad);
+                return Color32.Lerp(padColor, new Color32(93, 190, 146, 255), ring);
             }
             if (p.x > -344 && p.x < 174 && TrackDistance(p.y) < 2.5f)
             {

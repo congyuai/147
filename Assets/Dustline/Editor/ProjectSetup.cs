@@ -15,9 +15,11 @@ namespace Dustline.Editor
         const string Root = "Assets/Dustline/Resources/Dustline";
         const string Scene = "Assets/Dustline/Scenes/Bootstrap.unity";
         const string PipelinePath = "Assets/Dustline/Settings/MobilePipeline.asset";
+        const string RendererPath = "Assets/Dustline/Settings/MobileRenderer.asset";
         const string RenderingRoot = Root + "/Rendering";
-        const string Version = "0.3.0";
-        const int AndroidVersionCode = 4;
+        const string Version = "0.3.1";
+        const int AndroidVersionCode = 5;
+        const int RaidRendererLayers = FirstPersonView.Mask | (1 << 2) | 1;
         static readonly Dictionary<string, string> ItemNames = new Dictionary<string, string> {
             { "rifle", "AR-20突击步枪" }, { "ammo", "5.56毫米弹药" },
             { "medkit", "战地医疗包" }, { "armor", "战术防弹衣" },
@@ -33,18 +35,22 @@ namespace Dustline.Editor
             if (EditorApplication.isPlayingOrWillChangePlaymode) return;
             var catalog = AssetDatabase.LoadAssetAtPath<ItemCatalog>(Root + "/Items.asset");
             var blades = AssetDatabase.LoadAssetAtPath<BladeCatalog>(Root + "/Blades.asset");
-            var renderer = AssetDatabase.LoadAssetAtPath<UniversalRendererData>("Assets/Dustline/Settings/MobileRenderer.asset");
+            var renderer = AssetDatabase.LoadAssetAtPath<UniversalRendererData>(RendererPath);
             var pipeline = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(PipelinePath);
             if (catalog == null
-                || renderer == null
+                || renderer == null || renderer.renderingMode != RenderingMode.Forward
+                || (renderer.opaqueLayerMask.value & RaidRendererLayers) != RaidRendererLayers
+                || (renderer.transparentLayerMask.value & RaidRendererLayers) != RaidRendererLayers
+                || !PortTextureSetup.IsPrepared()
                 || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/Loot.asset") == null
                 || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/HighValueLoot.asset") == null
                 || blades == null || blades.Resolve(null)?.Form != WeaponForm.Tangdao
                 || blades.Resolve(BladeCatalog.ShortBladeId)?.Form != WeaponForm.ShortBlade
                 || pipeline == null || GraphicsSettings.defaultRenderPipeline != pipeline
                 || !pipeline.supportsSoftShadows || pipeline.shadowCascadeCount != 2
-                || AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(RenderingRoot + "/Low.asset") == null
-                || AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(RenderingRoot + "/High.asset") == null
+                || !UsesRenderer(pipeline, renderer)
+                || !UsesRenderer(AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(RenderingRoot + "/Low.asset"), renderer)
+                || !UsesRenderer(AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(RenderingRoot + "/High.asset"), renderer)
                 || pipeline.additionalLightsRenderingMode != LightRenderingMode.PerPixel
                 || catalog.Find(WeaponDefinition.BatonId)?.Weapon?.Form != WeaponForm.Baton
                 || PlayerSettings.bundleVersion != Version
@@ -67,15 +73,21 @@ namespace Dustline.Editor
             Directory.CreateDirectory(RenderingRoot);
             Directory.CreateDirectory("Assets/Dustline/Settings");
             AssetDatabase.Refresh();
+            if (LayerMask.NameToLayer(FirstPersonView.LayerName) != FirstPersonView.Layer)
+                throw new BuildFailedException("请恢复 ProjectSettings/TagManager.asset 的第一人称渲染层。");
             if (AssetDatabase.LoadAssetAtPath<Font>(Root + "/Fonts/NotoSansSC-Regular.otf") == null)
                 throw new BuildFailedException("缺少随包中文字体，请恢复 NotoSansSC-Regular.otf 后重试。");
-            var renderer = AssetDatabase.LoadAssetAtPath<UniversalRendererData>("Assets/Dustline/Settings/MobileRenderer.asset");
+            PortTextureSetup.Prepare();
+            var renderer = AssetDatabase.LoadAssetAtPath<UniversalRendererData>(RendererPath);
             if (renderer == null)
             {
                 renderer = ScriptableObject.CreateInstance<UniversalRendererData>();
-                AssetDatabase.CreateAsset(renderer, "Assets/Dustline/Settings/MobileRenderer.asset");
+                AssetDatabase.CreateAsset(renderer, RendererPath);
             }
             ResourceReloader.ReloadAllNullIn(renderer, "Packages/com.unity.render-pipelines.universal");
+            renderer.renderingMode = RenderingMode.Forward;
+            renderer.opaqueLayerMask = renderer.opaqueLayerMask.value | RaidRendererLayers;
+            renderer.transparentLayerMask = renderer.transparentLayerMask.value | RaidRendererLayers;
             EditorUtility.SetDirty(renderer);
             var pipeline = PrepareRendering(PipelinePath, "Dustline Balanced", renderer, 2, 2048, 83f, 2, 2);
             PrepareRendering(RenderingRoot + "/Low.asset", "Dustline Performance", renderer, 2, 1024, 51f, 2, 1);
@@ -87,10 +99,11 @@ namespace Dustline.Editor
             QualitySettings.anisotropicFiltering = AnisotropicFiltering.Enable;
             var settings = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/GraphicsSettings.asset")[0]);
             var shaders = settings.FindProperty("m_AlwaysIncludedShaders");
-            foreach (var shaderName in new[] { "Universal Render Pipeline/Lit", "Universal Render Pipeline/Unlit", "Dustline/Harbor Sky", "UI/Default" })
+            foreach (var shaderName in new[] { "Universal Render Pipeline/Lit", "Universal Render Pipeline/Unlit", "Dustline/Harbor Sky", PortRaster.SurfaceShader, "UI/Default" })
             {
                 var shader = Shader.Find(shaderName);
-                if (shader == null) throw new BuildFailedException("无法加载构建所需的着色器：" + shaderName);
+                if (shader == null || ShaderUtil.ShaderHasError(shader))
+                    throw new BuildFailedException("无法加载构建所需的着色器：" + shaderName);
                 bool present = false;
                 for (int i = 0; i < shaders.arraySize; i++) if (shaders.GetArrayElementAtIndex(i).objectReferenceValue == shader) present = true;
                 if (!present) { int i = shaders.arraySize++; shaders.GetArrayElementAtIndex(i).objectReferenceValue = shader; }
@@ -162,6 +175,15 @@ namespace Dustline.Editor
             PlayerSettings.colorSpace = ColorSpace.Linear;
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(Scene, true) };
             AssetDatabase.SaveAssets();
+        }
+
+        static bool UsesRenderer(UniversalRenderPipelineAsset asset, UniversalRendererData renderer)
+        {
+            if (asset == null) return false;
+            var serialized = new SerializedObject(asset);
+            var renderers = serialized.FindProperty("m_RendererDataList");
+            return renderers.arraySize > 0 && renderers.GetArrayElementAtIndex(0).objectReferenceValue == renderer
+                && serialized.FindProperty("m_DefaultRendererIndex").intValue == 0;
         }
 
         static UniversalRenderPipelineAsset PrepareRendering(string path, string title, UniversalRendererData renderer,

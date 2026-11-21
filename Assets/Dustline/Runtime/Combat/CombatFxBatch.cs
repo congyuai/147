@@ -26,36 +26,23 @@ namespace Dustline
         readonly MeshRenderer renderer;
         readonly Material material;
         readonly Texture2D atlas;
+        readonly bool ownsMaterial;
         readonly Vertex[] vertices;
         Matrix4x4 toLocal;
         Vector3 eye, right, up, minimum, maximum;
         int cursor;
 
-        public CombatFxBatch(GameObject node, int bursts, int marks)
+        public CombatFxBatch(GameObject node, int bursts, int marks, CombatFxBatch source = null)
         {
-            var shader = Shader.Find("Universal Render Pipeline/Unlit");
-            if (shader == null) throw new System.InvalidOperationException("Missing URP Unlit shader for raid combat effects.");
             renderer = node.AddComponent<MeshRenderer>();
             renderer.enabled = false;
             renderer.shadowCastingMode = ShadowCastingMode.Off;
             renderer.receiveShadows = false;
             renderer.lightProbeUsage = LightProbeUsage.Off;
             renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
-            atlas = MakeAtlas();
-            material = new Material(shader) { name = "Dustline / transient FX" };
-            material.SetTexture("_BaseMap", atlas);
-            material.SetFloat("_Surface", 1);
-            material.SetFloat("_Blend", 0);
-            material.SetFloat("_ZWrite", 0);
-            material.SetFloat("_Cull", (float)CullMode.Off);
-            material.SetFloat("_SrcBlend", (float)BlendMode.SrcAlpha);
-            material.SetFloat("_DstBlend", (float)BlendMode.OneMinusSrcAlpha);
-            material.SetFloat("_SrcBlendAlpha", (float)BlendMode.One);
-            material.SetFloat("_DstBlendAlpha", (float)BlendMode.OneMinusSrcAlpha);
-            material.SetOverrideTag("RenderType", "Transparent");
-            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-            material.SetShaderPassEnabled("DepthOnly", false);
-            material.renderQueue = (int)RenderQueue.Transparent;
+            ownsMaterial = source == null;
+            atlas = ownsMaterial ? MakeAtlas() : source.atlas;
+            material = ownsMaterial ? MakeMaterial(atlas) : source.material;
             renderer.sharedMaterial = material;
 
             int quads = bursts * QuadsPerBurst + marks;
@@ -78,6 +65,27 @@ namespace Dustline
             mesh.subMeshCount = 1;
             mesh.SetSubMesh(0, new SubMeshDescriptor(0, 0, MeshTopology.Triangles), WriteFlags);
             node.AddComponent<MeshFilter>().sharedMesh = mesh;
+        }
+
+        static Material MakeMaterial(Texture2D atlas)
+        {
+            var shader = Shader.Find("Universal Render Pipeline/Unlit");
+            if (shader == null) throw new System.InvalidOperationException("Missing URP Unlit shader for raid combat effects.");
+            var material = new Material(shader) { name = "Dustline / transient FX" };
+            material.SetTexture("_BaseMap", atlas);
+            material.SetFloat("_Surface", 1);
+            material.SetFloat("_Blend", 0);
+            material.SetFloat("_ZWrite", 0);
+            material.SetFloat("_Cull", (float)CullMode.Off);
+            material.SetFloat("_SrcBlend", (float)BlendMode.SrcAlpha);
+            material.SetFloat("_DstBlend", (float)BlendMode.OneMinusSrcAlpha);
+            material.SetFloat("_SrcBlendAlpha", (float)BlendMode.One);
+            material.SetFloat("_DstBlendAlpha", (float)BlendMode.OneMinusSrcAlpha);
+            material.SetOverrideTag("RenderType", "Transparent");
+            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            material.SetShaderPassEnabled("DepthOnly", false);
+            material.renderQueue = (int)RenderQueue.Transparent;
+            return material;
         }
 
         public void Begin(Transform camera)
@@ -152,8 +160,11 @@ namespace Dustline
         public void Release()
         {
             Object.Destroy(mesh);
-            Object.Destroy(material);
-            Object.Destroy(atlas);
+            if (ownsMaterial)
+            {
+                Object.Destroy(material);
+                Object.Destroy(atlas);
+            }
         }
 
         static Texture2D MakeAtlas()

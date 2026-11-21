@@ -77,6 +77,7 @@ namespace Dustline
             cameraObject.transform.SetParent(transform);
             menuCamera = cameraObject.GetComponent<Camera>();
             menuCamera.clearFlags = CameraClearFlags.SolidColor;
+            menuCamera.cullingMask &= ~FirstPersonView.Mask;
             menuCamera.backgroundColor = new Color(0.025f, 0.035f, 0.045f);
             ApplyDisplayPreferences();
             UI = gameObject.AddComponent<GameUI>();

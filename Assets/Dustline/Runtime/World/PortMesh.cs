@@ -37,8 +37,9 @@ namespace Dustline
 
         internal PortMaterials(Action<UnityEngine.Object> keep)
         {
-            var shader = Shader.Find("Universal Render Pipeline/Lit");
-            if (shader == null) shader = Shader.Find("Standard");
+            var lit = Shader.Find("Universal Render Pipeline/Lit");
+            var surface = Shader.Find(PortRaster.SurfaceShader);
+            if (lit == null || surface == null) throw new InvalidOperationException("Missing harbor shaders.");
             var texture = new Texture2D(Columns * Tile, Rows * Tile, TextureFormat.RGBA32, 5, false)
             {
                 name = "Port swatches", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2
@@ -56,17 +57,28 @@ namespace Dustline
                 }
             texture.SetPixels32(pixels);
             texture.Apply(true, true);
-            Structure = Make("Port structures", texture, 0.18f);
-            Pavement = Make("Port pavement", texture, 0.07f);
-            Sea = Make("Port water", texture, 0.24f);
-            Ground = Make("Harbor grade atlas", null, 0.065f);
-            Lamp = Make("Weatherproof amber luminaires", texture, 0.16f);
+            Structure = Make(surface, "Port structures", texture, 0.18f);
+            Pavement = Make(surface, "Port pavement", texture, 0.09f);
+            Ground = Make(surface, "Harbor ground and road markings", Load(PortRaster.Ground), 0.09f);
+            for (int i = 0; i < 4; i++)
+            {
+                var finish = (PortRaster.Finish)i;
+                var albedo = Load(PortRaster.Surface(finish, false));
+                var normal = Load(PortRaster.Surface(finish, true));
+                foreach (var target in new[] { Structure, Pavement, Ground })
+                {
+                    target.SetTexture("_" + finish + "Albedo", albedo);
+                    target.SetTexture("_" + finish + "Normal", normal);
+                }
+            }
+            Sea = Make(lit, "Port water", texture, 0.24f);
+            Lamp = Make(lit, "Weatherproof amber luminaires", texture, 0.16f);
             Lamp.EnableKeyword("_EMISSION");
             Lamp.SetColor("_EmissionColor", new Color(.91f, .49f, .17f) * 1.15f);
-            Dark = Make("Steel", null, 0.2f);
+            Dark = Make(lit, "Steel", null, 0.2f);
             Dark.SetColor("_BaseColor", new Color(0.09f, 0.12f, 0.14f));
 
-            Material Make(string name, Texture2D atlas, float smoothness)
+            Material Make(Shader shader, string name, Texture2D atlas, float smoothness)
             {
                 var material = new Material(shader) { name = name };
                 keep(material);
@@ -74,6 +86,29 @@ namespace Dustline
                 material.SetFloat("_Smoothness", smoothness);
                 return material;
             }
+        }
+
+        static Texture2D Load(string key)
+        {
+            var texture = Resources.Load<Texture2D>(key);
+            if (texture == null || texture.width != PortRaster.Resolution || texture.height != PortRaster.Resolution)
+                throw new InvalidOperationException("缺少 2K 港区贴图：" + key + "。请执行 Dustline > Prepare Project。");
+            return texture;
+        }
+
+        internal static Vector2 Detail(PortTone tone)
+        {
+            return tone switch
+            {
+                PortTone.Asphalt => new Vector2((int)PortRaster.Finish.Asphalt, 1f),
+                PortTone.Concrete or PortTone.ConcreteLight or PortTone.Joint or PortTone.Plaster
+                    => new Vector2((int)PortRaster.Finish.Concrete, 1f),
+                PortTone.Steel or PortTone.Slate or PortTone.Zinc or PortTone.DeepBlue or PortTone.SignalBlue or PortTone.Teal
+                    or PortTone.Rust or PortTone.Terra or PortTone.Ochre => new Vector2((int)PortRaster.Finish.Steel, 0.9f),
+                PortTone.Sand or PortTone.SandDark or PortTone.Gravel or PortTone.Rock or PortTone.RockLichen
+                    => new Vector2((int)PortRaster.Finish.Aggregate, 0.9f),
+                _ => Vector2.zero
+            };
         }
 
         internal static Vector2 UV(PortTone tone, float u, float v)
@@ -88,17 +123,20 @@ namespace Dustline
     {
         readonly List<Vector3> vertices = new List<Vector3>();
         readonly List<Vector3> normals = new List<Vector3>();
+        readonly List<Vector4> tangents = new List<Vector4>();
         readonly List<Vector2> uv = new List<Vector2>();
+        readonly List<Vector4> uvDetail = new List<Vector4>();
         readonly List<int> triangles = new List<int>();
 
         internal void Quad(Vector3 a, Vector3 b, Vector3 c, Vector3 d, PortTone tone)
         {
             int i = vertices.Count;
             Vector3 normal = Vector3.Cross(b - a, c - a).normalized;
-            Vertex(a, normal, tone, 0, 0);
-            Vertex(b, normal, tone, 1, 0);
-            Vertex(c, normal, tone, 1, 1);
-            Vertex(d, normal, tone, 0, 1);
+            var basis = new SurfaceBasis(normal, tone);
+            Vertex(a, normal, tone, 0, 0, in basis);
+            Vertex(b, normal, tone, 1, 0, in basis);
+            Vertex(c, normal, tone, 1, 1, in basis);
+            Vertex(d, normal, tone, 0, 1, in basis);
             triangles.Add(i); triangles.Add(i + 1); triangles.Add(i + 2);
             triangles.Add(i); triangles.Add(i + 2); triangles.Add(i + 3);
         }
@@ -107,17 +145,32 @@ namespace Dustline
         {
             int i = vertices.Count;
             Vector3 normal = Vector3.Cross(b - a, c - a).normalized;
-            Vertex(a, normal, tone, 0, 0);
-            Vertex(b, normal, tone, 1, 0);
-            Vertex(c, normal, tone, 0.5f, 1);
+            var basis = new SurfaceBasis(normal, tone);
+            Vertex(a, normal, tone, 0, 0, in basis);
+            Vertex(b, normal, tone, 1, 0, in basis);
+            Vertex(c, normal, tone, 0.5f, 1, in basis);
             triangles.Add(i); triangles.Add(i + 1); triangles.Add(i + 2);
         }
 
-        void Vertex(Vector3 point, Vector3 normal, PortTone tone, float u, float v)
+        readonly struct SurfaceBasis
+        {
+            internal readonly Vector3 U, V;
+            internal readonly Vector2 Finish;
+            internal SurfaceBasis(Vector3 normal, PortTone tone)
+            {
+                U = Vector3.ProjectOnPlane(Mathf.Abs(normal.x) < 0.8f ? Vector3.right : Vector3.forward, normal).normalized;
+                V = Vector3.Cross(normal, U);
+                Finish = PortMaterials.Detail(tone);
+            }
+        }
+
+        void Vertex(Vector3 point, Vector3 normal, PortTone tone, float u, float v, in SurfaceBasis basis)
         {
             vertices.Add(point);
             normals.Add(normal);
             uv.Add(PortMaterials.UV(tone, u, v));
+            tangents.Add(new Vector4(basis.U.x, basis.U.y, basis.U.z, 1f));
+            uvDetail.Add(new Vector4(Vector3.Dot(point, basis.U), Vector3.Dot(point, basis.V), basis.Finish.x, basis.Finish.y));
         }
 
         internal void Floor(float x0, float z0, float x1, float z1, float y, PortTone tone)
@@ -181,6 +234,11 @@ namespace Dustline
             mesh.SetVertices(vertices);
             mesh.SetNormals(normals);
             mesh.SetUVs(0, uv);
+            if (material.shader.name == PortRaster.SurfaceShader)
+            {
+                mesh.SetTangents(tangents);
+                mesh.SetUVs(1, uvDetail);
+            }
             mesh.SetTriangles(triangles, 0);
             mesh.UploadMeshData(true);
             var go = Child(parent, name);

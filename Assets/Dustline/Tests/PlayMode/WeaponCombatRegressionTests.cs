@@ -221,103 +221,104 @@ namespace Dustline.Tests
             Assert.That(sleeves.gameObject.activeInHierarchy, Is.False);
         }
 
+        [TestCase(WeaponForm.Rifle)]
+        [TestCase(WeaponForm.Tangdao)]
+        [TestCase(WeaponForm.ShortBlade)]
+        [TestCase(WeaponForm.Baton)]
+        public void ForegroundWeaponAndSleevesKeepTheirPoseAtSolidCover(WeaponForm form)
+        {
+            var fight = new Fight(this, 4, 0);
+            var eye = fight.Actor.View.transform;
+            var view = fight.Actor.WeaponView;
+            view.SetForm(form);
+            view.SetPose(false, 0f, false, false, 0.016f);
+            Vector3 before = view.transform.localPosition;
+            Quaternion rotation = view.transform.localRotation;
+            AddBox(eye.position + eye.forward * 0.58f, new Vector3(3f, 2f, 0.08f));
+            Physics.SyncTransforms();
+            view.SetPose(false, 0f, false, false, 0.016f);
+
+            Assert.That(view.Muzzle.gameObject.layer, Is.EqualTo(FirstPersonView.Layer));
+            foreach (var renderer in view.GetComponentsInChildren<Renderer>())
+            {
+                Assert.That(renderer.enabled, Is.True);
+                Assert.That(renderer.gameObject.layer, Is.EqualTo(FirstPersonView.Layer));
+                Assert.That(renderer.shadowCastingMode, Is.EqualTo(ShadowCastingMode.Off));
+            }
+            Assert.That(Vector3.Distance(view.transform.localPosition, before), Is.LessThan(0.001f));
+            Assert.That(Quaternion.Angle(view.transform.localRotation, rotation), Is.LessThan(0.01f));
+            Assert.That(view.GetComponentsInChildren<Collider>(), Is.Empty);
+        }
+
         [TestCase(false)]
         [TestCase(true)]
-        public void RifleTucksAtSolidCoverWithoutSpendingRoundsAndRecoversWhenItClears(bool aiming)
+        public void WorldWallBlocksDamageEvenWhenTheEquippedModelDrawsOnTop(bool blade)
         {
-            var fight = new Fight(this, 4, 0);
+            var fight = new Fight(this, 4, 0, withRifle: !blade);
             var eye = fight.Actor.View.transform;
-            var view = fight.Actor.WeaponView;
-            view.SetSightLevel(2);
-            for (int i = 0; i < 24; i++) view.SetPose(aiming, 0f, false, false, 0.016f);
-            var rifle = view.GetComponent<MeshRenderer>();
-            var sleeves = view.GetComponentInChildren<SkinnedMeshRenderer>();
-            float readyMuzzle = eye.InverseTransformPoint(view.Muzzle.position).z;
-            var wall = AddBox(eye.position + Vector3.forward * 0.63f, new Vector3(3f, 2f, 0.08f));
+            var wall = AddBox(eye.position + eye.forward * 0.55f, new Vector3(3f, 2f, 0.08f));
+            var behind = AddBox(eye.position + eye.forward * 1.35f, new Vector3(0.7f, 1f, 0.22f));
+            var target = behind.gameObject.AddComponent<Health>();
+            target.Initialize(100f, 1);
             Physics.SyncTransforms();
 
-            view.SetPose(aiming, 0f, false, false, 0.016f);
-            Assert.That(Property<bool>(view, "RifleObstructed"), Is.True);
-            Assert.That(rifle.enabled && sleeves.enabled, Is.True);
-            Assert.That(rifle.bounds.max.z, Is.LessThan(wall.bounds.min.z));
-            Assert.That(Vector3.Distance(sleeves.bones[2].position, view.RightGrip), Is.EqualTo(0.044f).Within(0.006f));
-            Assert.That(Vector3.Distance(sleeves.bones[5].position, view.LeftGrip), Is.EqualTo(0.044f).Within(0.006f));
-            float tuckedMuzzle = eye.InverseTransformPoint(view.Muzzle.position).z;
-            fight.Tick(0.4f, fire: true);
-            Assert.That(fight.Equipped.LoadedAmmo, Is.EqualTo(4));
-
+            fight.Tick(0.3f, fire: true);
+            fight.Tick(0.34f);
+            Assert.That(target.Current, Is.EqualTo(100f));
+            Assert.That(fight.Actor.WeaponView.GetComponent<MeshRenderer>().enabled, Is.True);
+            if (!blade) Assert.That(fight.Equipped.LoadedAmmo, Is.EqualTo(3));
             wall.enabled = false;
             Physics.SyncTransforms();
-            view.SetPose(aiming, 0f, false, false, 0.016f);
-            float recoveringMuzzle = eye.InverseTransformPoint(view.Muzzle.position).z;
-            Assert.That(recoveringMuzzle, Is.InRange(tuckedMuzzle + 0.001f, readyMuzzle - 0.001f));
-            for (int i = 0; i < 24; i++) view.SetPose(aiming, 0f, false, false, 0.016f);
-            Assert.That(Property<bool>(view, "RifleObstructed"), Is.False);
-            Assert.That(eye.InverseTransformPoint(view.Muzzle.position).z, Is.EqualTo(readyMuzzle).Within(0.005f));
-            fight.Tick(0.2f, fire: true);
+            fight.Tick(0.4f, fire: true);
+            fight.Tick(0.34f);
+            Assert.That(target.Current, Is.LessThan(100f));
+        }
+
+        [Test]
+        public void ShotAlignsTheViewmodelMuzzleWithItsTravelWithoutMovingTheSocket()
+        {
+            var fight = new Fight(this, 4, 0);
+            var eye = fight.Actor.View.transform;
+            var visual = fight.Actor.WeaponView;
+            eye.rotation = Quaternion.Euler(-12f, 30f, 6f);
+            for (int i = 0; i < 24; i++) visual.SetPose(false, 6.5f, true, false, 0.016f);
+            visual.SetPose(false, 3.8f, false, false, 0.016f, true);
+            Vector3 socket = visual.Muzzle.position;
+            Vector3 end = eye.position + eye.forward * 18f;
+            Invoke(visual, "AlignShot", eye.forward, end);
+            Assert.That(Vector3.Distance(visual.Muzzle.position, socket), Is.LessThan(0.001f));
+            Assert.That(Vector3.Angle(visual.Muzzle.forward, end - socket), Is.LessThan(0.15f));
+            Invoke(visual, "AlignShot", eye.forward, eye.position + eye.forward * 0.45f);
+            Assert.That(Vector3.Angle(visual.Muzzle.forward, eye.forward), Is.LessThan(0.15f));
+        }
+
+        [Test]
+        public void TriggerDuringSprintWalksAndFiresOnThatFrameThenResumesSprint()
+        {
+            var fight = new Fight(this, 4, 0);
+            var actor = fight.Actor;
+            actor.gameObject.layer = 2;
+            var motor = actor.gameObject.AddComponent<CharacterController>();
+            motor.height = 1.8f;
+            motor.center = Vector3.up * 0.9f;
+            motor.radius = 0.35f;
+            typeof(PlayerController).GetField("motor", InstancePrivate).SetValue(actor, motor);
+            typeof(PlayerController).GetField("session", InstancePrivate).SetValue(actor, fight.Session);
+            float sprintSpeed = 6.5f * Mathf.Lerp(1f, 0.65f, fight.Bag.Weight / fight.Bag.MaxWeight);
+            float walkSpeed = 3.8f * Mathf.Lerp(1f, 0.65f, fight.Bag.Weight / fight.Bag.MaxWeight);
+
+            fight.Tick(0.03f, move: true);
+            Assert.That(actor.Sprinting, Is.True);
+            Assert.That(actor.MoveSpeed, Is.EqualTo(sprintSpeed).Within(0.03f));
+            fight.Tick(0.2f, fire: true, move: true);
+            Assert.That(actor.Sprinting, Is.False);
+            Assert.That(actor.MoveSpeed, Is.EqualTo(walkSpeed).Within(0.03f));
             Assert.That(fight.Equipped.LoadedAmmo, Is.EqualTo(3));
-        }
-
-        [Test]
-        public void OffsetRifleDetectsSolidPropsOutsideTheViewRayButIgnoresTriggers()
-        {
-            var fight = new Fight(this, 4, 0);
-            var eye = fight.Actor.View.transform;
-            var view = fight.Actor.WeaponView;
-            var edge = AddBox(view.Muzzle.position - eye.forward * 0.06f, new Vector3(0.12f, 0.24f, 0.12f));
-            edge.isTrigger = true;
-            Physics.SyncTransforms();
-            view.SetPose(false, 0f, false, false, 0.016f);
-            Assert.That(Property<bool>(view, "RifleObstructed"), Is.False);
-
-            edge.isTrigger = false;
-            Physics.SyncTransforms();
-            Assert.That(edge.Raycast(new Ray(eye.position, eye.forward), out _, 2f), Is.False);
-            view.SetPose(false, 0f, false, false, 0.016f);
-            Assert.That(Property<bool>(view, "RifleObstructed"), Is.True);
-        }
-
-        [Test]
-        public void RifleAndSleevesHideTogetherOnlyWhenNoClearPoseFits()
-        {
-            var fight = new Fight(this, 4, 0);
-            var eye = fight.Actor.View.transform;
-            var view = fight.Actor.WeaponView;
-            var rifle = view.GetComponent<MeshRenderer>();
-            var sleeves = view.GetComponentInChildren<SkinnedMeshRenderer>();
-            var partition = AddBox(eye.position + Vector3.forward * 0.09f, new Vector3(5f, 4f, 0.06f));
-            Physics.SyncTransforms();
-            view.BeginReload(1f);
-            view.SetPose(false, 2f, false, true, 0.016f);
-            Assert.That(Property<bool>(view, "RifleObstructed"), Is.True);
-            Assert.That(rifle.enabled, Is.False);
-            Assert.That(sleeves.enabled, Is.False);
-
-            partition.enabled = false;
-            Physics.SyncTransforms();
-            for (int i = 0; i < 24; i++) view.SetPose(false, 0f, false, true, 0.016f);
-            Assert.That(rifle.enabled && sleeves.enabled, Is.True);
-            Assert.That(view.GetComponentInChildren<SkinnedMeshRenderer>(), Is.SameAs(sleeves));
-            Assert.That(Property<bool>(view, "RifleObstructed"), Is.False);
-        }
-
-        [Test]
-        public void RifleRestoresItsReadyPoseIfAPropBlocksOnlyTheFoldedPose()
-        {
-            var fight = new Fight(this, 4, 0);
-            var eye = fight.Actor.View.transform;
-            var view = fight.Actor.WeaponView;
-            var partition = AddBox(eye.position + Vector3.forward * 0.09f, new Vector3(5f, 4f, 0.06f));
-            Physics.SyncTransforms();
-            view.SetPose(false, 0f, false, false, 0.016f);
-            Assert.That(view.GetComponent<MeshRenderer>().enabled, Is.False);
-
-            partition.enabled = false;
-            AddBox(eye.position + new Vector3(0f, -0.286f, 0.17f), new Vector3(0.10f, 0.064f, 0.14f));
-            Physics.SyncTransforms();
-            for (int i = 0; i < 24; i++) view.SetPose(false, 0f, false, false, 0.016f);
-            Assert.That(view.GetComponent<MeshRenderer>().enabled, Is.True);
-            Assert.That(Property<bool>(view, "RifleObstructed"), Is.False);
+            Assert.That(Field<float>(actor.WeaponView, "run"), Is.Zero);
+            fight.Tick(0.04f, move: true);
+            Assert.That(actor.Sprinting, Is.False);
+            fight.Tick(0.18f, move: true);
+            Assert.That(actor.Sprinting, Is.True);
         }
 
         [TestCase(-1f)]
@@ -422,7 +423,6 @@ namespace Dustline.Tests
         }
 
         static T Field<T>(object owner, string name) => (T)owner.GetType().GetField(name, InstancePrivate).GetValue(owner);
-        static T Property<T>(object owner, string name) => (T)owner.GetType().GetProperty(name, InstancePrivate).GetValue(owner);
         static void Invoke(object owner, string name, params object[] args) => owner.GetType().GetMethod(name, InstancePrivate).Invoke(owner, args);
         static void Set(object owner, string name, object value) => owner.GetType().GetProperty(name).GetSetMethod(true).Invoke(owner, new[] { value });
 
@@ -502,13 +502,19 @@ namespace Dustline.Tests
                 now = Time.time;
             }
 
-            public void Tick(float delta, bool fire = false, bool swap = false, bool reload = false)
+            public void Tick(float delta, bool fire = false, bool swap = false, bool reload = false, bool move = false)
             {
                 Set(input, "Fire", fire);
                 Set(input, "FirePressed", fire);
                 Set(input, "SwitchWeaponPressed", swap);
                 Set(input, "ReloadPressed", reload);
                 now += delta;
+                if (move)
+                {
+                    Set(input, "Sprint", true);
+                    Set(input, "Move", Vector2.up);
+                    Invoke(Actor, "Tick", now, 0.016f);
+                }
                 Invoke(Weapon, "Tick", now, delta);
             }
 

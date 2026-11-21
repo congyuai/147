@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.TestTools;
 
 namespace Dustline.Tests
@@ -147,6 +148,7 @@ namespace Dustline.Tests
                     "The canal is not a shortcut across the uncovered channel.");
                 Assert.That(PortWorldFixture.Floor(-452, 126).y - world.Spawn.y, Is.GreaterThan(20));
                 foreach (var exit in world.Exits) Assert.That(world.FindExit(exit.transform.position), Is.SameAs(exit));
+                AssertDetailedSurfaces(world);
 
                 world.SpawnBots();
                 int regular = 0, elite = 0, boss = 0;
@@ -244,6 +246,35 @@ namespace Dustline.Tests
                 AssertRoute(world.Navigation, from, to);
             }
             yield return null;
+        }
+
+        static void AssertDetailedSurfaces(WorldBuilder world)
+        {
+            MeshFilter ground = null, bridge = null;
+            foreach (var part in world.GetComponentsInChildren<MeshFilter>())
+            {
+                if (part.name.StartsWith("Grade ", System.StringComparison.Ordinal)) ground = part;
+                if (part.name == "Structures" && part.transform.parent.name.StartsWith("Service bridge ", System.StringComparison.Ordinal)) bridge = part;
+            }
+            Assert.That(ground, Is.Not.Null);
+            Assert.That(bridge, Is.Not.Null);
+            foreach (var part in new[] { ground, bridge })
+            {
+                var material = part.GetComponent<MeshRenderer>().sharedMaterial;
+                Assert.That(material.shader.name, Is.EqualTo(PortRaster.SurfaceShader));
+                Assert.That(part.sharedMesh.HasVertexAttribute(VertexAttribute.TexCoord1), Is.True);
+                Assert.That(part.sharedMesh.HasVertexAttribute(VertexAttribute.Tangent), Is.True);
+                foreach (var finish in new[] { "Asphalt", "Concrete", "Steel", "Aggregate" })
+                    foreach (var channel in new[] { "Albedo", "Normal" })
+                    {
+                        var texture = material.GetTexture("_" + finish + channel);
+                        Assert.That(texture, Is.Not.Null, finish + channel);
+                        Assert.That(texture.width, Is.EqualTo(2048));
+                        Assert.That(texture.height, Is.EqualTo(2048));
+                    }
+            }
+            Assert.That(ground.GetComponent<MeshRenderer>().sharedMaterial.mainTexture,
+                Is.SameAs(Resources.Load<Texture2D>(PortRaster.Ground)));
         }
 
         static void AssertRoute(NavigationGrid nav, Vector3 start, Vector3 finish)

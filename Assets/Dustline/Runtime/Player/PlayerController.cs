@@ -6,6 +6,7 @@ namespace Dustline
     public sealed class PlayerController : MonoBehaviour
     {
         public Camera View { get; private set; }
+        internal Camera Foreground { get; private set; }
         public Health Health { get; private set; }
         public WeaponController Weapon { get; private set; }
         public WeaponVisual WeaponView { get; private set; }
@@ -26,7 +27,7 @@ namespace Dustline
         CharacterController motor;
         StepCadence steps;
         readonly Collider[] stanceHits = new Collider[16];
-        float pitch, verticalSpeed, noiseAt, focusAt, searchElapsed, staminaResumeAt;
+        float pitch, verticalSpeed, noiseAt, focusAt, searchElapsed, staminaResumeAt, firingWalkUntil;
         Vector2 recoilImpulse, recoilView;
         int recoilPattern;
         HarborDoor focusedDoor;
@@ -63,7 +64,7 @@ namespace Dustline
             View.farClipPlane = 1450f;
             View.clearFlags = CameraClearFlags.Skybox;
             View.fieldOfView = 75;
-            WeaponView = WeaponVisual.Create(cameraObject.transform, true);
+            Foreground = FirstPersonView.Create(View);
             Weapon = gameObject.AddComponent<WeaponController>();
             Weapon.Initialize(session, this);
         }
@@ -74,9 +75,29 @@ namespace Dustline
             if (WeaponView == null) WeaponView = WeaponVisual.Create(View.transform, true, form);
             else WeaponView.SetForm(form);
             WeaponView.SetEquipped(definition != null);
+            SetViewFov(75f);
         }
 
-        void Update()
+        void SetViewFov(float value)
+        {
+            View.fieldOfView = value;
+            if (Foreground != null) Foreground.fieldOfView = value;
+        }
+
+        bool WalkForFire(float now, bool gameplay, bool firearm, bool wantsFire)
+        {
+            if (!gameplay || !firearm)
+            {
+                firingWalkUntil = 0f;
+                return false;
+            }
+            if (wantsFire) firingWalkUntil = now + 0.17f;
+            return now < firingWalkUntil;
+        }
+
+        void Update() => Tick(Time.time, Time.deltaTime);
+
+        void Tick(float now, float frame)
         {
             if (session.Phase != SessionPhase.Raid || !Health.Alive) return;
             var input = session.Input;
@@ -100,29 +121,30 @@ namespace Dustline
                     verticalSpeed = 7.2f;
                 }
             }
-            bool sprint = input.Gameplay && input.Sprint && !sprintLocked && input.Move.y > 0.1f
+            bool walkForFire = WalkForFire(now, input.Gameplay, Weapon.Magazine != null, input.Fire);
+            bool sprint = input.Gameplay && input.Sprint && !walkForFire && !sprintLocked && input.Move.y > 0.1f
                 && Stamina > 0.01f && !lowProfile;
             float speed = Prone ? 1.25f : lowProfile ? 2f : sprint ? 6.5f : 3.8f;
             speed *= Mathf.Lerp(1, 0.65f, session.Loadout.Weight / session.Loadout.MaxWeight);
             Vector2 move = input.Gameplay ? input.Move : Vector2.zero;
             Vector3 movement = transform.right * move.x + transform.forward * move.y;
-            UpdateStanceHeight(Time.deltaTime);
+            UpdateStanceHeight(frame);
             if (motor.isGrounded && verticalSpeed < 0) verticalSpeed = -2;
-            verticalSpeed -= 20 * Time.deltaTime;
+            verticalSpeed -= 20 * frame;
             Vector3 before = transform.position;
-            CollisionFlags collision = motor.Move((movement * speed + Vector3.up * verticalSpeed) * Time.deltaTime);
+            CollisionFlags collision = motor.Move((movement * speed + Vector3.up * verticalSpeed) * frame);
             if ((collision & CollisionFlags.Above) != 0 && verticalSpeed > 0) verticalSpeed = 0;
             Vector3 displacement = transform.position - before;
             float travel = new Vector2(displacement.x, displacement.z).magnitude;
-            MoveSpeed = Time.deltaTime > 0f ? travel / Time.deltaTime : 0f;
+            MoveSpeed = frame > 0f ? travel / frame : 0f;
             bool running = sprint && MoveSpeed > 1.5f;
             Sprinting = running;
             if (running)
             {
-                Stamina = Mathf.Max(0f, Stamina - 9.5f * Time.deltaTime);
-                staminaResumeAt = Time.time + 0.35f;
+                Stamina = Mathf.Max(0f, Stamina - 9.5f * frame);
+                staminaResumeAt = now + 0.35f;
             }
-            else if (Time.time >= staminaResumeAt) Stamina = Mathf.Min(100f, Stamina + 15f * Time.deltaTime);
+            else if (now >= staminaResumeAt) Stamina = Mathf.Min(100f, Stamina + 15f * frame);
             if (Stamina <= 0.01f) sprintLocked = true;
             else if (Stamina >= 25f) sprintLocked = false;
             input.SprintAllowed = !sprintLocked && !lowProfile;
@@ -133,7 +155,6 @@ namespace Dustline
 
             float leanTarget = input.Gameplay && !Prone
                 ? (input.LeanRight ? 1 : input.LeanLeft ? -1 : 0) : 0;
-            float frame = Time.deltaTime;
             float cameraEase = 1f - Mathf.Exp(-12f * frame);
             float cameraHeight = Prone ? 0.56f : Crouched ? 0.98f : Mathf.Min(currentHeight, 1.6f);
             float eyeY = Mathf.Min(currentHeight - 0.14f, Mathf.Lerp(View.transform.localPosition.y, cameraHeight, cameraEase));
@@ -145,19 +166,17 @@ namespace Dustline
             View.transform.localRotation = Quaternion.Euler(Mathf.Clamp(pitch - recoilView.x, -87f, 87f), recoilView.y, -Lean * 6.5f);
             UpdateLoot(input, move.sqrMagnitude > 0.04f);
             bool aiming = input.Gameplay && input.Aim && Weapon.Magazine != null;
-            bool wasObstructed = WeaponView.RifleObstructed;
-            WeaponView.SetPose(aiming, MoveSpeed, running, lowProfile, frame);
-            if (!wasObstructed && WeaponView.RifleObstructed) session.Effects?.CancelMuzzle(WeaponView.Muzzle);
-            View.fieldOfView = Mathf.Lerp(75f, Weapon.AimFov, Mathf.SmoothStep(0f, 1f, AimProgress));
+            WeaponView.SetPose(aiming, MoveSpeed, running, lowProfile, frame, walkForFire);
+            SetViewFov(Mathf.Lerp(75f, Weapon.AimFov, Mathf.SmoothStep(0f, 1f, AimProgress)));
 
             Operator.SetMotion(MoveSpeed, running, lowProfile, frame);
             Operator.SetProne(Prone, frame);
             Operator.PoseArms(WeaponView.RightGrip, WeaponView.LeftGrip);
             bool moving = MoveSpeed > 0.35f;
-            if (moving && Time.time > noiseAt)
+            if (moving && now > noiseAt)
             {
                 CombatNoise.Emit(transform.position, Prone ? 3 : lowProfile ? 4 : running ? 22 : 10, Health);
-                noiseAt = Time.time + (running ? 0.32f : Prone ? 0.72f : 0.55f);
+                noiseAt = now + (running ? 0.32f : Prone ? 0.72f : 0.55f);
             }
         }
 

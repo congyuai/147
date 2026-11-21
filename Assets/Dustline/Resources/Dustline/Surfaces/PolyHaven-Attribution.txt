@@ -1,0 +1,10 @@
+2K surface scans from Poly Haven, distributed under CC0 1.0 Universal.
+https://polyhaven.com/license
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Asphalt: https://polyhaven.com/a/asphalt_02
+Concrete: https://polyhaven.com/a/concrete_wall_008
+Steel: https://polyhaven.com/a/metal_plate
+Aggregate: https://polyhaven.com/a/gravel_floor
+
+The original 2K diffuse and OpenGL normal JPEGs are redistributed with local file names.

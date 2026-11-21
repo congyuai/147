@@ -8,16 +8,13 @@ namespace Dustline
         const float ViewScale = 0.90f;
         const float BodyScale = 0.84f;
         const float Tau = 2f * Mathf.PI;
-        const float CoverSkin = 0.018f;
-        static readonly Vector3 TuckedPosition = new Vector3(0.143f, -0.300f, 0.162f);
-        static readonly Quaternion TuckedRotation = Quaternion.Euler(12f, -90f, 0f);
+        const float ShotPoseSeconds = 0.143f;
+        const float ShotPoseRelease = 0.081f;
 
         public Transform Muzzle { get; private set; }
         public WeaponForm Form { get; private set; }
         public bool IsMelee => Form != WeaponForm.Rifle;
-        internal bool RifleObstructed => firstPerson && !IsMelee && (tuck > 0f || !surface.enabled);
-        internal float VisibleAim => firstPerson && !IsMelee && surface.enabled
-            ? aimProgress * (1f - Mathf.SmoothStep(0f, 1f, tuck * 4f)) : 0f;
+        internal float VisibleAim => firstPerson && !IsMelee ? aimProgress : 0f;
         public Vector3 RightGrip => transform.TransformPoint(rightGrip);
         public Vector3 LeftGrip => IsMelee && Form != WeaponForm.Tangdao
             ? transform.parent.TransformPoint(FreeHand(firstPerson)) : transform.TransformPoint(leftGrip);
@@ -30,15 +27,15 @@ namespace Dustline
         MeshRenderer surface;
         Ar20Mesh art;
         FirstPersonArms arms;
-        Camera eye;
         PlayerController player;
         CharacterController motor;
         int sightLevel, swingStep;
         Vector3 rightGrip, leftGrip;
         Quaternion rightGlove, leftGlove;
         static readonly Quaternion FreeGlove = Quaternion.Euler(-42, -51, 26);
-        float aimProgress, speed, run, stride, breath, crouch, prone, tuck;
-        float kick, kickImpulse;
+        float aimProgress, speed, run, stride, breath, crouch, prone;
+        float kick, kickImpulse, shotPose;
+        Vector3 shotAxis;
         float reloadTime, reloadDuration, reloadBlend;
         float swingTime, swingDuration, swingBlend;
         bool reloadCancelled, swingCancelled;
@@ -49,12 +46,11 @@ namespace Dustline
         public static WeaponVisual Create(Transform parent, bool firstPerson, WeaponForm form)
         {
             var root = new GameObject("Weapon view", typeof(MeshFilter), typeof(MeshRenderer));
-            root.layer = firstPerson ? 2 : parent.gameObject.layer;
+            root.layer = firstPerson ? FirstPersonView.Layer : parent.gameObject.layer;
             root.transform.SetParent(parent, false);
             root.transform.localScale = Vector3.one * (firstPerson ? ViewScale : BodyScale);
             var visual = root.AddComponent<WeaponVisual>();
             visual.firstPerson = firstPerson;
-            visual.eye = firstPerson ? parent.GetComponent<Camera>() : null;
             visual.filter = root.GetComponent<MeshFilter>();
             visual.surface = root.GetComponent<MeshRenderer>();
             visual.surface.shadowCastingMode = ShadowCastingMode.Off;
@@ -154,12 +150,12 @@ namespace Dustline
 
         void ResetPose()
         {
-            aimProgress = speed = run = stride = breath = crouch = prone = kick = kickImpulse = tuck = 0;
+            aimProgress = speed = run = stride = breath = crouch = prone = kick = kickImpulse = shotPose = 0;
             reloadTime = reloadDuration = reloadBlend = swingTime = swingDuration = swingBlend = 0;
             reloadCancelled = swingCancelled = false;
         }
 
-        public void SetPose(bool aiming, float movementSpeed, bool sprinting, bool crouched, float delta)
+        public void SetPose(bool aiming, float movementSpeed, bool sprinting, bool crouched, float delta, bool walkForFire = false)
         {
             if (!isActiveAndEnabled || delta <= 0) return;
             float dt = Mathf.Min(delta, 0.10f);
@@ -171,7 +167,8 @@ namespace Dustline
             speed = Mathf.Lerp(speed, Mathf.Clamp(movementSpeed, 0, 8), Damp(11, dt));
             crouch = Mathf.Lerp(crouch, crouched ? 1 : 0, Damp(11, dt));
             prone = Mathf.Lerp(prone, player != null && player.Prone ? 1 : 0, Damp(9, dt));
-            run = Mathf.Lerp(run, sprinting && !aiming ? Mathf.SmoothStep(0, 1, (speed - 1.2f) / 3.5f) : 0, Damp(10, dt));
+            run = walkForFire ? 0f : Mathf.Lerp(run, sprinting && !aiming ? Mathf.SmoothStep(0, 1, (speed - 1.2f) / 3.5f) : 0, Damp(10, dt));
+            shotPose = Mathf.Max(0f, shotPose - delta);
             float stepDistance = Mathf.Lerp(Mathf.Lerp(1.38f, 2.10f, run), Mathf.Lerp(0.91f, 0.76f, prone), crouch);
             stride = Mathf.Repeat(stride + dt * speed / stepDistance * Mathf.PI, Tau);
             breath = Mathf.Repeat(breath + dt * 1.77f, Tau);
@@ -182,7 +179,7 @@ namespace Dustline
             kickImpulse *= Mathf.Exp(-17 * dt);
             AdvanceAction(ref reloadTime, ref reloadDuration, ref reloadBlend, reloadCancelled, delta);
             AdvanceAction(ref swingTime, ref swingDuration, ref swingBlend, swingCancelled, delta);
-            ApplyPose(dt);
+            ApplyPose();
         }
 
         static float Damp(float rate, float delta) => 1f - Mathf.Exp(-rate * delta);
@@ -207,8 +204,21 @@ namespace Dustline
             if (!firstPerson) ApplyPose();
         }
 
+        internal bool AlignShot(Vector3 direction, Vector3 end)
+        {
+            if (!firstPerson || IsMelee) return false;
+            Vector3 toward = end - Muzzle.position;
+            // An impact close to the eye can be behind the cosmetic muzzle.
+            bool traceFromMuzzle = Vector3.Dot(toward, direction) > 1.25f;
+            shotAxis = transform.parent.InverseTransformDirection(traceFromMuzzle ? toward.normalized : direction);
+            shotPose = ShotPoseSeconds;
+            ApplyPose();
+            return traceFromMuzzle;
+        }
+
         public void BeginReload(float seconds)
         {
+            shotPose = 0f;
             reloadTime = 0;
             reloadDuration = Mathf.Max(0, seconds);
             reloadBlend = 1;
@@ -231,7 +241,7 @@ namespace Dustline
         internal void CancelSwing() => swingCancelled = true;
         internal static float ContactPhase(int step) => step == 0 ? 0.40f : step == 1 ? 0.43f : 0.49f;
 
-        void ApplyPose(float delta = 0f)
+        void ApplyPose()
         {
             Vector3 position;
             Quaternion rotation;
@@ -240,24 +250,25 @@ namespace Dustline
                 MeleeLocalPose(firstPerson, out position, out var euler);
                 rotation = Quaternion.Euler(euler);
             }
-            else RifleLocalPose(out position, out rotation);
-            if (arms == null)
+            else
             {
-                transform.SetLocalPositionAndRotation(position, rotation);
-                return;
+                RifleLocalPose(out position, out rotation);
+                if (firstPerson && shotPose > 0f)
+                {
+                    Vector3 tip = Muzzle.localPosition * ViewScale;
+                    Vector3 anchor = position + rotation * tip;
+                    var facing = Quaternion.FromToRotation(rotation * Vector3.forward, shotAxis) * rotation;
+                    rotation = Quaternion.Slerp(rotation, facing, Ease(shotPose / ShotPoseRelease));
+                    position = anchor - rotation * tip;
+                }
             }
-
-            if (!IsMelee && eye != null)
-            {
-                ResolveRifleClearance(position, rotation, delta);
-                return;
-            }
-
-            SampleArms(position, rotation, 0f, out var right, out var left);
-            CommitPose(position, rotation, right, left);
+            transform.SetLocalPositionAndRotation(position, rotation);
+            if (arms == null) return;
+            SampleArms(position, rotation, out var right, out var left);
+            arms.Apply(position, rotation, right, left);
         }
 
-        void SampleArms(Vector3 position, Quaternion rotation, float folded,
+        void SampleArms(Vector3 position, Quaternion rotation,
             out FirstPersonArms.ArmPose rightArm, out FirstPersonArms.ArmPose leftArm)
         {
             Vector3 right = position + rotation * (rightGrip * ViewScale);
@@ -274,127 +285,11 @@ namespace Dustline
                 float handling = ReloadWeight(progress, reloadBlend);
                 float reach = Mathf.Sin(Mathf.PI * Ease((progress - 0.12f) / 0.65f)) * handling;
                 var service = position + rotation * (new Vector3(-0.043f, -0.153f - 0.12f * reach, 0.071f - 0.065f * reach) * ViewScale);
-                float weight = handling * (1f - folded);
-                left = Vector3.Lerp(left, service, weight);
-                leftWrist = Quaternion.Slerp(leftWrist, rotation * Quaternion.Euler(-22f, -38f, 18f), weight);
+                left = Vector3.Lerp(left, service, handling);
+                leftWrist = Quaternion.Slerp(leftWrist, rotation * Quaternion.Euler(-22f, -38f, 18f), handling);
             }
-            arms.Sample(right, rotation * rightGlove, left, leftWrist, run, crouch, prone, folded, out rightArm, out leftArm);
+            arms.Sample(right, rotation * rightGlove, left, leftWrist, run, crouch, prone, out rightArm, out leftArm);
         }
-
-        void CommitPose(Vector3 position, Quaternion rotation, FirstPersonArms.ArmPose right, FirstPersonArms.ArmPose left)
-        {
-            transform.SetLocalPositionAndRotation(position, rotation);
-            arms.Apply(position, rotation, right, left);
-            SetModelVisible(true);
-        }
-
-        void SetModelVisible(bool visible)
-        {
-            if (surface.enabled == visible) return;
-            surface.enabled = visible;
-            arms.SetVisible(visible);
-        }
-
-        void ResolveRifleClearance(Vector3 ready, Quaternion facing, float delta)
-        {
-            if (Physics.CheckSphere(eye.transform.position, 0.026f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
-            {
-                tuck = 1f;
-                SetModelVisible(false);
-                return;
-            }
-            float preferred = Mathf.MoveTowards(tuck, 0f, delta * 4.6f);
-            if (Try(preferred, out var position, out var rotation, out var right, out var left))
-            {
-                tuck = preferred;
-                CommitPose(position, rotation, right, left);
-                return;
-            }
-
-            if (preferred < tuck && Try(tuck, out position, out rotation, out right, out left))
-            {
-                CommitPose(position, rotation, right, left);
-                return;
-            }
-
-            // Correct obstruction immediately; only the return to the ready pose may lag.
-            float low = preferred, high = 1f;
-            if (preferred == 1f || !Try(high, out position, out rotation, out right, out left))
-            {
-                for (int i = 1; preferred < 1f && i <= 3; i++)
-                {
-                    float partial = Mathf.Lerp(preferred, 1f, i * 0.25f);
-                    if (!Try(partial, out position, out rotation, out right, out left)) continue;
-                    tuck = partial;
-                    CommitPose(position, rotation, right, left);
-                    return;
-                }
-                // After a tight turn, cover can block the folded pose but leave the forward pose free.
-                for (int i = 1; preferred > 0f && i <= 4; i++)
-                {
-                    float partial = preferred * (1f - i * 0.25f);
-                    if (!Try(partial, out position, out rotation, out right, out left)) continue;
-                    tuck = partial;
-                    CommitPose(position, rotation, right, left);
-                    return;
-                }
-                tuck = 1f;
-                SetModelVisible(false);
-                return;
-            }
-            for (int i = 0; i < 5; i++)
-            {
-                float partial = (low + high) * 0.5f;
-                if (!Try(partial, out var p, out var r, out var rightFit, out var leftFit)) { low = partial; continue; }
-                high = partial;
-                position = p; rotation = r; right = rightFit; left = leftFit;
-            }
-            tuck = high;
-            CommitPose(position, rotation, right, left);
-
-            bool Try(float folded, out Vector3 p, out Quaternion r, out FirstPersonArms.ArmPose a, out FirstPersonArms.ArmPose b)
-            {
-                p = Vector3.Lerp(ready, TuckedPosition, folded);
-                r = Quaternion.Slerp(facing, TuckedRotation, folded);
-                SampleArms(p, r, folded, out a, out b);
-                return RiflePoseFits(p, r, a, b);
-            }
-        }
-
-        bool RiflePoseFits(Vector3 position, Quaternion rotation, FirstPersonArms.ArmPose right, FirstPersonArms.ArmPose left)
-        {
-            var volumes = art.RifleVolumes(sightLevel);
-            var broad = new Bounds(Vector3.zero, Vector3.zero);
-            foreach (var part in volumes)
-            {
-                Vector3 center = position + rotation * (part.center * ViewScale);
-                Vector3 size = part.extents * ViewScale + Vector3.one * CoverSkin;
-                Vector3 range = Abs(rotation * (Vector3.right * size.x)) + Abs(rotation * (Vector3.up * size.y))
-                    + Abs(rotation * (Vector3.forward * size.z));
-                if (center.z - range.z < eye.nearClipPlane) return false;
-                broad.Encapsulate(center - range);
-                broad.Encapsulate(center + range);
-            }
-            right.Enclose(ref broad);
-            left.Enclose(ref broad);
-            var view = eye.transform;
-            const int mask = Physics.DefaultRaycastLayers;
-            const QueryTriggerInteraction triggers = QueryTriggerInteraction.Ignore;
-            if (!Physics.CheckBox(view.TransformPoint(broad.center), broad.extents, view.rotation, mask, triggers)) return true;
-            foreach (var part in volumes)
-            {
-                Vector3 center = position + rotation * (part.center * ViewScale);
-                if (Physics.CheckBox(view.TransformPoint(center), part.extents * ViewScale + Vector3.one * CoverSkin,
-                    view.rotation * rotation, mask, triggers)) return false;
-            }
-            // A thin partition can lie between the camera and the model without intersecting its bounds.
-            Vector3 tip = position + rotation * (Muzzle.localPosition * ViewScale);
-            return !Physics.Linecast(view.position, view.TransformPoint(tip), mask, triggers)
-                && !Physics.Linecast(view.position, view.TransformPoint(position), mask, triggers)
-                && !right.Overlaps(view) && !left.Overlaps(view);
-        }
-
-        static Vector3 Abs(Vector3 v) => new Vector3(Mathf.Abs(v.x), Mathf.Abs(v.y), Mathf.Abs(v.z));
 
         void RifleLocalPose(out Vector3 position, out Quaternion rotation)
         {

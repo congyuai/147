@@ -18,7 +18,6 @@ namespace Dustline
         int users;
         readonly Texture2D colorMap, finishMap, lightMap;
         readonly Mesh[] variants = new Mesh[6];
-        readonly Bounds[][] rifleVolumes = new Bounds[3][];
         public readonly Material Material;
 
         public static Ar20Mesh Acquire()
@@ -38,13 +37,11 @@ namespace Dustline
                 case WeaponForm.Baton: mesh = BuildBaton(); break;
                 case WeaponForm.Tangdao: mesh = BuildTangdao(); break;
                 case WeaponForm.ShortBlade: mesh = BuildShortBlade(); break;
-                default: mesh = BuildRifle(index, out rifleVolumes[index]); break;
+                default: mesh = BuildRifle(index); break;
             }
             mesh.name = "Dustline / " + form + (form == WeaponForm.Rifle ? " / sights " + index : string.Empty);
             return variants[index] = mesh;
         }
-
-        public Bounds[] RifleVolumes(int sight) => rifleVolumes[Mathf.Clamp(sight, 0, 2)];
 
         public void WarmPlayerViews()
         {
@@ -148,7 +145,7 @@ namespace Dustline
 
         public static float SightHeight(int level) => level == 2 ? 0.164f : level == 1 ? 0.148f : 0.132f;
 
-        static Mesh BuildRifle(int sight, out Bounds[] volumes)
+        static Mesh BuildRifle(int sight)
         {
             var b = new Sculpt();
             b.Loft(Finish.Polymer, S(-0.411f, -0.005f, 0.035f, 0.065f, 0.010f),
@@ -233,7 +230,6 @@ namespace Dustline
                 b.Box(Finish.Anodized, side * 0.039f, -0.017f, 0.071f, 0.006f, 0.019f, 0.028f);
             }
             BuildSights(b, sight);
-            volumes = b.FitVolumes();
             return b.FinishMesh();
         }
 
@@ -560,27 +556,6 @@ namespace Dustline
             }
 
             static Vector3 AtSide(float x, Vector2 zy) => new Vector3(x, zy.y, zy.x);
-
-            public Bounds[] FitVolumes()
-            {
-                float[] edges = { -1f, -0.228f, 0.132f, 0.376f, 1f };
-                var volumes = new Bounds[edges.Length - 1];
-                for (int s = 0; s < volumes.Length; s++)
-                {
-                    var min = Vector3.one * float.PositiveInfinity;
-                    var max = Vector3.one * float.NegativeInfinity;
-                    for (int i = 0; i < indices.Count; i += 3)
-                    {
-                        Vector3 a = points[indices[i]], b = points[indices[i + 1]], c = points[indices[i + 2]];
-                        Vector3 low = Vector3.Min(a, Vector3.Min(b, c)), high = Vector3.Max(a, Vector3.Max(b, c));
-                        if (high.z < edges[s] || low.z > edges[s + 1]) continue;
-                        low.z = Mathf.Max(low.z, edges[s]); high.z = Mathf.Min(high.z, edges[s + 1]);
-                        min = Vector3.Min(min, low); max = Vector3.Max(max, high);
-                    }
-                    volumes[s].SetMinMax(min, max);
-                }
-                return volumes;
-            }
 
             public Mesh FinishMesh()
             {

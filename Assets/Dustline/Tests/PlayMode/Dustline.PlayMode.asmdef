@@ -1,6 +1,6 @@
 {
   "name": "Dustline.PlayMode",
-  "references": ["Dustline.Runtime"],
+  "references": ["Dustline.Runtime", "Unity.RenderPipelines.Universal.Runtime"],
   "optionalUnityReferences": ["TestAssemblies"],
   "autoReferenced": false
 }

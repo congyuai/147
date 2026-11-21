@@ -28,23 +28,10 @@ namespace Dustline
         Texture2D MapRaster()
         {
             if (mapTexture != null) return mapTexture;
-            const int size = 320;
-            const float half = PortLayout.Size * 0.5f;
-            var pixels = new Color32[size * size];
-            for (int y = 0; y < size; y++)
-                for (int x = 0; x < size; x++)
-                {
-                    var p = new Vector2((x + 0.5f) / size * PortLayout.Size - half, (y + 0.5f) / size * PortLayout.Size - half);
-                    Color32 color = PortLayout.MapColor(p);
-                    if (x % 40 == 0 || y % 40 == 0) color = Color32.Lerp(color, new Color32(155, 176, 174, 255), 0.17f);
-                    pixels[y * size + x] = color;
-                }
-            mapTexture = new Texture2D(size, size, TextureFormat.RGBA32, false) {
-                name = "North Cape terrain chart", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp
-            };
-            mapTexture.SetPixels32(pixels);
-            mapTexture.Apply(false, true);
-            return mapTexture;
+            var texture = Resources.Load<Texture2D>(PortRaster.Chart);
+            if (texture == null || texture.width != PortRaster.Resolution || texture.height != PortRaster.Resolution)
+                throw new InvalidOperationException("缺少 2K 北岬港地图，请执行 Dustline > Prepare Project。");
+            return mapTexture = texture;
         }
 
         MapDisplay CreateMap(Transform owner, float x, float y, float size, bool mini, bool player)

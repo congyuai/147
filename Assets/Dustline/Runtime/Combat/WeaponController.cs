@@ -126,7 +126,7 @@ namespace Dustline
             if (input.ReloadPressed && TryBeginReload()) return;
             if (now < nextAttack) return;
             if (Magazine.Rounds == 0 && TryBeginReload()) return;
-            if (!player.WeaponView.RifleObstructed && (Automatic ? input.Fire : input.FirePressed)) Fire(now, input.Aim);
+            if (Automatic ? input.Fire : input.FirePressed) Fire(now, input.Aim);
         }
 
         bool TryBeginReload()
@@ -193,6 +193,9 @@ namespace Dustline
             var visual = player.WeaponView;
             var item = FindActiveItem();
             if (item == null) { SyncEquipment(); return; }
+            var view = player.View.transform;
+            Vector3 start = view.position;
+            if (Physics.CheckSphere(start, 0.024f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) return;
             if (!Magazine.Fire())
             {
                 if (!emptyClicked)
@@ -206,20 +209,27 @@ namespace Dustline
             nextAttack = now + stats.FireInterval;
             item.LoadedAmmo = Magazine.Rounds;
             var bag = activeBag;
-            var view = player.View.transform;
-            Vector3 start = view.position;
             float spread = aiming ? stats.AimSpread : stats.HipSpread;
             Vector2 offset = Random.insideUnitCircle * spread;
             Vector3 direction = (view.forward + view.right * offset.x + view.up * offset.y).normalized;
             bool struck = Physics.Raycast(start, direction, out var hit, stats.Range, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
             Vector3 end = struck ? hit.point : start + direction * stats.Range;
+            bool traceFromMuzzle = visual.AlignShot(direction, end);
             var target = struck ? hit.collider.GetComponentInParent<Health>() : null;
             DealDamage(target);
             CombatNoise.Emit(transform.position, 65, player.Health);
             float recoil = stats.Recoil * (aiming ? 0.65f : 1f);
             player.Recoil(recoil);
             visual.Kick(recoil);
-            session.Effects?.Shot(visual.Muzzle, end, in hit, target != null);
+            if (session.Effects != null)
+            {
+                Vector3 muzzle = visual.Muzzle.position;
+                const int mask = Physics.DefaultRaycastLayers;
+                const QueryTriggerInteraction triggers = QueryTriggerInteraction.Ignore;
+                bool clearTracer = traceFromMuzzle && !Physics.Linecast(start, muzzle, mask, triggers)
+                    && !Physics.Linecast(muzzle, end - visual.Muzzle.forward * 0.025f, mask, triggers);
+                session.Effects.Shot(visual.Muzzle, end, in hit, target != null, clearTracer);
+            }
             bag.Touch();
         }
 
@@ -254,6 +264,7 @@ namespace Dustline
         void MeleeContact(int step)
         {
             var view = player.View.transform;
+            if (Physics.CheckSphere(view.position, 0.024f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) return;
             float radius = step == 2 ? 0.13f : Definition.Form == WeaponForm.ShortBlade ? 0.17f : 0.22f;
             if (!Physics.SphereCast(view.position, radius, view.forward, out var hit, stats.Range,
                     Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)

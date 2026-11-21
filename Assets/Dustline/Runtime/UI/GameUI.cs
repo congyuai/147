@@ -476,7 +476,6 @@ namespace Dustline
         void OnDestroy()
         {
             operatorPreview?.Dispose();
-            if (mapTexture != null) Destroy(mapTexture);
             icons?.Dispose();
         }
     }

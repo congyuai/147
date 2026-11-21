@@ -8,7 +8,6 @@ namespace Dustline
     {
         const float PalmOffset = 0.044f;
         readonly Transform root;
-        readonly SkinnedMeshRenderer skin;
         readonly float inverseWeaponScale;
         readonly Transform[] joints = new Transform[6];
         readonly OperatorStyle style;
@@ -29,7 +28,7 @@ namespace Dustline
             }
             upper = Vector3.Distance(OperatorVisual.Rest(Bone.RightUpper, style), OperatorVisual.Rest(Bone.RightLower, style));
             lower = Vector3.Distance(OperatorVisual.Rest(Bone.RightLower, style), OperatorVisual.Rest(Bone.RightHand, style));
-            skin = root.gameObject.AddComponent<SkinnedMeshRenderer>();
+            var skin = root.gameObject.AddComponent<SkinnedMeshRenderer>();
             OperatorMesh.AcquireArms(style, out var mesh, out var material);
             skin.sharedMesh = mesh;
             skin.sharedMaterial = material;
@@ -44,46 +43,22 @@ namespace Dustline
             skin.reflectionProbeUsage = ReflectionProbeUsage.Off;
         }
 
-        public void SetVisible(bool visible) => skin.enabled = visible;
-
         internal readonly struct ArmPose
         {
             internal readonly Vector3 Shoulder, Elbow, Wrist;
             internal readonly Quaternion Glove;
-            Vector3 Fingers => Wrist + Glove * (Vector3.down * 0.084f);
 
             internal ArmPose(Vector3 shoulder, Vector3 elbow, Vector3 wrist, Quaternion glove)
             { Shoulder = shoulder; Elbow = elbow; Wrist = wrist; Glove = glove; }
-
-            internal void Enclose(ref Bounds bounds)
-            {
-                Expand(ref bounds, Shoulder, 0.115f);
-                Expand(ref bounds, Elbow, 0.115f);
-                Expand(ref bounds, Wrist, 0.064f);
-                Expand(ref bounds, Fingers, 0.047f);
-            }
-
-            static void Expand(ref Bounds bounds, Vector3 point, float skin)
-            {
-                bounds.Encapsulate(point - Vector3.one * skin);
-                bounds.Encapsulate(point + Vector3.one * skin);
-            }
-
-            internal bool Overlaps(Transform eye) => Intersects(Shoulder, Elbow, 0.115f, eye)
-                || Intersects(Elbow, Wrist, 0.064f, eye) || Intersects(Wrist, Fingers, 0.047f, eye);
-
-            static bool Intersects(Vector3 a, Vector3 b, float radius, Transform eye) =>
-                Physics.CheckCapsule(eye.TransformPoint(a), eye.TransformPoint(b), radius,
-                    Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
         }
 
         public void Sample(Vector3 right, Quaternion rightRotation, Vector3 left, Quaternion leftRotation,
-            float run, float duck, float prone, float tuck, out ArmPose rightArm, out ArmPose leftArm)
+            float run, float duck, float prone, out ArmPose rightArm, out ArmPose leftArm)
         {
             rightArm = Solve(1f, right, rightRotation, new Vector3(0.238f, -0.401f - 0.037f * run + 0.095f * prone,
-                Mathf.Lerp(0.139f + 0.066f * prone, 0.105f, tuck)), prone);
+                0.139f + 0.066f * prone), prone);
             leftArm = Solve(-1f, left, leftRotation, new Vector3(-0.196f, -0.414f + 0.027f * duck + 0.095f * prone,
-                Mathf.Lerp(0.247f + 0.035f * prone, 0.107f, tuck)), prone);
+                0.247f + 0.035f * prone), prone);
         }
 
         ArmPose Solve(float side, Vector3 palm, Quaternion glove, Vector3 shoulder, float prone)

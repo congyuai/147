@@ -94,8 +94,7 @@ namespace Dustline
                 if (interactGlyph.sprite != interactionIcon) interactGlyph.sprite = interactionIcon;
                 SetActive(sprintRing.gameObject, player.Sprinting);
             }
-            bool obstructed = player.WeaponView.RifleObstructed;
-            reticle.enabled = obstructed || (!session.Input.Aim && player.AimProgress < 0.08f);
+            reticle.enabled = !session.Input.Aim && player.AimProgress < 0.08f;
             UpdateDamageCues(player.transform);
             bool marker = Time.unscaledTime < hitUntil;
             var sprite = icons[marker ? RaidIcon.Hit : RaidIcon.Reticle];
@@ -114,7 +113,7 @@ namespace Dustline
             SetBar(staminaBar, player.Stamina * 0.01f);
             ammoReadout.text = weapon.IsMelee ? (weapon.ActiveIsBound ? session.BoundBladeName + " / 随身刀" : "检修短棍 / 近战")
                 : weapon.Magazine == null ? "未装备主武器" : weapon.Magazine.Reloading ? "正在换弹"
-                : weapon.Magazine.Rounds + " / " + weapon.Reserve + (obstructed ? "   持枪受阻" : weapon.Automatic ? "   全自动" : "   半自动");
+                : weapon.Magazine.Rounds + " / " + weapon.Reserve + (weapon.Automatic ? "   全自动" : "   半自动");
 
             var position = player.transform.position;
             var inZone = session.World.FindExit(position);

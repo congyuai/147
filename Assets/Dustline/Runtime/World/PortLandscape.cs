@@ -30,21 +30,6 @@ namespace Dustline
 
         void BuildGround()
         {
-            const int imageSize = 768;
-            const float texel = Size / imageSize;
-            var texture = new Texture2D(imageSize, imageSize, TextureFormat.RGBA32, true, false) {
-                name = "Continuous harbor ground and road paint", wrapMode = TextureWrapMode.Clamp,
-                filterMode = FilterMode.Trilinear, anisoLevel = 4
-            };
-            keep(texture);
-            var pixels = new Color32[imageSize * imageSize];
-            for (int z = 0; z < imageSize; z++)
-                for (int x = 0; x < imageSize; x++)
-                    pixels[z * imageSize + x] = PortTerrain.PaintedColor(new Vector2((x + .5f) * texel - HalfSize, (z + .5f) * texel - HalfSize), texel);
-            texture.SetPixels32(pixels);
-            texture.Apply(true, true);
-            materials.Ground.mainTexture = texture;
-
             const int cols = 284;
             var terrain = PortMesh.Child(root, "North Cape terrain");
             terrain.isStatic = true;
@@ -63,7 +48,9 @@ namespace Dustline
             int width = nx + 1;
             var vertices = new Vector3[width * (nz + 1)];
             var normals = new Vector3[vertices.Length];
+            var tangents = new Vector4[vertices.Length];
             var uv = new Vector2[vertices.Length];
+            var detail = new List<Vector4>(vertices.Length);
             var triangles = new int[nx * nz * 6];
             const float s = PortTerrain.Step;
             for (int dz = 0; dz <= nz; dz++)
@@ -78,12 +65,16 @@ namespace Dustline
                     float south = PortTerrain.VertexHeight(i, Mathf.Max(0, j - 1));
                     float north = PortTerrain.VertexHeight(i, Mathf.Min(PortTerrain.Cells, j + 1));
                     normals[v] = new Vector3(west - east, s * 2, south - north).normalized;
+                    Vector3 tangent = new Vector3(s * 2, east - west, 0f).normalized;
+                    tangents[v] = new Vector4(tangent.x, tangent.y, tangent.z, -1f);
+                    detail.Add(new Vector4(vertices[v].x, vertices[v].z, -1f, 1f));
                     if (dx == nx || dz == nz) continue;
                     int t = (dz * nx + dx) * 6;
                     triangles[t] = v; triangles[t + 1] = v + width; triangles[t + 2] = v + width + 1;
                     triangles[t + 3] = v; triangles[t + 4] = v + width + 1; triangles[t + 5] = v + 1;
                 }
-            var mesh = new Mesh { name = tile.name, vertices = vertices, normals = normals, uv = uv, triangles = triangles };
+            var mesh = new Mesh { name = tile.name, vertices = vertices, normals = normals, tangents = tangents, uv = uv, triangles = triangles };
+            mesh.SetUVs(1, detail);
             keep(mesh);
             tile.AddComponent<MeshFilter>().sharedMesh = mesh;
             var renderer = tile.AddComponent<MeshRenderer>();

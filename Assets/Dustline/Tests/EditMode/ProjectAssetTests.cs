@@ -106,8 +106,8 @@ namespace Dustline.Tests
         [Test]
         public void BuildVersionAdvancesWithoutChangingSaveIdentity()
         {
-            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.3.0"));
-            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(4));
+            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.3.1"));
+            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(5));
             Assert.That(PlayerSettings.companyName, Is.EqualTo("Dustline"));
             Assert.That(PlayerSettings.productName, Is.EqualTo("Dustline Extraction"));
             Assert.That(PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android), Is.EqualTo("com.dustline.extraction"));
@@ -161,9 +161,48 @@ namespace Dustline.Tests
         }
 
         [Test]
+        public void HarborRastersAndScansUseNative2kAndKeepTheirImportSettings()
+        {
+            Check(PortRaster.Chart, false, false, false);
+            Check(PortRaster.Ground, false, false, true);
+            foreach (PortRaster.Finish finish in System.Enum.GetValues(typeof(PortRaster.Finish)))
+            {
+                Check(PortRaster.Surface(finish, false), true, false, false);
+                Check(PortRaster.Surface(finish, true), true, true, false);
+            }
+            var shader = Shader.Find(PortRaster.SurfaceShader);
+            Assert.That(shader, Is.Not.Null);
+            Assert.That(ShaderUtil.ShaderHasError(shader), Is.False);
+
+            static void Check(string key, bool repeat, bool normal, bool mask)
+            {
+                var texture = Resources.Load<Texture2D>(key);
+                Assert.That(texture, Is.Not.Null, key);
+                Assert.That(texture.width, Is.EqualTo(2048), key);
+                Assert.That(texture.height, Is.EqualTo(2048), key);
+                Assert.That(texture.mipmapCount, Is.EqualTo(12), key);
+                var importer = (TextureImporter)AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(texture));
+                importer.GetSourceTextureWidthAndHeight(out int width, out int height);
+                Assert.That(width, Is.EqualTo(2048), key);
+                Assert.That(height, Is.EqualTo(2048), key);
+                Assert.That(importer.wrapMode, Is.EqualTo(repeat ? TextureWrapMode.Repeat : TextureWrapMode.Clamp), key);
+                Assert.That(importer.textureType, Is.EqualTo(normal ? TextureImporterType.NormalMap : TextureImporterType.Default), key);
+                Assert.That(importer.sRGBTexture, Is.EqualTo(!normal), key);
+                Assert.That(importer.ignoreMipmapLimit, Is.True, key);
+                Assert.That(importer.filterMode, Is.EqualTo(FilterMode.Trilinear), key);
+                Assert.That(importer.isReadable, Is.False, key);
+                var android = importer.GetPlatformTextureSettings("Android");
+                Assert.That(android.overridden, Is.True, key);
+                Assert.That(android.maxTextureSize, Is.EqualTo(2048), key);
+                Assert.That(android.format, Is.EqualTo(normal || mask ? TextureImporterFormat.ETC2_RGBA8 : TextureImporterFormat.ETC2_RGB4), key);
+            }
+        }
+
+        [Test]
         public void BootstrapSceneAndPipelineAreConfigured()
         {
             Assert.That(GraphicsSettings.defaultRenderPipeline, Is.Not.Null);
+            Assert.That(LayerMask.NameToLayer(FirstPersonView.LayerName), Is.EqualTo(FirstPersonView.Layer));
             Assert.That(EditorBuildSettings.scenes.Length, Is.EqualTo(1));
             Assert.That(EditorBuildSettings.scenes[0].enabled, Is.True);
             Assert.That(AssetDatabase.LoadAssetAtPath<SceneAsset>(EditorBuildSettings.scenes[0].path), Is.Not.Null);
