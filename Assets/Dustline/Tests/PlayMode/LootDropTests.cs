@@ -1,8 +1,10 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
+using UnityEngine.UI;
 
 namespace Dustline.Tests
 {
@@ -14,12 +16,21 @@ namespace Dustline.Tests
             using (var built = new PortWorldFixture())
             {
                 var world = built.World;
-                LootContainer starter = null;
-                int high = 0;
+                LootContainer starter = null, starterAmmo = null;
+                int high = 0, medicine = 0;
                 foreach (var loot in world.GetComponentsInChildren<LootContainer>())
                 {
                     Vector3 p = loot.transform.position;
                     Assert.That(loot.GetComponent<BoxCollider>().isTrigger, Is.False);
+                    Assert.That(loot.Inventory.Items, Is.Not.Empty, loot.DisplayName);
+                    foreach (var item in loot.Inventory.Items)
+                        Assert.That(loot.Accepts(loot.Inventory.Catalog.Find(item.ItemId)), Is.True, loot.DisplayName + ": " + item.ItemId);
+                    if (loot.Kind == LootKind.MedicalCase)
+                    {
+                        medicine++;
+                        foreach (var item in loot.Inventory.Items)
+                            Assert.That(loot.Inventory.Catalog.Find(item.ItemId).Kind, Is.EqualTo(ItemKind.Medicine), loot.DisplayName);
+                    }
                     if (PortLayout.HighValueArea.Contains(new Vector2(p.x, p.z)))
                     {
                         high++;
@@ -27,10 +38,17 @@ namespace Dustline.Tests
                         Assert.That(loot.Inventory.Count(PortWorldFixture.HighItem), Is.EqualTo(1));
                     }
                     else Assert.That(loot.Inventory.Count(PortWorldFixture.HighItem), Is.Zero);
-                    if (loot.DisplayName == "共享初始补给") starter = loot;
+                    if (loot.DisplayName == "起点医疗箱") starter = loot;
+                    if (loot.DisplayName == "起点弹药箱") starterAmmo = loot;
                 }
                 Assert.That(high, Is.EqualTo(4));
+                Assert.That(medicine, Is.GreaterThan(1));
                 Assert.That(starter, Is.Not.Null);
+                Assert.That(starterAmmo, Is.Not.Null);
+                Assert.That(starter.Inventory.Count("medkit"), Is.EqualTo(1));
+                Assert.That(starter.Inventory.Count("bandage"), Is.EqualTo(2));
+                Assert.That(starter.Inventory.Count("ammo"), Is.Zero);
+                Assert.That(starterAmmo.Inventory.Count("ammo"), Is.EqualTo(30));
                 Vector3 p0 = starter.transform.position - Vector3.forward * 2;
                 Vector3 eye = p0 + Vector3.up * 1.6f;
                 Assert.That(Physics.Raycast(eye, (starter.transform.position + Vector3.up * .39f - eye).normalized,
@@ -43,11 +61,120 @@ namespace Dustline.Tests
                 var motor = actor.GetComponent<CharacterController>();
                 motor.radius = .35f; motor.height = 1.8f; motor.center = Vector3.up * .9f; motor.stepOffset = .25f;
                 Physics.SyncTransforms();
+                yield return new WaitForFixedUpdate();
                 Assert.That((motor.Move(Vector3.forward * 3) & CollisionFlags.Sides) != 0, Is.True);
                 Assert.That(actor.transform.position.z, Is.LessThan(starter.transform.position.z - .3f));
             }
             yield return null;
         }
+
+        [TestCase(LootKind.MedicalCase)]
+        [TestCase(LootKind.SupplyCrate)]
+        [TestCase(LootKind.Toolbox)]
+        [TestCase(LootKind.StorageLocker)]
+        [TestCase(LootKind.EquipmentCase)]
+        [TestCase(LootKind.FieldBag)]
+        public void WeightedDropsAndDepositsRespectTheContainerKind(LootKind kind)
+        {
+            var catalog = Resources.Load<ItemCatalog>("Dustline/Items");
+            var table = Resources.Load<LootTable>("Dustline/Loot");
+            Assert.That(catalog, Is.Not.Null, "Run Dustline > Prepare Project first.");
+            Assert.That(table, Is.Not.Null);
+            var crate = new GameObject("Typed container");
+            try
+            {
+                var container = crate.AddComponent<LootContainer>();
+                container.Initialize("Typed container", catalog, kind: kind);
+                var bag = container.Inventory;
+                var seen = new HashSet<string>();
+                for (int seed = 0; seed < 80; seed++)
+                {
+                    table.FillContainer(container, new System.Random(seed), 2);
+                    Assert.That(bag.Items, Is.Not.Empty);
+                    foreach (var item in bag.Items)
+                    {
+                        Assert.That(IsCompatible(kind, catalog.Find(item.ItemId).Kind), Is.True, item.ItemId);
+                        seen.Add(item.ItemId);
+                    }
+                    bag.Restore(new List<ItemStack>());
+                }
+                if (kind == LootKind.MedicalCase)
+                {
+                    Assert.That(seen, Is.EquivalentTo(new[] { "medkit", "bandage", "trauma_case" }));
+                    Assert.That(bag.TryAdd("ammo", 1, out _), Is.False);
+                    var source = new GridInventory(2, 2, 20, catalog);
+                    Assert.That(source.TryAdd("ammo", 1, out var error), Is.True, error);
+                    Assert.That(source.TryTransferTo(source.Items[0].InstanceId, bag, out _), Is.False);
+                    Assert.That(source.Count("ammo"), Is.EqualTo(1));
+                    Assert.That(bag.Items, Is.Empty);
+                }
+            }
+            finally { Object.DestroyImmediate(crate); }
+        }
+
+        [UnityTest]
+        public IEnumerator LootScreenNamesTheContainerAndShowsOnlyCarriedWeight()
+        {
+            var owner = new GameObject("Loot UI fixture");
+            var box = new GameObject("Loot UI container");
+            var uiNode = new GameObject("Loot UI");
+            try
+            {
+                owner.SetActive(false);
+                var session = owner.AddComponent<GameSession>();
+                var ui = uiNode.AddComponent<GameUI>();
+                var input = owner.AddComponent<PlayerInputReader>();
+                var catalog = Resources.Load<ItemCatalog>("Dustline/Items");
+                Assert.That(catalog, Is.Not.Null, "Run Dustline > Prepare Project first.");
+                var loadout = new GridInventory(6, 6, 30, catalog);
+                Assert.That(loadout.TryAdd("bandage", 2, out _), Is.True);
+                Assign("Phase", SessionPhase.Raid);
+                Assign("Loadout", loadout);
+                Assign("Catalog", catalog);
+                Assign("Input", input);
+                Assign("UI", ui);
+                ui.Initialize(session);
+                var loot = box.AddComponent<LootContainer>();
+                loot.Initialize("靶场测试医疗箱", catalog, kind: LootKind.MedicalCase);
+                Assert.That(loot.Inventory.TryAdd("medkit", 1, out _), Is.True);
+                loot.Reveal();
+                typeof(GameUI).GetMethod("ShowFieldInventory", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(ui, new object[] { loot });
+
+                var panel = ui.transform.Find("Dustline UI/Safe area/Pages/Field inventory");
+                Assert.That(panel, Is.Not.Null);
+                int weightLabels = 0;
+                bool named = false;
+                foreach (var label in panel.GetComponentsInChildren<Text>())
+                {
+                    if (label.transform.parent == panel && label.text == loot.DisplayName) named = true;
+                    if (label.text.StartsWith("负重", System.StringComparison.Ordinal)) weightLabels++;
+                }
+                Assert.That(named, Is.True);
+                Assert.That(weightLabels, Is.EqualTo(1));
+                var glyphs = new HashSet<string>();
+                foreach (var image in panel.GetComponentsInChildren<Image>())
+                    if (image.gameObject.name == "Item symbol" && image.sprite != null) glyphs.Add(image.sprite.name);
+                Assert.That(glyphs, Is.EquivalentTo(new[] { "PouchItem", "BandageItem" }));
+
+                void Assign(string name, object value) => typeof(GameSession).GetProperty(name).GetSetMethod(true).Invoke(session, new[] { value });
+            }
+            finally
+            {
+                Object.Destroy(uiNode);
+                Object.Destroy(box);
+                Object.Destroy(owner);
+            }
+            yield return null;
+        }
+
+        static bool IsCompatible(LootKind kind, ItemKind item) => kind switch
+        {
+            LootKind.MedicalCase => item == ItemKind.Medicine,
+            LootKind.SupplyCrate => item == ItemKind.Weapon || item == ItemKind.Ammo,
+            LootKind.StorageLocker => item == ItemKind.Armor || item == ItemKind.Valuable,
+            LootKind.Toolbox or LootKind.EquipmentCase => item == ItemKind.Valuable,
+            _ => true
+        };
 
         [UnityTest]
         public IEnumerator FallenCombatantsDoNotMakeBridgeChokepointsImpassable()

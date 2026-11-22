@@ -28,6 +28,11 @@ namespace Dustline
         }
         public GridInventory Stash { get; private set; }
         public GridInventory Loadout { get; private set; }
+        public GridInventory ActiveFieldBag => Phase == SessionPhase.Practice || Phase == SessionPhase.PracticeLoading ? practiceBag : Loadout;
+        public bool InField => Phase == SessionPhase.Raid || Phase == SessionPhase.Practice;
+        internal PracticeRange Practice { get; private set; }
+        GridInventory practiceBag;
+        string preferredMedicine, practiceMedicine;
         public ProfileData Profile { get; private set; }
         public PlayerInputReader Input { get; private set; }
         public GameUI UI { get; private set; }
@@ -93,7 +98,7 @@ namespace Dustline
                 Catalog.RebuildIndex();
                 Stash = new GridInventory(12, 10, 300, Catalog);
                 Loadout = new GridInventory(6, 6, 30, Catalog);
-                store = new ProfileStore(Path.Combine(Application.persistentDataPath, "dustline-profile-v1.json"));
+                store ??= new ProfileStore(Path.Combine(Application.persistentDataPath, "dustline-profile-v1.json"));
                 Profile = store.Load();
                 if (Profile == null)
                 {
@@ -135,7 +140,7 @@ namespace Dustline
 
         void Update()
         {
-            if (Application.isMobilePlatform && Time.unscaledTime >= refreshCheckAt)
+            if (Application.isMobilePlatform && FrameRate == RaidFrameRate.Uncapped && focused && !paused && Time.unscaledTime >= refreshCheckAt)
             {
                 refreshCheckAt = Time.unscaledTime + 2;
                 RaidFrameRate.Apply(FrameRate);
@@ -143,6 +148,7 @@ namespace Dustline
             if (focused && !paused)
             {
                 if (Input.EscapePressed || Input.SettingsPressed) UI.BackOrSettings();
+                else if (Phase == SessionPhase.Practice && (Input.MapPressed || Input.InventoryPressed)) UI.TogglePracticePanel();
                 else if (Phase == SessionPhase.Raid && Input.MapPressed) UI.ToggleMap();
                 else if (Phase == SessionPhase.Raid && Input.InventoryPressed) UI.ToggleInventory();
             }
@@ -152,7 +158,7 @@ namespace Dustline
             if (RaidRemaining <= 0) EndRaid(false, "撤离失败：突袭时间已耗尽");
         }
 
-        bool AcceptsGameplay => Phase == SessionPhase.Raid && focused && !paused && !UI.BlocksGameplay;
+        bool AcceptsGameplay => InField && focused && !paused && !UI.BlocksGameplay;
 
         public void SelectFrameRate(int value)
         {
@@ -297,16 +303,7 @@ namespace Dustline
                 World = worldObject.AddComponent<WorldBuilder>();
                 World.Build(this);
                 worldObject.AddComponent<HarborAtmosphere>().Initialize(this, World.Sun);
-                Effects = worldObject.AddComponent<RaidCombatEffects>();
-                Effects.Initialize();
-                var actor = new GameObject("Player");
-                actor.transform.SetParent(worldObject.transform);
-                actor.transform.position = World.Spawn;
-                actor.transform.rotation = Quaternion.Euler(0, 40, 0);
-                Player = actor.AddComponent<PlayerController>();
-                Player.Initialize(this);
-                EnvironmentAudio = worldObject.AddComponent<RaidEnvironmentAudio>();
-                EnvironmentAudio.Initialize(this);
+                CreateFieldPlayer(worldObject, World.Spawn, 40f, false);
                 World.SpawnBots();
                 Profile.Stash = Stash.Snapshot();
                 Profile.Loadout.Clear();
@@ -324,12 +321,114 @@ namespace Dustline
             }
         }
 
+        void CreateFieldPlayer(GameObject field, Vector3 position, float heading, bool practice)
+        {
+            Effects = field.AddComponent<RaidCombatEffects>();
+            Effects.Initialize();
+            EnvironmentAudio = field.AddComponent<RaidEnvironmentAudio>();
+            EnvironmentAudio.Initialize(this, practice);
+            var actor = new GameObject("Player");
+            actor.transform.SetParent(field.transform, false);
+            actor.transform.SetPositionAndRotation(position, Quaternion.Euler(0, heading, 0));
+            Player = actor.AddComponent<PlayerController>();
+            Player.Initialize(this);
+        }
+
+        public void StartPractice()
+        {
+            if (Phase != SessionPhase.Menu) return;
+            Phase = SessionPhase.PracticeLoading;
+            UI.ShowLoading(true);
+            StartCoroutine(BuildPractice());
+        }
+
+        IEnumerator BuildPractice()
+        {
+            yield return null;
+            GameObject field = null;
+            try
+            {
+                field = new GameObject("Practice field");
+                field.transform.SetParent(transform, false);
+                practiceBag = CreatePracticeBag();
+                Practice = field.AddComponent<PracticeRange>();
+                Practice.Build();
+                CreateFieldPlayer(field, Practice.Spawn, 0f, true);
+                menuCamera.enabled = false;
+                Phase = SessionPhase.Practice;
+                UI.ShowPractice();
+            }
+            catch (Exception error)
+            {
+                ClearPractice(field);
+                Fail(error);
+            }
+        }
+
+        GridInventory CreatePracticeBag()
+        {
+            var bag = new GridInventory(6, 6, 30f, Catalog);
+            AddStarterKit(bag);
+            var rifle = bag.Equipped(EquipmentSlot.Weapon);
+            var definition = Catalog.Find(rifle?.ItemId)?.Weapon;
+            if (definition == null || definition.Melee || definition.AmmoId != "ammo" || bag.Count("medkit") == 0
+                || !bag.TryAdd("ammo", 150, out _) || !bag.TryAdd("bandage", 5, out _) || !bag.TryAdd("trauma_case", 2, out _))
+                throw new InvalidDataException("靶场练习装备未就绪，请执行 Dustline > Prepare Project。");
+            rifle.LoadedAmmo = definition.MagazineSize;
+            return bag;
+        }
+
+        internal void RefillPractice()
+        {
+            if (Phase != SessionPhase.Practice) return;
+            GridInventory replacement;
+            try { replacement = CreatePracticeBag(); }
+            catch (InvalidDataException error) { UI.Notify(error.Message); return; }
+            Player.CancelTreatment();
+            practiceBag = replacement;
+            Player.Weapon.SyncEquipment();
+        }
+
+        internal void PracticeHealthSample()
+        {
+            if (Phase != SessionPhase.Practice || Player.Health.Current <= 40f) return;
+            Player.Health.Damage(Player.Health.Current - 40f, null, false);
+        }
+
+        public void LeavePractice()
+        {
+            if (Phase != SessionPhase.Practice) return;
+            ClearPractice(Practice.gameObject);
+            Phase = SessionPhase.Menu;
+            UI.ShowMenu();
+        }
+
+        void ClearPractice(GameObject field)
+        {
+            ClearField(field);
+            Practice = null;
+            practiceBag = null;
+            practiceMedicine = null;
+        }
+
+        internal void PlayerDown()
+        {
+            if (Phase == SessionPhase.Practice)
+            {
+                Player.Weapon.CancelActions();
+                Player.Health.Initialize(Player.Health.Maximum, Player.Health.Team);
+                UI.CancelFieldGestures();
+                SyncControls();
+                return;
+            }
+            EndRaid(false, "撤离失败：你已阵亡");
+        }
+
         public void EndRaid(bool extracted, string reason)
         {
             if (Phase != SessionPhase.Raid) return;
             Phase = SessionPhase.Results;
-            Input.Gameplay = false;
-            SetCursor(true);
+            SyncControls();
             try
             {
                 if (extracted)
@@ -358,8 +457,14 @@ namespace Dustline
 
         void ClearRaidWorld()
         {
-            if (World != null) { World.gameObject.SetActive(false); Destroy(World.gameObject); }
+            ClearField(World != null ? World.gameObject : null);
             World = null;
+        }
+
+        void ClearField(GameObject field)
+        {
+            Player?.CancelTreatment();
+            if (field != null) { field.SetActive(false); Destroy(field); }
             Player = null;
             Effects = null;
             EnvironmentAudio = null;
@@ -368,6 +473,7 @@ namespace Dustline
 
         public void PersistSafeState()
         {
+            if (Phase != SessionPhase.Menu && Phase != SessionPhase.Results) return;
             Profile.Stash = Stash.Snapshot();
             Profile.Loadout = Loadout.Snapshot();
             store.Save(Profile);
@@ -397,7 +503,7 @@ namespace Dustline
 
         public void Sell(GridInventory from, string id)
         {
-            if (Phase != SessionPhase.Menu) return;
+            if (Phase != SessionPhase.Menu || (from != Stash && from != Loadout)) return;
             var item = from.Find(id);
             if (item == null) return;
             Profile.Credits += Mathf.Max(1, Catalog.Find(item.ItemId).Value / 2) * item.Quantity;
@@ -417,16 +523,42 @@ namespace Dustline
             UI.RefreshInventory();
         }
 
+        internal ItemStack QuickMedicine(string itemId = null)
+        {
+            string preferred = itemId ?? (practiceBag != null ? practiceMedicine : preferredMedicine);
+            var bag = ActiveFieldBag;
+            if (bag == null) return null;
+            ItemStack first = null;
+            foreach (var stack in bag.Items)
+            {
+                if (stack.Slot != EquipmentSlot.None || stack.Quantity <= 0 || Catalog.Find(stack.ItemId).Kind != ItemKind.Medicine) continue;
+                if (stack.ItemId == preferred) return stack;
+                first ??= stack;
+            }
+            return itemId == null ? first : null;
+        }
+
+        internal bool SelectMedicine(string itemId)
+        {
+            if (!InField || QuickMedicine(itemId) == null) return false;
+            if (practiceBag != null) practiceMedicine = itemId;
+            else preferredMedicine = itemId;
+            return true;
+        }
+
         public void UseMedicine(string id = null)
         {
-            if (Phase != SessionPhase.Raid || !Player.Health.Alive) return;
-            if (Player.Health.Current >= Player.Health.Maximum) { UI.Notify("生命值已满，无需治疗。"); return; }
-            ItemStack item = id == null ? null : Loadout.Find(id);
-            if (id == null) foreach (var candidate in Loadout.Items) if (Catalog.Find(candidate.ItemId).Kind == ItemKind.Medicine) { item = candidate; break; }
-            if (item == null || Catalog.Find(item.ItemId).Kind != ItemKind.Medicine) { UI.Notify("没有可用的医疗品。"); return; }
-            var definition = Catalog.Find(item.ItemId);
-            if (Loadout.Consume(item.ItemId, 1)) Player.Health.Heal(definition.HealAmount);
-            UI.RefreshInventory();
+            if (!InField || !Input.Gameplay || !Player.Health.Alive || Player.WeaponView.MedicineBusy) return;
+            if (Player.Health.Current >= Player.Health.Maximum) { UI?.Notify("生命值已满，无需治疗。"); return; }
+            var bag = ActiveFieldBag;
+            var stack = id == null ? QuickMedicine() : bag.Find(id);
+            var item = stack == null ? null : Catalog.Find(stack.ItemId);
+            if (item == null || item.Kind != ItemKind.Medicine || stack.Quantity <= 0 || stack.Slot != EquipmentSlot.None
+                || !(item.HealAmount > 0f) || float.IsInfinity(item.HealAmount)
+                || !(item.UseSeconds > 0f) || float.IsInfinity(item.UseSeconds)
+                || !Enum.IsDefined(typeof(MedicineForm), item.MedicineVisual))
+            { UI?.Notify("没有可用的医疗品。"); return; }
+            Player.BeginTreatment(bag, stack.InstanceId, item);
         }
 
         public void SetCursor(bool visible)
@@ -439,6 +571,11 @@ namespace Dustline
         public void SyncControls()
         {
             Input.Gameplay = AcceptsGameplay;
+            if (!Input.Gameplay)
+            {
+                Player?.CancelTreatment();
+                Player?.Weapon?.CancelActions();
+            }
             SetCursor(!Input.Gameplay);
         }
 
@@ -447,14 +584,21 @@ namespace Dustline
             focused = hasFocus;
             if (UI == null) return;
             if (hasFocus) RaidFrameRate.Apply(FrameRate);
+            else UI.CancelFieldGestures();
+            UI.ResetFrameSample();
             SyncControls();
         }
         void OnApplicationPause(bool isPaused)
         {
             paused = isPaused;
             if (UI == null) return;
-            if (paused) SaveControlPreferences();
+            if (paused)
+            {
+                SaveControlPreferences();
+                UI.CancelFieldGestures();
+            }
             else RaidFrameRate.Apply(FrameRate);
+            UI.ResetFrameSample();
             SyncControls();
         }
         void Fail(Exception error)

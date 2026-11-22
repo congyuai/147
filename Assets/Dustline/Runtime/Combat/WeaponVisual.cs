@@ -15,6 +15,7 @@ namespace Dustline
         public WeaponForm Form { get; private set; }
         public bool IsMelee => Form != WeaponForm.Rifle;
         internal float VisibleAim => firstPerson && !IsMelee ? aimProgress : 0f;
+        internal bool MedicineBusy => usingMedicine || medicineBlend > 0f;
         public Vector3 RightGrip => transform.TransformPoint(rightGrip);
         public Vector3 LeftGrip => IsMelee && Form != WeaponForm.Tangdao
             ? transform.parent.TransformPoint(FreeHand(firstPerson)) : transform.TransformPoint(leftGrip);
@@ -24,7 +25,8 @@ namespace Dustline
 
         bool firstPerson;
         MeshFilter filter;
-        MeshRenderer surface;
+        MeshRenderer surface, magazineProp, medicineProp;
+        MeshFilter medicineMesh;
         Ar20Mesh art;
         FirstPersonArms arms;
         PlayerController player;
@@ -37,8 +39,12 @@ namespace Dustline
         float kick, kickImpulse, shotPose;
         Vector3 shotAxis;
         float reloadTime, reloadDuration, reloadBlend;
+        Magazine reloadSource;
         float swingTime, swingDuration, swingBlend;
-        bool reloadCancelled, swingCancelled;
+        bool reloadCancelled, swingCancelled, usingMedicine;
+        float medicineBlend, medicineProgress;
+        Vector3 medicineAnchor;
+        Quaternion medicineRotation;
 
         public static WeaponVisual Create(Transform parent, bool firstPerson, bool melee = false)
             => Create(parent, firstPerson, melee ? WeaponForm.Baton : WeaponForm.Rifle);
@@ -84,10 +90,28 @@ namespace Dustline
             {
                 art.WarmPlayerViews();
                 arms = new FirstPersonArms(transform, player != null ? player.Operator.Style : OperatorStyle.Male, gameObject.layer);
+                magazineProp = CreateProp("Magazine", out var magazineMesh);
+                magazineMesh.sharedMesh = art.MagazineMesh;
+                medicineProp = CreateProp("Medicine", out medicineMesh);
             }
             surface.sharedMaterial = art.Material;
-            filter.sharedMesh = art.GetMesh(Form, sightLevel);
+            filter.sharedMesh = art.GetMesh(Form, sightLevel, firstPerson);
             ApplyPose();
+        }
+
+        MeshRenderer CreateProp(string name, out MeshFilter mesh)
+        {
+            var node = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer)) { layer = gameObject.layer };
+            node.transform.SetParent(transform, false);
+            mesh = node.GetComponent<MeshFilter>();
+            var renderer = node.GetComponent<MeshRenderer>();
+            renderer.sharedMaterial = art.Material;
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            renderer.lightProbeUsage = LightProbeUsage.Off;
+            renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
+            node.SetActive(false);
+            return renderer;
         }
 
         public void SetForm(WeaponForm form)
@@ -95,7 +119,7 @@ namespace Dustline
             if (Form == form) return;
             ResetPose();
             ConfigureForm(form);
-            if (art != null) filter.sharedMesh = art.GetMesh(Form, sightLevel);
+            if (art != null) filter.sharedMesh = art.GetMesh(Form, sightLevel, firstPerson);
             ApplyPose();
         }
 
@@ -137,7 +161,7 @@ namespace Dustline
             int value = IsMelee ? 0 : Mathf.Clamp(level, 0, 2);
             if (sightLevel == value) return;
             sightLevel = value;
-            if (art != null) filter.sharedMesh = art.GetMesh(Form, sightLevel);
+            if (art != null) filter.sharedMesh = art.GetMesh(Form, sightLevel, firstPerson);
             ApplyPose();
         }
 
@@ -152,7 +176,9 @@ namespace Dustline
         {
             aimProgress = speed = run = stride = breath = crouch = prone = kick = kickImpulse = shotPose = 0;
             reloadTime = reloadDuration = reloadBlend = swingTime = swingDuration = swingBlend = 0;
-            reloadCancelled = swingCancelled = false;
+            reloadSource = null;
+            medicineBlend = medicineProgress = 0f;
+            reloadCancelled = swingCancelled = usingMedicine = false;
         }
 
         public void SetPose(bool aiming, float movementSpeed, bool sprinting, bool crouched, float delta, bool walkForFire = false)
@@ -173,11 +199,13 @@ namespace Dustline
             stride = Mathf.Repeat(stride + dt * speed / stepDistance * Mathf.PI, Tau);
             breath = Mathf.Repeat(breath + dt * 1.77f, Tau);
             float aimSeconds = player != null && player.Weapon != null ? player.Weapon.AimSeconds : 0.18f;
-            bool sighting = aiming && !IsMelee && (reloadDuration <= 0 || reloadCancelled);
+            medicineBlend = Mathf.MoveTowards(medicineBlend, usingMedicine ? 1f : 0f, 8f * dt);
+            bool sighting = aiming && !IsMelee && !MedicineBusy && (reloadDuration <= 0 || reloadCancelled);
             aimProgress = Mathf.MoveTowards(aimProgress, sighting ? 1 : 0, delta / Mathf.Max(0.08f, aimSeconds));
             kick = Mathf.Lerp(kick, kickImpulse, Damp(38, dt));
             kickImpulse *= Mathf.Exp(-17 * dt);
-            AdvanceAction(ref reloadTime, ref reloadDuration, ref reloadBlend, reloadCancelled, delta);
+            if (reloadSource != null) reloadTime = reloadDuration - reloadSource.Remaining;
+            else AdvanceAction(ref reloadTime, ref reloadDuration, ref reloadBlend, reloadCancelled, delta);
             AdvanceAction(ref swingTime, ref swingDuration, ref swingBlend, swingCancelled, delta);
             ApplyPose();
         }
@@ -219,13 +247,47 @@ namespace Dustline
         public void BeginReload(float seconds)
         {
             shotPose = 0f;
+            reloadSource = null;
             reloadTime = 0;
             reloadDuration = Mathf.Max(0, seconds);
             reloadBlend = 1;
             reloadCancelled = false;
         }
 
-        internal void CancelReload() => reloadCancelled = true;
+        internal void BeginReload(Magazine source)
+        {
+            BeginReload(source.Remaining);
+            reloadSource = source;
+        }
+
+        internal void CancelReload()
+        {
+            reloadSource = null;
+            reloadCancelled = true;
+        }
+
+        internal void EndReload()
+        {
+            reloadSource = null;
+            reloadTime = reloadDuration = reloadBlend = 0f;
+            ApplyPose();
+        }
+
+        internal void BeginMedicine(MedicineForm form)
+        {
+            if (medicineMesh == null) return;
+            usingMedicine = true;
+            shotPose = 0f;
+            medicineProgress = 0f;
+            medicineMesh.sharedMesh = art.MedicineMesh(form);
+        }
+
+        internal void SetMedicineProgress(float progress)
+        {
+            if (usingMedicine) medicineProgress = progress;
+        }
+
+        internal void EndMedicine() => usingMedicine = false;
 
         public void Swing(float duration) => Swing(duration, 0);
 
@@ -262,10 +324,45 @@ namespace Dustline
                     position = anchor - rotation * tip;
                 }
             }
+            if (medicineBlend > 0f)
+            {
+                float lower = Ease(medicineBlend);
+                position += new Vector3(0.158f, -0.36f, -0.092f) * lower;
+                rotation = Quaternion.Slerp(rotation, Quaternion.Euler(32f, 34f, 24f), lower);
+            }
             transform.SetLocalPositionAndRotation(position, rotation);
             if (arms == null) return;
+            PoseProps(position, rotation);
             SampleArms(position, rotation, out var right, out var left);
             arms.Apply(position, rotation, right, left);
+        }
+
+        float ReloadPhase => reloadDuration > 0f ? Mathf.Clamp01(reloadTime / reloadDuration) : 0f;
+
+        void PoseProps(Vector3 position, Quaternion rotation)
+        {
+            float phase = ReloadPhase;
+            float carry = (Ease((phase - .16f) / .25f) - Ease((phase - .56f) / .25f)) * reloadBlend;
+            float exchange = Ease((phase - .43f) / .12f);
+            Vector3 path = Vector3.Lerp(new Vector3(-.064f, -.187f, .028f), new Vector3(-.117f, -.193f, .060f), exchange);
+            magazineProp.transform.SetLocalPositionAndRotation(path * carry,
+                Quaternion.Euler(18f * carry, Mathf.Lerp(-18f, 10f, exchange) * carry, -15f * carry));
+            SetPropVisible(magazineProp, !IsMelee && !(phase >= .43f && phase < .55f && !reloadCancelled));
+
+            float use = Ease(medicineBlend);
+            bool showMedicine = use > .20f && medicineMesh.sharedMesh != null;
+            SetPropVisible(medicineProp, showMedicine);
+            if (medicineBlend <= 0f) return;
+            float settle = Mathf.Sin(medicineProgress * Mathf.PI);
+            medicineAnchor = new Vector3(-.123f + .024f * settle, Mathf.Lerp(-.437f, -.193f, use), .505f + .023f * settle);
+            medicineRotation = Quaternion.Euler(7f - 19f * settle, -23f, 17f + 8f * settle);
+            Quaternion inverse = Quaternion.Inverse(rotation);
+            medicineProp.transform.SetLocalPositionAndRotation(inverse * (medicineAnchor - position) / ViewScale, inverse * medicineRotation);
+        }
+
+        static void SetPropVisible(MeshRenderer prop, bool visible)
+        {
+            if (prop.gameObject.activeSelf != visible) prop.gameObject.SetActive(visible);
         }
 
         void SampleArms(Vector3 position, Quaternion rotation,
@@ -273,6 +370,7 @@ namespace Dustline
         {
             Vector3 right = position + rotation * (rightGrip * ViewScale);
             Vector3 left = position + rotation * (leftGrip * ViewScale);
+            Quaternion rightWrist = rotation * rightGlove;
             Quaternion leftWrist = rotation * leftGlove;
             if (IsMelee && Form != WeaponForm.Tangdao)
             {
@@ -281,14 +379,22 @@ namespace Dustline
             }
             else if (!IsMelee && reloadDuration > 0)
             {
-                float progress = reloadTime / reloadDuration;
-                float handling = ReloadWeight(progress, reloadBlend);
-                float reach = Mathf.Sin(Mathf.PI * Ease((progress - 0.12f) / 0.65f)) * handling;
-                var service = position + rotation * (new Vector3(-0.043f, -0.153f - 0.12f * reach, 0.071f - 0.065f * reach) * ViewScale);
-                left = Vector3.Lerp(left, service, handling);
-                leftWrist = Quaternion.Slerp(leftWrist, rotation * Quaternion.Euler(-22f, -38f, 18f), handling);
+                float handling = ReloadWeight(ReloadPhase, reloadBlend);
+                var mag = magazineProp.transform;
+                Vector3 service = mag.localPosition + mag.localRotation * new Vector3(-.035f, -.138f, .067f);
+                left = Vector3.Lerp(left, position + rotation * (service * ViewScale), handling);
+                leftWrist = Quaternion.Slerp(leftWrist, rotation * mag.localRotation * Quaternion.Euler(-22f, -38f, 18f), handling);
             }
-            arms.Sample(right, rotation * rightGlove, left, leftWrist, run, crouch, prone, out rightArm, out leftArm);
+            if (medicineBlend > 0f)
+            {
+                float blend = Ease(medicineBlend);
+                float motion = Mathf.Sin(medicineProgress * Mathf.PI * 3f) * .020f;
+                left = Vector3.Lerp(left, medicineAnchor + medicineRotation * new Vector3(-.046f, -.044f, 0f), blend);
+                right = Vector3.Lerp(right, medicineAnchor + medicineRotation * new Vector3(.065f, .026f + motion, -.012f), blend);
+                leftWrist = Quaternion.Slerp(leftWrist, medicineRotation * Quaternion.Euler(-69f, 20f, 38f), blend);
+                rightWrist = Quaternion.Slerp(rightWrist, medicineRotation * Quaternion.Euler(-16f, -31f, -34f), blend);
+            }
+            arms.Sample(right, rightWrist, left, leftWrist, run, crouch, prone, out rightArm, out leftArm);
         }
 
         void RifleLocalPose(out Vector3 position, out Quaternion rotation)
@@ -298,7 +404,7 @@ namespace Dustline
             float horizontal = Mathf.Sin(stride) * bob;
             float vertical = Mathf.Sin(2 * stride) * bob;
             float idle = Mathf.Sin(breath) * (1 - aim);
-            float progress = reloadDuration > 0 ? reloadTime / reloadDuration : 0;
+            float progress = ReloadPhase;
             float reload = ReloadWeight(progress, reloadBlend);
             float roll = reload * Mathf.Sin(progress * Tau);
             if (firstPerson)
@@ -306,9 +412,9 @@ namespace Dustline
                 Vector3 hip = new Vector3(0.247f, -0.216f, 0.601f);
                 Vector3 ads = new Vector3(0, -Ar20Mesh.SightHeight(sightLevel) * ViewScale, 0.608f);
                 float carry = run * (1 - aim);
-                position = Vector3.Lerp(hip, ads, aim) + new Vector3(0.013f * horizontal + 0.047f * reload + 0.047f * carry,
-                    0.011f * vertical + 0.002f * idle - 0.059f * reload - 0.064f * carry - 0.018f * prone * (1 - aim),
-                    -0.045f * kick - 0.020f * reload - 0.032f * carry);
+                position = Vector3.Lerp(hip, ads, aim) + new Vector3(0.013f * horizontal - 0.074f * reload + 0.047f * carry,
+                    0.011f * vertical + 0.002f * idle + 0.072f * reload - 0.064f * carry - 0.018f * prone * (1 - aim),
+                    -0.045f * kick + 0.087f * reload - 0.032f * carry);
                 rotation = Quaternion.Euler(0.92f * vertical - Mathf.Lerp(3.2f, 1.15f, aim) * kick + 13 * reload + 16 * carry,
                     -7 * (1 - aim) + 1.45f * horizontal + 5 * reload - 17 * carry,
                     -8 * (1 - aim) - 1.8f * horizontal + 23 * reload + 9 * roll - 16 * carry);

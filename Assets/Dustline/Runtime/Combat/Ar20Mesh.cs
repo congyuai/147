@@ -17,7 +17,9 @@ namespace Dustline
         static Ar20Mesh shared;
         int users;
         readonly Texture2D colorMap, finishMap, lightMap;
-        readonly Mesh[] variants = new Mesh[6];
+        readonly Mesh[] variants = new Mesh[9];
+        readonly Mesh[] medicine = new Mesh[3];
+        Mesh magazineMesh;
         public readonly Material Material;
 
         public static Ar20Mesh Acquire()
@@ -27,9 +29,10 @@ namespace Dustline
             return shared;
         }
 
-        public Mesh GetMesh(WeaponForm form, int sight)
+        public Mesh GetMesh(WeaponForm form, int sight, bool separateMagazine = false)
         {
-            int index = form == WeaponForm.Rifle ? Mathf.Clamp(sight, 0, 2) : 2 + (int)form;
+            int level = Mathf.Clamp(sight, 0, 2);
+            int index = form == WeaponForm.Rifle ? level + (separateMagazine ? 6 : 0) : 2 + (int)form;
             if (variants[index] != null) return variants[index];
             Mesh mesh;
             switch (form)
@@ -37,24 +40,47 @@ namespace Dustline
                 case WeaponForm.Baton: mesh = BuildBaton(); break;
                 case WeaponForm.Tangdao: mesh = BuildTangdao(); break;
                 case WeaponForm.ShortBlade: mesh = BuildShortBlade(); break;
-                default: mesh = BuildRifle(index); break;
+                default: mesh = BuildRifle(level, !separateMagazine); break;
             }
-            mesh.name = "Dustline / " + form + (form == WeaponForm.Rifle ? " / sights " + index : string.Empty);
+            mesh.name = "Dustline / " + form + (form == WeaponForm.Rifle ? " / sights " + level : string.Empty);
             return variants[index] = mesh;
+        }
+
+        public Mesh MagazineMesh
+        {
+            get
+            {
+                if (magazineMesh != null) return magazineMesh;
+                var b = new Sculpt();
+                AddMagazine(b);
+                magazineMesh = b.FinishMesh();
+                magazineMesh.name = "AR-20 magazine prop";
+                return magazineMesh;
+            }
+        }
+
+        public Mesh MedicineMesh(MedicineForm form)
+        {
+            int index = (int)form;
+            if (medicine[index] == null) medicine[index] = BuildMedicine(form);
+            return medicine[index];
         }
 
         public void WarmPlayerViews()
         {
-            for (int i = 0; i < 3; i++) GetMesh(WeaponForm.Rifle, i);
+            for (int i = 0; i < 3; i++) GetMesh(WeaponForm.Rifle, i, true);
             GetMesh(WeaponForm.Baton, 0);
             GetMesh(WeaponForm.Tangdao, 0);
             GetMesh(WeaponForm.ShortBlade, 0);
+            for (int i = 0; i < medicine.Length; i++) MedicineMesh((MedicineForm)i);
         }
 
         public void Release()
         {
             if (--users != 0) return;
             foreach (var mesh in variants) Dispose(mesh);
+            foreach (var mesh in medicine) Dispose(mesh);
+            Dispose(magazineMesh);
             Dispose(Material);
             Dispose(colorMap);
             Dispose(finishMap);
@@ -145,7 +171,7 @@ namespace Dustline
 
         public static float SightHeight(int level) => level == 2 ? 0.164f : level == 1 ? 0.148f : 0.132f;
 
-        static Mesh BuildRifle(int sight)
+        static Mesh BuildRifle(int sight, bool assembled)
         {
             var b = new Sculpt();
             b.Loft(Finish.Polymer, S(-0.411f, -0.005f, 0.035f, 0.065f, 0.010f),
@@ -187,13 +213,6 @@ namespace Dustline
                 S(-0.079f, -0.081f, 0.019f, 0.005f, 0.002f), S(-0.033f, -0.074f, 0.020f, 0.005f, 0.002f),
                 S(-0.007f, -0.046f, 0.022f, 0.024f, 0.007f));
 
-            var magazine = new Vector3(0f, -0.032f, 0.048f);
-            b.Loft(Finish.Graphite, magazine, down, S(0f, 0f, 0.024f, 0.042f, 0.008f),
-                S(0.059f, -0.004f, 0.026f, 0.046f, 0.008f), S(0.124f, 0.011f, 0.027f, 0.046f, 0.009f),
-                S(0.180f, 0.034f, 0.026f, 0.045f, 0.009f));
-            b.Loft(Finish.Polymer, magazine, down, S(0.167f, 0.028f, 0.027f, 0.046f, 0.008f),
-                S(0.177f, 0.033f, 0.030f, 0.048f, 0.009f), S(0.192f, 0.040f, 0.027f, 0.046f, 0.009f));
-
             b.Loft(Finish.Parkerized, S(0.347f, 0.032f, 0.018f, 0.018f, 0.006f),
                 S(0.395f, 0.032f, 0.016f, 0.016f, 0.005f), S(0.475f, 0.032f, 0.013f, 0.013f, 0.005f));
             b.Aperture(Finish.Graphite, Finish.Machined, Finish.Recess, 0.456f, 0.478f, Muzzle.z - 0.005f, Muzzle.y);
@@ -220,17 +239,54 @@ namespace Dustline
                 }
                 b.Plate(Finish.Parkerized, side, 0.029f, 0.037f, 0.13f,
                     P(-0.388f, -0.032f), P(-0.356f, -0.030f), P(-0.307f, -0.006f), P(-0.338f, 0.006f), P(-0.389f, -0.005f));
+                b.Box(Finish.Graphite, side * 0.040f, -0.011f, -0.138f, 0.008f, 0.016f, 0.027f);
+                b.Box(Finish.Anodized, side * 0.039f, -0.017f, 0.071f, 0.006f, 0.019f, 0.028f);
+            }
+            if (assembled) AddMagazine(b);
+            BuildSights(b, sight);
+            return b.FinishMesh();
+        }
+
+        static void AddMagazine(Sculpt b)
+        {
+            var mount = new Vector3(0f, -0.032f, 0.048f);
+            var rotation = Quaternion.Euler(90f, 0f, 0f);
+            b.Loft(Finish.Graphite, mount, rotation, S(0f, 0f, 0.024f, 0.042f, 0.008f),
+                S(0.059f, -0.004f, 0.026f, 0.046f, 0.008f), S(0.124f, 0.011f, 0.027f, 0.046f, 0.009f),
+                S(0.180f, 0.034f, 0.026f, 0.045f, 0.009f));
+            b.Loft(Finish.Polymer, mount, rotation, S(0.167f, 0.028f, 0.027f, 0.046f, 0.008f),
+                S(0.177f, 0.033f, 0.030f, 0.048f, 0.009f), S(0.192f, 0.040f, 0.027f, 0.046f, 0.009f));
+            for (int side = -1; side <= 1; side += 2)
                 for (int i = 0; i < 3; i++)
                 {
                     float z = 0.024f + 0.021f * i;
                     b.Plate(Finish.Parkerized, side, 0.024f, 0.028f, 0.16f,
                         P(z - 0.004f, -0.081f), P(z + 0.005f, -0.081f), P(z + 0.038f, -0.190f), P(z + 0.026f, -0.193f));
                 }
-                b.Box(Finish.Graphite, side * 0.040f, -0.011f, -0.138f, 0.008f, 0.016f, 0.027f);
-                b.Box(Finish.Anodized, side * 0.039f, -0.017f, 0.071f, 0.006f, 0.019f, 0.028f);
+        }
+
+        static Mesh BuildMedicine(MedicineForm form)
+        {
+            var b = new Sculpt();
+            if (form == MedicineForm.Roll)
+            {
+                b.Loft(Finish.Warm, S(-0.055f, 0, 0.036f, 0.036f, 0.020f),
+                    S(-0.043f, 0, 0.040f, 0.040f, 0.023f), S(0.047f, 0, 0.040f, 0.040f, 0.023f),
+                    S(0.058f, 0, 0.033f, 0.033f, 0.016f));
+                b.Box(Finish.Jade, 0, 0.022f, 0f, 0.070f, 0.044f, 0.035f);
             }
-            BuildSights(b, sight);
-            return b.FinishMesh();
+            else
+            {
+                bool kit = form == MedicineForm.Case;
+                float width = kit ? 0.18f : 0.15f;
+                b.Box(kit ? Finish.Amber : Finish.Jade, 0, 0, 0, width, 0.063f, 0.122f);
+                b.Box(Finish.Graphite, 0, 0.019f, 0.056f, width * 0.91f, 0.047f, 0.024f);
+                b.Box(Finish.Porcelain, 0, 0.033f, 0f, 0.051f, 0.005f, 0.014f);
+                b.Box(Finish.Porcelain, 0, 0.034f, 0f, 0.015f, 0.004f, 0.055f);
+            }
+            var mesh = b.FinishMesh();
+            mesh.name = "Treatment prop / " + form;
+            return mesh;
         }
 
         static void BuildSights(Sculpt b, int sight)

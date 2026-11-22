@@ -83,6 +83,93 @@ namespace Dustline.Tests
             Assert.That(notifications, Is.EqualTo(1));
         }
 
+        [Test]
+        public void ForegroundMagazineFollowsTheReloadTimerAndReseatsOnCompletion()
+        {
+            var f = new Fight(this, 2, 12);
+            var view = f.Actor.WeaponView;
+            var prop = view.transform.Find("Magazine");
+            Assert.That(prop, Is.Not.Null);
+            Assert.That(prop.gameObject.layer, Is.EqualTo(FirstPersonView.Layer));
+            Assert.That(prop.GetComponent<MeshFilter>().sharedMesh, Is.Not.SameAs(view.GetComponent<MeshFilter>().sharedMesh));
+            Assert.That(prop.localPosition, Is.EqualTo(Vector3.zero));
+            f.Tick(.25f, reload: true);
+            float duration = f.Weapon.Magazine.Remaining;
+            f.Tick(duration * .39f);
+            view.SetPose(false, 0f, false, false, .016f);
+            Assert.That(prop.gameObject.activeSelf, Is.True);
+            Assert.That(prop.localPosition.y, Is.LessThan(-.12f));
+            Assert.That(f.Bag.Count("ammo"), Is.EqualTo(12));
+            f.Tick(duration * .10f);
+            view.SetPose(false, 0f, false, false, .016f);
+            Assert.That(prop.gameObject.activeSelf, Is.False);
+            f.Tick(duration * .14f);
+            view.SetPose(false, 0f, false, false, .016f);
+            Assert.That(prop.gameObject.activeSelf, Is.True);
+            Assert.That(prop.localPosition.y, Is.LessThan(-.10f));
+            f.Tick(duration);
+            Assert.That(f.Equipped.LoadedAmmo, Is.EqualTo(8));
+            Assert.That(f.Bag.Count("ammo"), Is.EqualTo(6));
+            Assert.That(prop.localPosition, Is.EqualTo(Vector3.zero));
+        }
+
+        [Test]
+        public void TreatmentCancelsReloadLocksCombatAndConsumesTheChosenStackOnce()
+        {
+            var f = new Fight(this, 2, 10);
+            Assert.That(f.Bag.TryAdd("medkit", 2, out var error), Is.True, error);
+            string first = f.Bag.Items[f.Bag.Items.Count - 2].InstanceId;
+            string chosen = f.Bag.Items[f.Bag.Items.Count - 1].InstanceId;
+            f.Actor.Health.Damage(65f, null);
+            f.Tick(.24f, reload: true);
+            f.Session.UseMedicine(chosen);
+            Assert.That(f.Actor.IsTreating, Is.True);
+            Assert.That(f.Weapon.Magazine.Reloading, Is.False);
+            f.Tick(.21f, fire: true, reload: true);
+            Invoke(f.Actor, "TickTreatment", .4f);
+            var view = f.Actor.WeaponView;
+            Invoke(view, "SetMedicineProgress", f.Actor.TreatmentProgress);
+            view.SetPose(false, 0f, false, false, .10f);
+            Assert.That(view.transform.Find("Medicine").gameObject.activeSelf, Is.True);
+            Assert.That(f.Actor.Health.Current, Is.EqualTo(35f));
+            Assert.That(f.Equipped.LoadedAmmo, Is.EqualTo(2));
+            Assert.That(f.Bag.Count("ammo"), Is.EqualTo(10));
+            Assert.That(f.Bag.Count("medkit"), Is.EqualTo(2));
+            f.Session.UseMedicine(first);
+            Invoke(f.Actor, "TickTreatment", 1f);
+            Invoke(f.Actor, "TickTreatment", 1f);
+            Assert.That(f.Actor.IsTreating, Is.False);
+            Assert.That(f.Actor.Health.Current, Is.EqualTo(65f));
+            Assert.That(f.Bag.Find(chosen), Is.Null);
+            Assert.That(f.Bag.Find(first), Is.Not.Null);
+            f.Tick(.20f, fire: true);
+            Assert.That(f.Equipped.LoadedAmmo, Is.EqualTo(2), "The recovery pose must finish before firing.");
+            view.SetPose(false, 0f, false, false, .10f);
+            Assert.That(view.transform.Find("Medicine").gameObject.activeSelf, Is.False);
+            f.Tick(.20f, fire: true);
+            Assert.That(f.Equipped.LoadedAmmo, Is.EqualTo(1));
+        }
+
+        [TestCase("switch")]
+        [TestCase("controls")]
+        [TestCase("stack")]
+        public void InterruptedTreatmentCannotHealOrConsumeAnotherStack(string reason)
+        {
+            var f = new Fight(this, 2, 0);
+            Assert.That(f.Bag.TryAdd("medkit", 2, out _), Is.True);
+            string chosen = f.Bag.Items[f.Bag.Items.Count - 1].InstanceId;
+            f.Actor.Health.Damage(30f, null);
+            f.Session.UseMedicine(chosen);
+            Assert.That(f.Actor.IsTreating, Is.True);
+            if (reason == "switch") Set(f.Session.Input, "SwitchWeaponPressed", true);
+            if (reason == "controls") f.Session.Input.Gameplay = false;
+            if (reason == "stack") f.Bag.Remove(chosen);
+            Invoke(f.Actor, "TickTreatment", 2f);
+            Assert.That(f.Actor.IsTreating, Is.False);
+            Assert.That(f.Actor.Health.Current, Is.EqualTo(70f));
+            Assert.That(f.Bag.Count("medkit"), Is.EqualTo(reason == "stack" ? 1 : 2));
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void SwitchingOnReloadCompletionFrameDoesNotSpendAmmo(bool manual)
@@ -452,9 +539,15 @@ namespace Dustline.Tests
                 ammo.Id = Rifle.AmmoId;
                 ammo.Kind = ItemKind.Ammo;
                 ammo.MaxStack = 20;
+                var medicine = test.AddAsset<ItemDefinition>();
+                medicine.Id = "medkit";
+                medicine.Kind = ItemKind.Medicine;
+                medicine.UseSeconds = 1f;
+                medicine.HealAmount = 30f;
                 var items = test.AddAsset<ItemCatalog>();
                 items.Items.Add(rifleItem);
                 items.Items.Add(ammo);
+                items.Items.Add(medicine);
                 Bag = new GridInventory(4, 4, 100, items);
                 if (withRifle)
                 {
@@ -484,6 +577,8 @@ namespace Dustline.Tests
                 actor.transform.position = TestOrigin;
                 Actor = actor.AddComponent<PlayerController>();
                 Actor.enabled = false;
+                Set(Session, "Player", Actor);
+                typeof(PlayerController).GetField("session", InstancePrivate).SetValue(Actor, Session);
                 var health = actor.AddComponent<Health>();
                 health.Initialize(100, 0);
                 Set(Actor, "Health", health);

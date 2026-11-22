@@ -8,8 +8,11 @@ namespace Dustline
     {
         private readonly List<ItemStack> items = new List<ItemStack>();
         private readonly IReadOnlyList<ItemStack> view;
+        private readonly Predicate<ItemDefinition> accepts;
 
-        public GridInventory(int width, int height, float maxWeight, ItemCatalog catalog)
+        public GridInventory(int width, int height, float maxWeight, ItemCatalog catalog) : this(width, height, maxWeight, catalog, null) { }
+
+        internal GridInventory(int width, int height, float maxWeight, ItemCatalog catalog, Predicate<ItemDefinition> accepts)
         {
             if (width < 1)
                 throw new ArgumentOutOfRangeException(nameof(width));
@@ -25,6 +28,7 @@ namespace Dustline
             Height = height;
             MaxWeight = maxWeight;
             Catalog = catalog;
+            this.accepts = accepts;
             view = items.AsReadOnly();
         }
 
@@ -51,6 +55,7 @@ namespace Dustline
                 error = "未知物品 ID：" + itemId;
                 return false;
             }
+            if (!CanStore(definition, out error)) return false;
             if (!CanCarry(CalculateWeight(items) + (double)definition.UnitWeight * quantity))
             {
                 error = "已超出负重上限。";
@@ -248,6 +253,15 @@ namespace Dustline
             return count;
         }
 
+        internal bool ConsumeInstance(string instanceId)
+        {
+            var stack = Find(instanceId);
+            if (stack == null || stack.Slot != EquipmentSlot.None || stack.Quantity <= 0) return false;
+            if (--stack.Quantity == 0) items.Remove(stack);
+            Touch();
+            return true;
+        }
+
         public bool Consume(string itemId, int quantity)
         {
             if (quantity < 1)
@@ -417,6 +431,7 @@ namespace Dustline
                 error = "未知物品 ID：" + stack.ItemId;
                 return false;
             }
+            if (!CanStore(definition, out error)) return false;
             if (stack.Quantity < 1 || stack.Quantity > StackLimit(definition))
             {
                 error = "物品堆叠数量无效。";
@@ -437,6 +452,12 @@ namespace Dustline
                 return false;
             }
             return true;
+        }
+
+        private bool CanStore(ItemDefinition definition, out string error)
+        {
+            error = accepts != null && !accepts(definition) ? "不适合放入此容器。" : null;
+            return error == null;
         }
 
         private bool TryPlace(ItemStack stack, ItemDefinition definition, List<ItemStack> occupied)

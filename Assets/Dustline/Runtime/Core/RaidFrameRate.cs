@@ -16,11 +16,11 @@ namespace Dustline
         public static int Target(int preference, bool mobile, double refreshRate)
         {
             int requested = Normalize(preference);
-            if (!mobile) return requested;
+            if (!mobile || requested != Uncapped) return requested;
             int display = refreshRate >= 1 && refreshRate <= int.MaxValue
                 ? (int)Math.Round(refreshRate, MidpointRounding.AwayFromZero) : Default;
             // Unity's mobile value -1 targets 30 fps rather than the display maximum.
-            return requested == Uncapped ? display : Math.Min(requested, display);
+            return display;
         }
 
         public static int Load() => Normalize(PlayerPrefs.GetInt(PreferenceKey, Default));

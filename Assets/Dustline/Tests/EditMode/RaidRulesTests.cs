@@ -5,14 +5,17 @@ namespace Dustline.Tests
     public sealed class RaidRulesTests
     {
         [TestCase(30, true, 120.0, 30)]
-        [TestCase(90, true, 60.0, 60)]
+        [TestCase(90, true, 60.0, 90)]
+        [TestCase(120, true, 60.0, 120)]
+        [TestCase(120, true, 0.0, 120)]
+        [TestCase(120, true, double.NaN, 120)]
         [TestCase(90, true, 120.0, 90)]
         [TestCase(120, true, 119.88, 120)]
         [TestCase(-1, true, 144.0, 144)]
         [TestCase(-1, true, 0.0, 60)]
         [TestCase(-1, false, 60.0, -1)]
         [TestCase(75, false, 60.0, 60)]
-        public void RaidFrameTargetUsesNativeMobileMaximumForUncapped(int requested, bool mobile, double refresh, int expected)
+        public void FixedFrameTargetsIgnoreTransientRefreshAndMobileUncappedFollowsIt(int requested, bool mobile, double refresh, int expected)
         {
             Assert.That(RaidFrameRate.Target(requested, mobile, refresh), Is.EqualTo(expected));
         }

@@ -18,7 +18,7 @@ namespace Dustline.Tests
             Assert.That(catalog, Is.Not.Null, "Run Dustline > Prepare Project first.");
             Assert.That(loot, Is.Not.Null);
             Assert.DoesNotThrow(catalog.RebuildIndex);
-            Assert.That(catalog.Items.Count, Is.EqualTo(7));
+            Assert.That(catalog.Items.Count, Is.EqualTo(9));
             foreach (var item in catalog.Items)
                 if (item.Kind == ItemKind.Weapon)
                 {
@@ -106,8 +106,8 @@ namespace Dustline.Tests
         [Test]
         public void BuildVersionAdvancesWithoutChangingSaveIdentity()
         {
-            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.3.1"));
-            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(5));
+            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.3.2"));
+            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(6));
             Assert.That(PlayerSettings.companyName, Is.EqualTo("Dustline"));
             Assert.That(PlayerSettings.productName, Is.EqualTo("Dustline Extraction"));
             Assert.That(PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android), Is.EqualTo("com.dustline.extraction"));
@@ -116,6 +116,8 @@ namespace Dustline.Tests
         [TestCase("rifle", "AR-20突击步枪")]
         [TestCase("ammo", "5.56毫米弹药")]
         [TestCase("medkit", "战地医疗包")]
+        [TestCase("bandage", "急救绷带")]
+        [TestCase("trauma_case", "创伤急救盒")]
         [TestCase("armor", "战术防弹衣")]
         [TestCase("circuit", "电路板")]
         [TestCase("relic", "勘测模块")]
@@ -195,6 +197,29 @@ namespace Dustline.Tests
                 Assert.That(android.overridden, Is.True, key);
                 Assert.That(android.maxTextureSize, Is.EqualTo(2048), key);
                 Assert.That(android.format, Is.EqualTo(normal || mask ? TextureImporterFormat.ETC2_RGBA8 : TextureImporterFormat.ETC2_RGB4), key);
+            }
+        }
+
+        [Test]
+        public void RuntimeLitMaterialVariantsAreReferencedWithoutAlwaysIncludingLit()
+        {
+            var lit = Shader.Find("Universal Render Pipeline/Lit");
+            Assert.That(lit, Is.Not.Null);
+            var settings = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/GraphicsSettings.asset")[0]);
+            var shaders = settings.FindProperty("m_AlwaysIncludedShaders");
+            for (int i = 0; i < shaders.arraySize; i++)
+                Assert.That(shaders.GetArrayElementAtIndex(i).objectReferenceValue, Is.Not.EqualTo(lit));
+            Assert.That(settings.FindProperty("m_FogKeepLinear").boolValue, Is.True);
+            Assert.That(settings.FindProperty("m_FogKeepExp").boolValue, Is.False);
+            Assert.That(settings.FindProperty("m_FogKeepExp2").boolValue, Is.False);
+            string[] variants = { "LitBase", "LitMetal", "LitEmission", "LitMetalEmission" };
+            for (int i = 0; i < variants.Length; i++)
+            {
+                var material = Resources.Load<Material>("Dustline/Rendering/" + variants[i]);
+                Assert.That(material, Is.Not.Null, variants[i]);
+                Assert.That(material.shader, Is.EqualTo(lit));
+                Assert.That(material.IsKeywordEnabled("_METALLICSPECGLOSSMAP"), Is.EqualTo((i & 1) != 0));
+                Assert.That(material.IsKeywordEnabled("_EMISSION"), Is.EqualTo((i & 2) != 0));
             }
         }
 

@@ -1,17 +1,23 @@
 using System;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
+using InputTouchPhase = UnityEngine.InputSystem.TouchPhase;
+using Touchscreen = UnityEngine.InputSystem.Touchscreen;
 
 namespace Dustline
 {
-    public sealed class TouchControl : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IDragHandler, IInitializePotentialDragHandler
+    public sealed class TouchControl : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IDragHandler, IInitializePotentialDragHandler, ICanvasRaycastFilter
     {
         public PlayerInputReader Input;
         public string Action;
         public RectTransform Knob;
         public Action<TouchControl> SelectForLayout;
         public Action<TouchControl, PointerEventData, Vector2> DragForLayout;
+        internal Action<Vector2> GestureStart;
+        internal Action<Vector2> GestureMove;
+        internal Action<Vector2, bool> GestureEnd;
         bool editing;
         int pointer = int.MinValue;
         Vector2 lastPosition;
@@ -32,9 +38,20 @@ namespace Dustline
             editing = value;
         }
 
+        public bool IsRaycastLocationValid(Vector2 screenPoint, Camera eventCamera)
+            => editing || GestureStart == null || ContainsDialPoint(screenPoint, eventCamera);
+
+        internal bool ContainsDialPoint(Vector2 point, Camera eventCamera)
+        {
+            var rect = (RectTransform)transform;
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rect, point, eventCamera, out var local)) return false;
+            float radius = Mathf.Min(rect.rect.width, rect.rect.height) * .5f;
+            return (local - rect.rect.center).sqrMagnitude <= radius * radius;
+        }
+
         public void OnInitializePotentialDrag(PointerEventData data)
         {
-            if (editing || Action == "Move" || Action == "Look") data.useDragThreshold = false;
+            if (editing || GestureStart != null || Action == "Move" || Action == "Look") data.useDragThreshold = false;
         }
 
         public void OnPointerDown(PointerEventData data)
@@ -44,19 +61,22 @@ namespace Dustline
             lastPosition = data.position;
             if (editing) { SelectForLayout?.Invoke(this); return; }
             if (face != null) face.color = pressedColor;
+            if (GestureStart != null) { GestureStart(data.position); return; }
             Input.Hold(Action, true);
             if (Action != "Move" && Action != "Look") Input.Tap(Action);
             if (Action == "Move") SetStick(data);
         }
         public void OnDrag(PointerEventData data)
         {
-            if (pointer != data.pointerId) return;
+            if (pointer != data.pointerId || data.button != PointerEventData.InputButton.Left) return;
             if (editing)
             {
                 DragForLayout?.Invoke(this, data, lastPosition);
                 lastPosition = data.position;
                 return;
             }
+            if (GestureMove != null) { GestureMove(data.position); lastPosition = data.position; return; }
+            if (!Input.Gameplay) return;
             if (Action == "Look")
             {
                 float scale = GetComponentInParent<Canvas>().scaleFactor;
@@ -75,22 +95,35 @@ namespace Dustline
         }
         public void OnPointerUp(PointerEventData data)
         {
-            if (pointer != data.pointerId) return;
-            Release();
+            if (pointer != data.pointerId || data.button != PointerEventData.InputButton.Left) return;
+            lastPosition = data.position;
+            Release((GestureEnd != null || Action == "Aim") && TouchWasCancelled(data));
+        }
+
+        static bool TouchWasCancelled(PointerEventData data)
+        {
+            if (data is not ExtendedPointerEventData extended || extended.device is not Touchscreen screen) return false;
+            if (!screen.added || extended.touchId == 0) return true;
+            foreach (var contact in screen.touches)
+                if (contact.touchId.ReadValue() == extended.touchId) return contact.phase.ReadValue() != InputTouchPhase.Ended;
+            return true;
         }
         void Release(bool cancel = false)
         {
             bool hadPointer = pointer != int.MinValue;
             pointer = int.MinValue;
-            if (face != null) face.color = idleColor;
+            if (face != null && !editing) face.color = idleColor;
             if (Knob != null) Knob.anchoredPosition = Vector2.zero;
             if (Input == null || editing || !hadPointer) return;
+            if (GestureEnd != null) { GestureEnd(lastPosition, cancel); return; }
             if (cancel && Action == "Aim") Input.CancelAimGesture();
             else Input.Hold(Action, false);
             if (Action == "Move") Input.TouchMove = Vector2.zero;
         }
-        void OnDisable() { Release(true); }
-        void OnApplicationFocus(bool focus) { if (!focus) Release(true); }
-        void OnApplicationPause(bool paused) { if (paused) Release(true); }
+        internal void CancelPointer() => Release(true);
+
+        void OnDisable() => CancelPointer();
+        void OnApplicationFocus(bool focus) { if (!focus) CancelPointer(); }
+        void OnApplicationPause(bool paused) { if (paused) CancelPointer(); }
     }
 }

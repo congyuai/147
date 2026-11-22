@@ -11,6 +11,8 @@ namespace Dustline
         Valuable
     }
 
+    public enum MedicineForm { Pouch, Roll, Case }
+
     public enum EquipmentSlot
     {
         None,
@@ -39,6 +41,8 @@ namespace Dustline
         public int Value;
         public float UnitWeight;
         public float HealAmount = 40f;
+        public float UseSeconds = 2.1f;
+        public MedicineForm MedicineVisual;
         public float DamageReduction = 0.3f;
         public Color Tint;
         public WeaponDefinition Weapon;

@@ -6,8 +6,9 @@ namespace Dustline
     public sealed partial class GameUI
     {
         RectTransform reticleAnchor;
+        TouchControl lookControl;
         Image reticle, lifeBar, staminaBar, progressBar, fireGlyph, interactGlyph, sprintRing;
-        GameObject aimButton, reloadButton, switchButton;
+        GameObject aimButton, reloadButton, switchButton, interactButton;
         readonly DamageCue[] damageCues = new DamageCue[4];
         int damageCursor;
 
@@ -89,23 +90,25 @@ namespace Dustline
                 bool firearm = weapon.Magazine != null;
                 SetActive(aimButton, firearm);
                 SetActive(reloadButton, firearm);
-                SetActive(switchButton, session.Loadout.Equipped(EquipmentSlot.Weapon) != null);
+                SetActive(switchButton, session.ActiveFieldBag.Equipped(EquipmentSlot.Weapon) != null);
+                SetActive(interactButton, session.Phase == SessionPhase.Raid);
                 var interactionIcon = icons[player.LookingAtDoor ? RaidIcon.InteractDoor : RaidIcon.Search];
                 if (interactGlyph.sprite != interactionIcon) interactGlyph.sprite = interactionIcon;
                 SetActive(sprintRing.gameObject, player.Sprinting);
             }
-            reticle.enabled = !session.Input.Aim && player.AimProgress < 0.08f;
-            UpdateDamageCues(player.transform);
             bool marker = Time.unscaledTime < hitUntil;
+            reticle.enabled = !player.WeaponView.MedicineBusy && !MedicineWheelOpen && (marker || !session.Input.Aim && player.AimProgress < 0.08f);
+            UpdateDamageCues(player.transform);
             var sprite = icons[marker ? RaidIcon.Hit : RaidIcon.Reticle];
             if (reticle.sprite != sprite)
             {
                 reticle.sprite = sprite;
                 reticle.color = marker ? Amber : Pale;
             }
+            if (session.Input.TouchMode) medicineDialProgress.fillAmount = player.TreatmentProgress;
             if (!force && Time.unscaledTime < hudAt) return;
             hudAt = Time.unscaledTime + 0.09f;
-            UpdateMiniMap();
+            UpdateMedicineButton(player);
 
             healthReadout.text = "生命  " + Mathf.CeilToInt(player.Health.Current);
             staminaReadout.text = "体力  " + Mathf.CeilToInt(player.Stamina);
@@ -115,6 +118,15 @@ namespace Dustline
                 : weapon.Magazine == null ? "未装备主武器" : weapon.Magazine.Reloading ? "正在换弹"
                 : weapon.Magazine.Rounds + " / " + weapon.Reserve + (weapon.Automatic ? "   全自动" : "   半自动");
 
+            if (session.Phase == SessionPhase.Practice)
+            {
+                var range = session.Practice;
+                statusReadout.text = "离线靶场 / " + Mathf.RoundToInt(sampledFps) + " 帧\n开火 " + range.Shots + " / 命中 " + range.Hits + "\n击倒靶板 " + range.Plates;
+                SetFieldPrompt(player.IsTreating ? "正在使用 " + player.TreatmentItem.DisplayName : null, player.IsTreating, player.TreatmentProgress);
+                return;
+            }
+
+            UpdateMiniMap();
             var position = player.transform.position;
             var inZone = session.World.FindExit(position);
             ExtractionZone nearest = null;
@@ -142,15 +154,25 @@ namespace Dustline
                 prompt.text = "正在撤离  /  " + timer.Remaining.ToString("0.0") + " 秒";
                 progress = timer.Elapsed / timer.RequiredSeconds;
             }
+            else if (player.IsTreating)
+            {
+                prompt.text = "正在使用 " + player.TreatmentItem.DisplayName;
+                progress = player.TreatmentProgress;
+            }
             else if (player.SearchingLoot != null)
             {
                 prompt.text = "正在搜索  /  " + player.SearchingLoot.DisplayName;
                 progress = player.SearchProgress;
             }
             else prompt.text = player.InteractionHint;
-            bool show = !string.IsNullOrEmpty(prompt.text);
-            if (hintCard.activeSelf != show) hintCard.SetActive(show);
-            progressBar.transform.parent.gameObject.SetActive(inZone != null || player.SearchingLoot != null);
+            SetFieldPrompt(prompt.text, inZone != null || player.IsTreating || player.SearchingLoot != null, progress);
+        }
+
+        void SetFieldPrompt(string message, bool showProgress, float progress)
+        {
+            prompt.text = message ?? "";
+            SetActive(hintCard, !string.IsNullOrEmpty(message));
+            SetActive(progressBar.transform.parent.gameObject, showProgress);
             SetBar(progressBar, progress);
         }
 
@@ -199,7 +221,7 @@ namespace Dustline
             look.anchorMin = new Vector2(0.34f, 0f);
             look.anchorMax = new Vector2(1f, 0.90f);
             Fill(look, Color.clear, true);
-            AttachControl(look, "Look");
+            lookControl = AttachControl(look, "Look");
             AddTouchSlot("Move", "移动摇杆", RaidIcon.Knob, 0.094f, 0.170f, 155f);
             AddTouchSlot("Fire", "开火或挥击", RaidIcon.Fire, 0.925f, 0.265f, 107f, true);
             AddTouchSlot("Aim", "开镜", RaidIcon.Aim, 0.827f, 0.319f, 78f);
@@ -208,7 +230,7 @@ namespace Dustline
             AddTouchSlot("Prone", "趴下", RaidIcon.Prone, 0.645f, 0.111f, 72f);
             AddTouchSlot("Jump", "跳跃", RaidIcon.Jump, 0.925f, 0.431f, 76f);
             AddTouchSlot("Interact", "搜索或开关门", RaidIcon.Search, 0.811f, 0.184f, 78f);
-            AddTouchSlot("Heal", "治疗", RaidIcon.Heal, 0.722f, 0.259f, 72f);
+            AddTouchSlot("Heal", "快捷用药 / 长按选药", RaidIcon.Heal, 0.722f, 0.259f, 72f);
             AddTouchSlot("Inventory", "背包", RaidIcon.Bag, 0.795f, 0.066f, 66f);
             AddTouchSlot("LeanLeft", "向左探头", RaidIcon.LeanLeft, 0.181f, 0.362f, 66f);
             AddTouchSlot("LeanRight", "向右探头", RaidIcon.LeanRight, 0.256f, 0.362f, 66f);

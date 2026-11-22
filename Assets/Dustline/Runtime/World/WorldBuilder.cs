@@ -7,7 +7,6 @@ namespace Dustline
 {
     public sealed class WorldBuilder : MonoBehaviour
     {
-        enum LootKind { SupplyCrate, StorageLocker, Toolbox, MedicalCase, FieldBag }
         const int GuardTeam = 3;
 
         public Material DarkMaterial { get; private set; }
@@ -217,7 +216,7 @@ namespace Dustline
                 new FixedLoot(276.1f, -26.5f, LootKind.SupplyCrate, "装船物资箱"),
 
                 new FixedLoot(246.5f, 126.4f, LootKind.StorageLocker, "海事站 · 保管柜"),
-                new FixedLoot(259.1f, 125.8f, LootKind.SupplyCrate, "海事站 · 精密设备箱"),
+                new FixedLoot(259.1f, 125.8f, LootKind.EquipmentCase, "海事站 · 精密设备箱"),
                 new FixedLoot(265.5f, 112.4f, LootKind.Toolbox, "海事站 · 校准工具箱"),
                 new FixedLoot(242.2f, 112.2f, LootKind.StorageLocker, "海事站 · 岸电备件柜")
             };
@@ -229,42 +228,23 @@ namespace Dustline
                 bool high = PortLayout.InHighValueArea(requested);
                 if (!TryLootSite(requested, Dimensions(point.Kind), false, out var site)) continue;
                 var container = CreateLootInternal(site, point.Title, point.Kind, SearchSeconds(point.Kind), fixedVisuals);
-                if (high)
-                {
-                    session.HighValueLootTable.Fill(container.Inventory, new System.Random(0x7836 + i * 71));
-                    stations++;
-                }
-                else FillFixedLoot(container, point.Kind, i);
+                var table = high ? session.HighValueLootTable : session.LootTable;
+                int rolls = high ? table.Rolls : point.Kind == LootKind.MedicalCase || point.Kind == LootKind.Toolbox ? 1 : 2;
+                table.FillContainer(container, random, rolls);
+                if (high) stations++;
                 Physics.SyncTransforms();
             }
             if (stations == 0) throw new InvalidOperationException("海事检修站没有可搜索的物资箱。");
 
-            var starter = CreateLootInternal(PortLayout.At(Spawn.x + 4, Spawn.z + 5), "共享初始补给",
+            var starter = CreateLootInternal(PortLayout.At(Spawn.x + 4, Spawn.z + 5), "起点医疗箱",
                 LootKind.MedicalCase, 1.1f, fixedVisuals);
             starter.Inventory.TryAdd("medkit", 1, out _);
-            starter.Inventory.TryAdd("ammo", 30, out _);
+            starter.Inventory.TryAdd("bandage", 2, out _);
+            Physics.SyncTransforms();
+            var ammoPoint = PortLayout.At(Spawn.x + 6.3f, Spawn.z + 5.7f);
+            if (TryLootSite(ammoPoint, Dimensions(LootKind.SupplyCrate), false, out var ammoSite))
+                CreateLootInternal(ammoSite, "起点弹药箱", LootKind.SupplyCrate, 1.2f, fixedVisuals).Inventory.TryAdd("ammo", 30, out _);
             fixedVisuals.Bake(transform, "Fixed loot visuals", portMaterials.Structure, Keep, false);
-        }
-
-        void FillFixedLoot(LootContainer container, LootKind kind, int index)
-        {
-            session.LootTable.Fill(container.Inventory, new System.Random(0x5000 + index * 37));
-            switch (kind)
-            {
-                case LootKind.StorageLocker:
-                    container.Inventory.TryAdd(index % 3 == 0 ? "armor" : "circuit", 1, out _);
-                    break;
-                case LootKind.Toolbox:
-                    container.Inventory.TryAdd("circuit", 1, out _);
-                    container.Inventory.TryAdd("ammo", 12 + index % 3 * 6, out _);
-                    break;
-                case LootKind.MedicalCase:
-                    container.Inventory.TryAdd("medkit", 1, out _);
-                    break;
-                case LootKind.SupplyCrate:
-                    container.Inventory.TryAdd("ammo", 18, out _);
-                    break;
-            }
         }
 
         static float SearchSeconds(LootKind kind)
@@ -337,7 +317,7 @@ namespace Dustline
             if (!shell.isTrigger) root.AddComponent<FootstepSurface>().Kind = SurfaceKind.Metal;
             root.isStatic = kind != LootKind.FieldBag;
             var container = root.AddComponent<LootContainer>();
-            container.Initialize(title, session.Catalog, searchSeconds);
+            container.Initialize(title, session.Catalog, searchSeconds, kind);
             BuildLootVisual(root.transform, kind, dimensions, visualBatch);
             return container;
         }

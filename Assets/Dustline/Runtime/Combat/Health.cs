@@ -31,11 +31,13 @@ namespace Dustline
             Team = team;
         }
 
-        public void Damage(float amount, Health attacker)
+        public void Damage(float amount, Health attacker) => Damage(amount, attacker, true);
+
+        internal void Damage(float amount, Health attacker, bool applyArmor)
         {
             if (!Alive || !(amount > 0)) return;
             if (attacker != null && attacker != this && attacker.Team == Team) return;
-            float protection = Mathf.Clamp(ArmorReduction?.Invoke() ?? 0, 0, 0.8f);
+            float protection = applyArmor ? Mathf.Clamp(ArmorReduction?.Invoke() ?? 0, 0, 0.8f) : 0f;
             float remaining = Mathf.Max(0, Current - amount * (1 - protection));
             float lost = Current - remaining;
             if (!(lost > 0)) return;

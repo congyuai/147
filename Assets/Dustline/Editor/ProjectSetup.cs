@@ -17,12 +17,14 @@ namespace Dustline.Editor
         const string PipelinePath = "Assets/Dustline/Settings/MobilePipeline.asset";
         const string RendererPath = "Assets/Dustline/Settings/MobileRenderer.asset";
         const string RenderingRoot = Root + "/Rendering";
-        const string Version = "0.3.1";
-        const int AndroidVersionCode = 5;
+        const string Version = "0.3.2";
+        const int AndroidVersionCode = 6;
         const int RaidRendererLayers = FirstPersonView.Mask | (1 << 2) | 1;
+        static readonly string[] LitVariantAssets = { "LitBase", "LitMetal", "LitEmission", "LitMetalEmission" };
         static readonly Dictionary<string, string> ItemNames = new Dictionary<string, string> {
             { "rifle", "AR-20突击步枪" }, { "ammo", "5.56毫米弹药" },
-            { "medkit", "战地医疗包" }, { "armor", "战术防弹衣" },
+            { "medkit", "战地医疗包" }, { "bandage", "急救绷带" }, { "trauma_case", "创伤急救盒" },
+            { "armor", "战术防弹衣" },
             { "circuit", "电路板" }, { "relic", "勘测模块" },
             { WeaponDefinition.BatonId, "检修短棍" }
         };
@@ -42,6 +44,8 @@ namespace Dustline.Editor
                 || (renderer.opaqueLayerMask.value & RaidRendererLayers) != RaidRendererLayers
                 || (renderer.transparentLayerMask.value & RaidRendererLayers) != RaidRendererLayers
                 || !PortTextureSetup.IsPrepared()
+                || catalog.Find("bandage") == null || catalog.Find("trauma_case") == null
+                || !LitVariantsPrepared()
                 || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/Loot.asset") == null
                 || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/HighValueLoot.asset") == null
                 || blades == null || blades.Resolve(null)?.Form != WeaponForm.Tangdao
@@ -99,7 +103,23 @@ namespace Dustline.Editor
             QualitySettings.anisotropicFiltering = AnisotropicFiltering.Enable;
             var settings = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/GraphicsSettings.asset")[0]);
             var shaders = settings.FindProperty("m_AlwaysIncludedShaders");
-            foreach (var shaderName in new[] { "Universal Render Pipeline/Lit", "Universal Render Pipeline/Unlit", "Dustline/Harbor Sky", PortRaster.SurfaceShader, "UI/Default" })
+            var lit = Shader.Find("Universal Render Pipeline/Lit");
+            if (lit == null || ShaderUtil.ShaderHasError(lit))
+                throw new BuildFailedException("无法加载 URP Lit 着色器。");
+            for (int i = shaders.arraySize - 1; i >= 0; i--)
+                if (shaders.GetArrayElementAtIndex(i).objectReferenceValue == lit)
+                {
+                    int length = shaders.arraySize;
+                    shaders.DeleteArrayElementAtIndex(i);
+                    if (shaders.arraySize == length) shaders.DeleteArrayElementAtIndex(i);
+                }
+            settings.FindProperty("m_FogStripping").intValue = 1;
+            settings.FindProperty("m_FogKeepLinear").boolValue = true;
+            settings.FindProperty("m_FogKeepExp").boolValue = false;
+            settings.FindProperty("m_FogKeepExp2").boolValue = false;
+            // Runtime meshes create these four local keyword combinations; retain them through referenced materials.
+            for (int i = 0; i < LitVariantAssets.Length; i++) EnsureLitMaterial(LitVariantAssets[i], lit, (i & 1) != 0, (i & 2) != 0);
+            foreach (var shaderName in new[] { "Universal Render Pipeline/Unlit", "Dustline/Harbor Sky", PortRaster.SurfaceShader, "UI/Default" })
             {
                 var shader = Shader.Find(shaderName);
                 if (shader == null || ShaderUtil.ShaderHasError(shader))
@@ -139,6 +159,7 @@ namespace Dustline.Editor
                 AssetDatabase.CreateAsset(catalog, Root + "/Items.asset");
             }
             EnsureBaton(catalog);
+            EnsureMedicine(catalog);
             foreach (var item in catalog.Items)
                 if (ItemNames.TryGetValue(item.Id, out var displayName) && item.DisplayName != displayName)
                 {
@@ -160,7 +181,9 @@ namespace Dustline.Editor
                 };
                 AssetDatabase.CreateAsset(table, Root + "/Loot.asset");
             }
-            EnsureBatonLoot(table);
+            EnsureLootEntry(table, WeaponDefinition.BatonId, 1, 1, 1);
+            EnsureLootEntry(table, "bandage", 1, 2, 7);
+            EnsureLootEntry(table, "trauma_case", 1, 1, 1);
             EnsureHighValueLoot();
             EnsureBoundBlades();
             PlayerSettings.companyName = "Dustline";
@@ -267,13 +290,69 @@ namespace Dustline.Editor
             catalog.RebuildIndex();
         }
 
-        static void EnsureBatonLoot(LootTable table)
+        static void EnsureLootEntry(LootTable table, string id, int min, int max, int weight)
         {
-            if (table == null || table.Entries == null) return;
-            foreach (var entry in table.Entries)
-                if (entry != null && entry.ItemId == WeaponDefinition.BatonId) return;
-            table.Entries.Add(new LootEntry { ItemId = WeaponDefinition.BatonId, Min = 1, Max = 1, Weight = 1 });
+            if (table.Entries.Exists(entry => entry != null && entry.ItemId == id)) return;
+            table.Entries.Add(new LootEntry { ItemId = id, Min = min, Max = max, Weight = weight });
             EditorUtility.SetDirty(table);
+        }
+
+        static void EnsureMedicine(ItemCatalog catalog)
+        {
+            Configure(catalog.Find("medkit"), MedicineForm.Pouch, 45f, 2.15f);
+            Ensure("bandage", 1, 1, 5, 0.13f, 16, new Color(0.76f, 0.71f, 0.54f), MedicineForm.Roll, 22f, 1.15f);
+            Ensure("trauma_case", 2, 1, 2, 0.62f, 78, new Color(0.70f, 0.27f, 0.22f), MedicineForm.Case, 70f, 3.05f);
+            catalog.RebuildIndex();
+
+            void Ensure(string id, int width, int height, int stack, float weight, int value, Color tint,
+                MedicineForm form, float heal, float seconds)
+            {
+                var def = catalog.Find(id);
+                if (def == null)
+                {
+                    def = AssetDatabase.LoadAssetAtPath<ItemDefinition>(Root + "/" + id + ".asset")
+                        ?? Item(id, ItemNames[id], ItemKind.Medicine, width, height, stack, weight, value, tint);
+                    catalog.Items.Add(def);
+                    EditorUtility.SetDirty(catalog);
+                }
+                Configure(def, form, heal, seconds);
+            }
+
+            static void Configure(ItemDefinition def, MedicineForm form, float heal, float seconds)
+            {
+                def.MedicineVisual = form;
+                def.HealAmount = heal;
+                def.UseSeconds = seconds;
+                EditorUtility.SetDirty(def);
+            }
+        }
+
+        static bool LitVariantsPrepared()
+        {
+            foreach (string name in LitVariantAssets)
+                if (AssetDatabase.LoadAssetAtPath<Material>(RenderingRoot + "/" + name + ".mat") == null) return false;
+            return true;
+        }
+
+        static void EnsureLitMaterial(string name, Shader shader, bool metal, bool emission)
+        {
+            string path = RenderingRoot + "/" + name + ".mat";
+            var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (material == null)
+            {
+                material = new Material(shader);
+                AssetDatabase.CreateAsset(material, path);
+            }
+            material.shader = shader;
+            material.enableInstancing = true;
+            material.SetTexture("_MetallicGlossMap", metal ? AssetDatabase.LoadAssetAtPath<Texture2D>(Root + "/Surfaces/Steel_albedo_2k.jpg") : null);
+            material.SetColor("_EmissionColor", emission ? Color.white : Color.black);
+            material.globalIlluminationFlags = emission ? MaterialGlobalIlluminationFlags.RealtimeEmissive : MaterialGlobalIlluminationFlags.EmissiveIsBlack;
+            if (metal) material.EnableKeyword("_METALLICSPECGLOSSMAP");
+            else material.DisableKeyword("_METALLICSPECGLOSSMAP");
+            if (emission) material.EnableKeyword("_EMISSION");
+            else material.DisableKeyword("_EMISSION");
+            EditorUtility.SetDirty(material);
         }
 
         static void EnsureHighValueLoot()

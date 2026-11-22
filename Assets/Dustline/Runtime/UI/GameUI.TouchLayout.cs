@@ -48,8 +48,9 @@ namespace Dustline
                 case "Fire": fireGlyph = glyph; break;
                 case "Aim": aimButton = slot.Live.gameObject; break;
                 case "Reload": reloadButton = slot.Live.gameObject; break;
-                case "Interact": interactGlyph = glyph; break;
+                case "Interact": interactGlyph = glyph; interactButton = slot.Live.gameObject; break;
                 case "SwitchWeapon": switchButton = slot.Live.gameObject; break;
+                case "Heal": BindMedicine(slot.Live, glyph); break;
             }
         }
 

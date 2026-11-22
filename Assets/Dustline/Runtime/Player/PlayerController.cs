@@ -23,6 +23,13 @@ namespace Dustline
         public bool LookingAtDoor => focusedDoor != null;
         public LootContainer SearchingLoot { get; private set; }
         public float SearchProgress => SearchingLoot == null ? 0 : Mathf.Clamp01(searchElapsed / SearchingLoot.SearchSeconds);
+        public bool IsTreating => treatmentBag != null;
+        public float TreatmentProgress => IsTreating ? Mathf.Clamp01(1f - treatmentLeft / treatmentDuration) : 0f;
+        public ItemDefinition TreatmentItem => treatmentItem;
+        GridInventory treatmentBag;
+        ItemDefinition treatmentItem;
+        string treatmentInstance;
+        float treatmentLeft, treatmentDuration;
         GameSession session;
         CharacterController motor;
         StepCadence steps;
@@ -47,11 +54,12 @@ namespace Dustline
             Health.Initialize(100, 0);
             Health.ArmorReduction = () =>
             {
-                var armor = session.Loadout.Equipped(EquipmentSlot.Armor);
+                var armor = session.ActiveFieldBag.Equipped(EquipmentSlot.Armor);
                 return armor == null ? 0 : session.Catalog.Find(armor.ItemId).DamageReduction;
             };
             Health.Damaged += session.UI.ShowDamage;
-            Health.Died += _ => session.EndRaid(false, "撤离失败：你已阵亡");
+            Health.Hurt += _ => CancelTreatment();
+            Health.Died += _ => session.PlayerDown();
             Operator = OperatorVisual.Create(transform, session.SelectedOperator, 0, gameObject.layer);
             Operator.ShadowsOnly();
 
@@ -84,6 +92,48 @@ namespace Dustline
             if (Foreground != null) Foreground.fieldOfView = value;
         }
 
+        internal bool BeginTreatment(GridInventory bag, string instanceId, ItemDefinition item)
+        {
+            if (IsTreating) return false;
+            treatmentBag = bag;
+            treatmentInstance = instanceId;
+            treatmentItem = item;
+            treatmentLeft = treatmentDuration = Mathf.Clamp(item.UseSeconds, 0.4f, 10f);
+            Weapon.BeginTreatment();
+            WeaponView.BeginMedicine(item.MedicineVisual);
+            return true;
+        }
+
+        internal void CancelTreatment()
+        {
+            if (!IsTreating) return;
+            treatmentBag = null;
+            treatmentItem = null;
+            treatmentInstance = null;
+            WeaponView.EndMedicine();
+        }
+
+        void TickTreatment(float delta)
+        {
+            if (!IsTreating) return;
+            var stack = treatmentBag.Find(treatmentInstance);
+            if (!session.Input.Gameplay || session.Input.SwitchWeaponPressed || !Health.Alive
+                || treatmentBag != session.ActiveFieldBag || stack == null || stack.Quantity <= 0 || stack.ItemId != treatmentItem.Id
+                || stack.Slot != EquipmentSlot.None || Health.Current >= Health.Maximum)
+            {
+                CancelTreatment();
+                return;
+            }
+            treatmentLeft -= Mathf.Max(0f, delta);
+            if (treatmentLeft > 0f) return;
+            var bag = treatmentBag;
+            string id = treatmentInstance;
+            float amount = treatmentItem.HealAmount;
+            CancelTreatment();
+            if (bag.ConsumeInstance(id)) Health.Heal(amount);
+            session.UI?.RefreshInventory();
+        }
+
         bool WalkForFire(float now, bool gameplay, bool firearm, bool wantsFire)
         {
             if (!gameplay || !firearm)
@@ -99,7 +149,8 @@ namespace Dustline
 
         void Tick(float now, float frame)
         {
-            if (session.Phase != SessionPhase.Raid || !Health.Alive) return;
+            if (!session.InField || !Health.Alive) return;
+            TickTreatment(frame);
             var input = session.Input;
             if (input.Gameplay)
             {
@@ -107,10 +158,10 @@ namespace Dustline
                 transform.Rotate(0, input.Look.x, 0);
                 if (input.CrouchPressed) ToggleCrouch();
                 if (input.PronePressed) ToggleProne();
-                if (input.HealPressed) session.UseMedicine();
+                if (input.HealPressed && !input.SwitchWeaponPressed && !input.InteractPressed) session.UseMedicine(input.HealInstance);
             }
             bool lowProfile = Prone || Crouched || currentHeight < 1.7f;
-            input.SprintAllowed = !sprintLocked && !lowProfile;
+            input.SprintAllowed = !sprintLocked && !lowProfile && !WeaponView.MedicineBusy;
 
             bool grounded = motor.isGrounded;
             if (input.Gameplay && input.JumpPressed && grounded && !Prone)
@@ -122,10 +173,11 @@ namespace Dustline
                 }
             }
             bool walkForFire = WalkForFire(now, input.Gameplay, Weapon.Magazine != null, input.Fire);
-            bool sprint = input.Gameplay && input.Sprint && !walkForFire && !sprintLocked && input.Move.y > 0.1f
+            bool sprint = input.Gameplay && input.Sprint && !walkForFire && input.SprintAllowed && input.Move.y > 0.1f
                 && Stamina > 0.01f && !lowProfile;
             float speed = Prone ? 1.25f : lowProfile ? 2f : sprint ? 6.5f : 3.8f;
-            speed *= Mathf.Lerp(1, 0.65f, session.Loadout.Weight / session.Loadout.MaxWeight);
+            var bag = session.ActiveFieldBag;
+            speed *= Mathf.Lerp(1, 0.65f, bag.Weight / bag.MaxWeight);
             Vector2 move = input.Gameplay ? input.Move : Vector2.zero;
             Vector3 movement = transform.right * move.x + transform.forward * move.y;
             UpdateStanceHeight(frame);
@@ -147,7 +199,7 @@ namespace Dustline
             else if (now >= staminaResumeAt) Stamina = Mathf.Min(100f, Stamina + 15f * frame);
             if (Stamina <= 0.01f) sprintLocked = true;
             else if (Stamina >= 25f) sprintLocked = false;
-            input.SprintAllowed = !sprintLocked && !lowProfile;
+            input.SprintAllowed = !sprintLocked && !lowProfile && !WeaponView.MedicineBusy;
             if (steps.Advance(travel, motor.isGrounded,
                 Prone ? 0.76f : lowProfile ? 0.91f : running ? 1.67f : 1.42f))
                 session.EnvironmentAudio.PlayFootstep(transform.position,
@@ -164,9 +216,10 @@ namespace Dustline
             recoilView = Vector2.Lerp(recoilView, recoilImpulse, 1f - Mathf.Exp(-34f * frame));
             recoilImpulse *= Mathf.Exp(-9f * frame);
             View.transform.localRotation = Quaternion.Euler(Mathf.Clamp(pitch - recoilView.x, -87f, 87f), recoilView.y, -Lean * 6.5f);
-            UpdateLoot(input, move.sqrMagnitude > 0.04f);
-            bool aiming = input.Gameplay && input.Aim && Weapon.Magazine != null;
-            WeaponView.SetPose(aiming, MoveSpeed, running, lowProfile, frame, walkForFire);
+            if (session.Phase == SessionPhase.Raid) UpdateLoot(input, move.sqrMagnitude > 0.04f || IsTreating);
+            bool aiming = input.Gameplay && input.Aim && Weapon.Magazine != null && !WeaponView.MedicineBusy;
+            WeaponView.SetMedicineProgress(TreatmentProgress);
+            WeaponView.SetPose(aiming, MoveSpeed, running, lowProfile, frame, walkForFire || Weapon.Magazine?.Reloading == true);
             SetViewFov(Mathf.Lerp(75f, Weapon.AimFov, Mathf.SmoothStep(0f, 1f, AimProgress)));
 
             Operator.SetMotion(MoveSpeed, running, lowProfile, frame);
@@ -249,7 +302,7 @@ namespace Dustline
                 focusAt = 0f;
                 return;
             }
-            if (input.InteractPressed && FocusedLoot != null)
+            if (input.InteractPressed && FocusedLoot != null && !IsTreating)
             {
                 if (FocusedLoot.Searched || FocusedLoot.SearchSeconds <= 0)
                 {

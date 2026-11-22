@@ -30,7 +30,7 @@ namespace Dustline
             { Source = source; Range = range; Gain = gain; }
         }
 
-        internal void Initialize(GameSession owner)
+        internal void Initialize(GameSession owner, bool practice = false)
         {
             session = owner;
             localStep = Source("Player footsteps", Vector3.zero, false, 1);
@@ -46,6 +46,7 @@ namespace Dustline
                     footsteps[surface, take] = CreateStep((SurfaceKind)surface, take);
             }
 
+            if (practice) return;
             loops[0] = Loop("Harbor wind", Vector3.zero, 0, 0.17f, 0);
             loops[1] = Loop("Workshop ventilation", PortLayout.Districts[2].Center + Vector3.up * 3, 105, 0.29f, 1);
             loops[2] = Loop("Freight yard rumble", PortLayout.Districts[3].Center + Vector3.up * 2, 143, 0.30f, 2);
@@ -88,6 +89,7 @@ namespace Dustline
             for (int i = 0; i < loops.Length; i++)
             {
                 var layer = loops[i];
+                if (layer.Source == null) continue;
                 float gain = active ? layer.Gain : 0;
                 if (active && layer.Range > 0)
                 {

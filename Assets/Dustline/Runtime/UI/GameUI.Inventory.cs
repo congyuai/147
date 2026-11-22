@@ -1,4 +1,3 @@
-using System;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -29,20 +28,26 @@ namespace Dustline
             var root = Display(ScreenPage.Stash, "Stash");
             Header(root, "仓库与整备", "行动大厅 / 仓库");
             inventoryBody = At("Stash contents", root, 26, 130, 1186, 461);
-            ShopButton(root, "步枪", "rifle", 1, 26, 120);
-            ShopButton(root, "弹药 ×30", "ammo", 30, 156, 148);
-            ShopButton(root, "医疗包", "medkit", 1, 314, 125);
-            ShopButton(root, "防弹衣", "armor", 1, 449, 125);
-            ShopButton(root, "短棍", WeaponDefinition.BatonId, 1, 584, 125);
-            Button(root, "应急装备", 719, 615, 142, 49, session.EmergencyKit);
+            ShopButton(root, "步枪", "rifle", 1, 26, 109);
+            ShopButton(root, "弹药 ×30", "ammo", 30, 141, 131);
+            ShopButton(root, "医疗包", "medkit", 1, 278, 116);
+            ShopButton(root, "绷带", "bandage", 1, 400, 109);
+            ShopButton(root, "急救盒", "trauma_case", 1, 515, 118);
+            ShopButton(root, "防弹衣", "armor", 1, 639, 116);
+            ShopButton(root, "短棍", WeaponDefinition.BatonId, 1, 761, 107);
+            Button(root, "应急装备", 874, 615, 129, 49, session.EmergencyKit);
             Button(root, "返回大厅", 1014, 615, 198, 49, ShowMenu, true);
             RefreshInventory();
         }
 
         void ShopButton(Transform root, string name, string id, int count, float x, float width)
         {
-            int cost = session.Catalog.Find(id).Value * count;
-            Button(root, name + " / " + cost, x, 615, width, 49, () => session.Buy(id, count));
+            var item = session.Catalog.Find(id);
+            var button = Button(root, name + " / " + (item.Value * count), x, 615, width, 49, () => session.Buy(id, count));
+            DrawItemSymbol(button.transform, ItemSymbol(item), 6, 8, 28, 33, Pale);
+            var caption = button.GetComponentInChildren<Text>().rectTransform;
+            caption.anchoredPosition = new Vector2(36f, -2f);
+            caption.sizeDelta = new Vector2(width - 41f, 45f);
         }
 
         public void ToggleInventory()
@@ -62,9 +67,9 @@ namespace Dustline
         {
             var root = Display(ScreenPage.FieldInventory, "Field inventory");
             loot = container;
-            Header(root, container == null ? "战地背包" : "物资搜刮", "突袭仍在继续 / 打开背包不会暂停战斗");
+            Header(root, container == null ? "战地背包" : container.DisplayName, "突袭仍在继续 / 打开背包不会暂停战斗");
             inventoryBody = At("Field inventory contents", root, 26, 130, 1186, 461);
-            Button(root, session.Input.TouchMode ? "使用医疗品" : "使用医疗品 [H]", 26, 615, 182, 49, () => session.UseMedicine());
+            Button(root, "使用医疗品并返回", 26, 615, 182, 49, () => UseFromInventory());
             Button(root, "切换射击模式", 219, 615, 179, 49, () =>
             {
                 var weapon = session.Player.Weapon;
@@ -90,7 +95,7 @@ namespace Dustline
             if (stash) DrawGrid(storage, session.Stash, "仓库储备", 32);
             else if (loot != null)
             {
-                DrawGrid(storage, loot.Inventory, loot.DisplayName, 51);
+                DrawGrid(storage, loot.Inventory, loot.DisplayName, 51, false);
                 if (loot.Inventory.Items.Count == 0)
                     Label(storage, "已搜空", 21, 17, 368, 389, 40, color: Muted);
             }
@@ -113,10 +118,11 @@ namespace Dustline
             return rect;
         }
 
-        void DrawGrid(RectTransform root, GridInventory bag, string title, float cell)
+        void DrawGrid(RectTransform root, GridInventory bag, string title, float cell, bool showWeight = true)
         {
-            Label(root, title, 23, 17, 9, 340, 32);
-            Label(root, "负重 " + bag.Weight.ToString("0.0") + " / " + bag.MaxWeight.ToString("0") + " 千克", 15, 17, 42, 340, 23, color: Muted);
+            Label(root, title, 23, 17, 9, root.rect.width - 34f, 38);
+            if (showWeight)
+                Label(root, "负重 " + bag.Weight.ToString("0.0") + " / " + bag.MaxWeight.ToString("0") + " 千克", 15, 17, 42, 340, 23, color: Muted);
             var board = At("Item grid", root, 17, 69, bag.Width * cell, bag.Height * cell);
             board.gameObject.AddComponent<InventoryBoard>().Initialize(bag.Width, bag.Height, cell, (x, y) => PlaceAt(bag, x, y));
             foreach (var item in bag.Items)
@@ -127,14 +133,27 @@ namespace Dustline
                 int height = item.Rotated ? definition.Width : definition.Height;
                 string id = item.InstanceId;
                 bool selected = selectedBag == bag && selectedId == id;
-                string label = definition.DisplayName;
-                if (definition.Kind == ItemKind.Ammo) label = cell < 40 ? "弹" : "弹药\n" + item.Quantity;
-                else if (definition.Kind == ItemKind.Medicine && width == 1) label = cell < 40 ? "医\n疗" : "医疗包";
-                else if (width == 1) label = definition.KindName;
-                else if (item.Quantity > 1 && cell >= 40) label += " ×" + item.Quantity;
-                var button = Button(board, label, item.X * cell + 1, item.Y * cell + 1, width * cell - 2, height * cell - 2,
+                float w = width * cell - 2, h = height * cell - 2;
+                var button = Button(board, "", item.X * cell + 1, item.Y * cell + 1, w, h,
                     () => SelectItem(bag, id), selected, selected ? Amber : Color.Lerp(Plate, definition.Tint, 0.37f));
-                Fill(At("Item stripe", button.transform, 1, 1, 2, height * cell - 4), selected ? Ink : definition.Tint);
+                button.name = definition.DisplayName;
+                Fill(At("Item stripe", button.transform, 1, 1, 2, h - 2), selected ? Ink : definition.Tint);
+                bool caption = w >= 66f && h >= 43f;
+                var color = selected ? Ink : Pale;
+                float iconHeight = caption ? h - 19f : h - 5f;
+                DrawItemSymbol(button.transform, ItemSymbol(definition), 5, 1, w - 10, iconHeight, color);
+                if (caption)
+                {
+                    var name = Label(button.transform, definition.DisplayName, 13, 4, h - 19f, w - 8f, 18f, TextAnchor.MiddleCenter, color);
+                    name.resizeTextForBestFit = true;
+                    name.resizeTextMinSize = 9;
+                    name.resizeTextMaxSize = 13;
+                }
+                if (item.Quantity > 1)
+                {
+                    var count = Label(button.transform, item.Quantity.ToString(), cell < 40f ? 11 : 14, 4, 1, w - 8f, 17f, TextAnchor.UpperRight, color);
+                    if (!selected) count.gameObject.AddComponent<Outline>().effectColor = Ink;
+                }
             }
         }
 
@@ -142,10 +161,17 @@ namespace Dustline
         {
             var item = session.Loadout.Equipped(slot);
             string name = slot == EquipmentSlot.Weapon ? "武器" : "护甲";
-            Button(root, name + " / " + ItemName(item, "未装备"), 17, y, 342, 39, () =>
+            bool selected = item != null && selectedBag == session.Loadout && selectedId == item.InstanceId;
+            var button = Button(root, name + " / " + ItemName(item, "未装备"), 17, y, 342, 39, () =>
             {
                 if (item != null) SelectItem(session.Loadout, item.InstanceId);
-            }, item != null && selectedBag == session.Loadout && selectedId == item.InstanceId);
+            }, selected);
+            if (item == null) return;
+            DrawItemSymbol(button.transform, ItemSymbol(session.Catalog.Find(item.ItemId)), 9, 3, 38, 33, selected ? Ink : Pale);
+            var caption = button.GetComponentInChildren<Text>();
+            caption.rectTransform.anchoredPosition = new Vector2(53f, -2f);
+            caption.rectTransform.sizeDelta = new Vector2(282f, 35f);
+            caption.alignment = TextAnchor.MiddleLeft;
         }
 
         void SelectItem(GridInventory bag, string id)
@@ -183,10 +209,13 @@ namespace Dustline
                 return;
             }
             var definition = session.Catalog.Find(item.ItemId);
-            Label(root, definition.DisplayName, 23, 17, 9, 321, 57);
+            DrawItemSymbol(root, ItemSymbol(definition), 17, 10, 53, 48, Pale);
+            Label(root, definition.DisplayName, 23, 79, 9, 259, 57);
             string info = definition.KindName + "  /  数量 " + item.Quantity + "  /  " + (definition.UnitWeight * item.Quantity).ToString("0.00") + " 千克";
             if (definition.Kind == ItemKind.Weapon)
                 info += definition.Weapon != null && definition.Weapon.Melee ? "\n近战武器 / 无需弹药" : "\n弹匣 " + Mathf.Max(0, item.LoadedAmmo);
+            if (definition.Kind == ItemKind.Medicine)
+                info += "\n恢复 " + definition.HealAmount.ToString("0") + " / 用时 " + definition.UseSeconds.ToString("0.0") + " 秒";
             Label(root, info, 17, 17, 65, 321, 61, color: Muted);
             float y = 133;
             GridInventory target = stash ? (selectedBag == session.Stash ? session.Loadout : session.Stash)
@@ -223,11 +252,48 @@ namespace Dustline
             if (stash)
                 ActionButton(root, "出售 / " + Mathf.Max(1, definition.Value / 2) * item.Quantity, ref y, () => session.Sell(selectedBag, selectedId));
             else if (selectedBag == session.Loadout && definition.Kind == ItemKind.Medicine)
-                ActionButton(root, "使用医疗品", ref y, () => session.UseMedicine(selectedId));
+                ActionButton(root, "使用并返回突袭", ref y, () => UseFromInventory(item.InstanceId));
             if (placing) Label(root, "请选择同一物品栏中的目标格。", 16, 17, y + 6, 320, 54, color: Amber);
         }
 
-        void ActionButton(Transform parent, string title, ref float y, Action action)
+        void UseFromInventory(string id = null)
+        {
+            EnterField();
+            if (session.Input.Gameplay) session.Input.TapMedicine(id);
+        }
+
+        static RaidIcon ItemSymbol(ItemDefinition item) => item.Kind switch
+        {
+            ItemKind.Weapon => WeaponSymbol(item.Weapon != null ? item.Weapon.Form : WeaponForm.Rifle),
+            ItemKind.Ammo => RaidIcon.AmmoItem,
+            ItemKind.Medicine => item.MedicineVisual switch
+            {
+                MedicineForm.Roll => RaidIcon.BandageItem,
+                MedicineForm.Case => RaidIcon.TraumaItem,
+                _ => RaidIcon.PouchItem
+            },
+            ItemKind.Armor => RaidIcon.ArmorItem,
+            ItemKind.Valuable when item.Id == "circuit" => RaidIcon.CircuitItem,
+            ItemKind.Valuable when item.Id == "relic" => RaidIcon.ModuleItem,
+            _ => RaidIcon.GenericItem
+        };
+
+        static RaidIcon WeaponSymbol(WeaponForm form) => form switch
+        {
+            WeaponForm.Baton => RaidIcon.BatonItem,
+            WeaponForm.Tangdao => RaidIcon.TangdaoItem,
+            WeaponForm.ShortBlade => RaidIcon.ShortBladeItem,
+            _ => RaidIcon.RifleItem
+        };
+
+        void DrawItemSymbol(Transform parent, RaidIcon icon, float x, float y, float w, float h, Color color)
+        {
+            var image = Fill(At("Item symbol", parent, x, y, w, h), color);
+            image.sprite = icons[icon];
+            image.preserveAspect = true;
+        }
+
+        void ActionButton(Transform parent, string title, ref float y, System.Action action)
         {
             Button(parent, title, 17, y, 321, 39, action);
             y += 46;

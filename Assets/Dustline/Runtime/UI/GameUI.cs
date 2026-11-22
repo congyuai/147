@@ -8,11 +8,11 @@ namespace Dustline
 {
     public sealed partial class GameUI : MonoBehaviour
     {
-        enum ScreenPage { Lobby, Stash, Operator, Gunsmith, MenuSettings, Loading, Field, FieldInventory, FieldMap, FieldSettings, TouchLayout, Results, Error }
+        enum ScreenPage { Lobby, Stash, Operator, Gunsmith, MenuSettings, Loading, Field, FieldInventory, FieldMap, FieldSettings, PracticePanel, TouchLayout, Results, Error }
 
         ScreenPage current;
         public bool InventoryOpen => current == ScreenPage.FieldInventory;
-        public bool BlocksGameplay => current != ScreenPage.Field;
+        public bool BlocksGameplay => current != ScreenPage.Field || MedicineWheelOpen;
         GameSession session;
         Font font;
         RaidUiIcons icons;
@@ -22,6 +22,7 @@ namespace Dustline
         Text toast, fpsReadout;
         float toastUntil, fpsSeconds, sampledFps;
         int fpsFrames;
+        bool skipFrameSample;
         Rect lastSafe;
         Vector2Int lastScreen;
         static readonly Color Ink = new Color32(13, 20, 24, 255);
@@ -88,7 +89,8 @@ namespace Dustline
             Button(panel, "设置", 341, 615, 95, 49, () => ShowSettings(false));
             Button(panel, "角色", 446, 615, 100, 49, ShowOperator);
             Button(panel, "枪械改装", 556, 615, 143, 49, () => ShowGunsmith());
-            Label(panel, "离线突袭  /  15 分钟", 17, 721, 618, 491, 43, TextAnchor.MiddleRight, Muted);
+            Button(panel, "离线靶场", 712, 615, 157, 49, session.StartPractice);
+            Label(panel, "离线突袭  /  15 分钟", 17, 877, 618, 335, 43, TextAnchor.MiddleRight, Muted);
         }
 
         void ShowOperator()
@@ -123,10 +125,12 @@ namespace Dustline
             {
                 if (option == null || option.Weapon == null) continue;
                 string id = option.Id;
-                Button(dossier, option.DisplayName, 24 + (bladeIndex++) * 321, 314, 296, 54, () =>
+                bool active = id == session.BoundBladeId;
+                var blade = Button(dossier, option.DisplayName, 24 + (bladeIndex++) * 321, 314, 296, 54, () =>
                 {
                     if (session.SelectBlade(id)) ShowOperator();
-                }, id == session.BoundBladeId);
+                }, active);
+                DrawItemSymbol(blade.transform, WeaponSymbol(option.Weapon.Form), 12, 7, 40, 40, active ? Ink : Pale);
             }
             Label(dossier, "随身刀不可卸下、出售，不因阵亡丢失。", 17, 24, 388, 617, 49, color: Aqua);
             Button(panel, "返回大厅", 1014, 615, 198, 49, ShowMenu, true);
@@ -135,7 +139,8 @@ namespace Dustline
         void ShowSettings(bool field, bool controls = false)
         {
             var panel = Display(field ? ScreenPage.FieldSettings : ScreenPage.MenuSettings, "Game settings");
-            Header(panel, "设置", field ? "突袭 / 设置不会暂停游戏" : "大厅 / 本机偏好");
+            bool practice = field && session.Phase == SessionPhase.Practice;
+            Header(panel, "设置", practice ? "离线靶场 / 本机偏好" : field ? "突袭 / 设置不会暂停游戏" : "大厅 / 本机偏好");
             Button(panel, "画面", 26, 120, 188, 44, () => ShowSettings(field), !controls);
             Button(panel, "操控", 225, 120, 188, 44, () => ShowSettings(field, true), controls);
             var body = At("Settings options", panel, 26, 176, 1186, 424);
@@ -152,7 +157,8 @@ namespace Dustline
                     preview.GetComponentInChildren<Text>().text = session.Input.ForceTouch ? "触控预览：开启" : "触控预览：关闭";
                 });
             }
-            Button(panel, field ? "返回突袭" : "返回大厅", 1014, 615, 198, 49, BackOrSettings, true);
+            if (practice) Button(panel, "靶场控制", 26, 615, 171, 49, ShowPracticePanel);
+            Button(panel, practice ? "返回靶场" : field ? "返回突袭" : "返回大厅", 1014, 615, 198, 49, BackOrSettings, true);
         }
 
         void BuildVisualOptions(RectTransform body)
@@ -166,12 +172,12 @@ namespace Dustline
                 {
                     session.SelectFrameRate(value);
                     UpdateFrameChoices(choices);
-                    UpdateFpsText();
+                    ResetFrameSample();
                 });
             }
             UpdateFrameChoices(choices);
             Label(body, Application.isMobilePlatform
-                ? "安卓的不限帧使用当前屏幕刷新率。固定档位可能被系统匹配为更低的刷新率分频。"
+                ? "固定档位保持所选目标；不限帧跟随屏幕刷新率。实际帧率还受系统、省电和温控限制。"
                 : "不限帧会关闭游戏帧率上限与垂直同步。",
                 17, 24, 102, 1100, 32, color: Muted);
             fpsReadout = Label(body, "", 20, 24, 138, 1100, 32, color: Aqua);
@@ -219,29 +225,73 @@ namespace Dustline
                 StyleButton(choices[i], RaidFrameRate.Options[i] == session.FrameRate, null);
         }
 
+        internal void ResetFrameSample()
+        {
+            sampledFps = fpsSeconds = 0f;
+            fpsFrames = 0;
+            skipFrameSample = true;
+            UpdateFpsText();
+        }
+
         void UpdateFpsText()
         {
             if (fpsReadout == null) return;
             int target = Application.targetFrameRate;
-            fpsReadout.text = "游戏目标：" + (target < 0 ? "不限帧" : target + " 帧") + "    /    实测：" + (sampledFps > 0 ? Mathf.RoundToInt(sampledFps) + " 帧" : "采样中");
+            double refresh = Screen.currentResolution.refreshRateRatio.value;
+            fpsReadout.text = "设定：" + (session.FrameRate < 0 ? "不限帧" : session.FrameRate + " 帧")
+                + " / 游戏目标：" + (target < 0 ? "不限帧" : target + " 帧")
+                + (refresh > 0 && refresh < 1000 ? " / 屏幕：" + refresh.ToString("0.#") + " Hz" : "")
+                + " / 实测：" + (sampledFps > 0 ? Mathf.RoundToInt(sampledFps) + " 帧" : "采样中");
         }
 
         public void BackOrSettings()
         {
-            if (current == ScreenPage.TouchLayout) ShowSettings(session.Phase == SessionPhase.Raid, true);
+            if (MedicineWheelOpen) { CloseMedicineWheel(true); return; }
+            if (current == ScreenPage.TouchLayout) ShowSettings(session.InField, true);
             else if (session.Phase == SessionPhase.Menu && current != ScreenPage.Lobby) ShowMenu();
-            else if (session.Phase == SessionPhase.Raid)
+            else if (session.InField)
             {
                 if (current == ScreenPage.Field) ShowSettings(true);
-                else if (current == ScreenPage.FieldInventory || current == ScreenPage.FieldSettings || current == ScreenPage.FieldMap) EnterField();
+                else if (current == ScreenPage.FieldInventory || current == ScreenPage.FieldSettings || current == ScreenPage.FieldMap || current == ScreenPage.PracticePanel) EnterField();
             }
         }
 
-        public void ShowLoading()
+        public void ShowLoading(bool practice = false)
         {
             var panel = Display(ScreenPage.Loading, "Loading district");
-            Header(panel, "正在部署", "北岬货运港");
-            Label(panel, "正在准备港区、搜刮点与撤离路线…", 30, 42, 285, 1150, 78, TextAnchor.MiddleCenter);
+            Header(panel, "正在部署", practice ? "离线靶场" : "北岬货运港");
+            Label(panel, practice ? "正在准备标靶和练习装备…" : "正在准备港区、搜刮点与撤离路线…", 30, 42, 285, 1150, 78, TextAnchor.MiddleCenter);
+        }
+
+        public void ShowPractice()
+        {
+            ResetDamageCues();
+            EnterField();
+            Notify(session.Input.TouchMode ? "点击地图键或背包键打开靶场控制。练习装备不带出。" : "Tab 或 M：靶场控制 / H：治疗 / R：换弹 / Esc：设置");
+        }
+
+        internal void TogglePracticePanel()
+        {
+            if (session.Phase != SessionPhase.Practice) return;
+            if (current == ScreenPage.PracticePanel) EnterField();
+            else if (current == ScreenPage.Field) ShowPracticePanel();
+        }
+
+        void ShowPracticePanel()
+        {
+            var panel = Display(ScreenPage.PracticePanel, "Practice controls");
+            Header(panel, "靶场控制", "练习独立结算，不消耗正式整备装备");
+            var body = At("Practice information", panel, 26, 134, 1186, 449);
+            Fill(body, Ink);
+            Label(body, "固定靶 / 移动靶", 31, 30, 24, 1120, 48, color: Amber);
+            Label(body, "标靶倒下后会自动复位，命中包括近战。可补充练习装备或模拟受伤以测试药品。", 23, 30, 94, 1080, 60, color: Pale);
+            Label(body, "开火 " + session.Practice.Shots + "  /  命中 " + session.Practice.Hits + "  /  击倒靶板 " + session.Practice.Plates,
+                27, 30, 184, 1080, 44, color: Aqua);
+            Button(body, "重置标靶和计数", 30, 285, 293, 61, () => { session.Practice.ResetPlates(); EnterField(); });
+            Button(body, "补充练习装备", 349, 285, 274, 61, () => { EnterField(); session.RefillPractice(); });
+            Button(body, "模拟受伤", 651, 285, 237, 61, () => { session.PracticeHealthSample(); EnterField(); });
+            Button(panel, "返回大厅", 26, 615, 162, 49, session.LeavePractice);
+            Button(panel, "继续练习", 1014, 615, 198, 49, EnterField, true);
         }
 
         public void ShowRaid()
@@ -279,11 +329,14 @@ namespace Dustline
         void EnterField()
         {
             Switch(ScreenPage.Field);
+            bool practice = session.Phase == SessionPhase.Practice;
+            SetActive(miniMap.Root.parent.gameObject, !practice);
             UpdateHud(true);
         }
 
         void Switch(ScreenPage next)
         {
+            CancelFieldGestures();
             session.SaveControlPreferences();
             operatorPreview?.Dispose();
             operatorPreview = null;
@@ -337,6 +390,7 @@ namespace Dustline
             lastSafe = Screen.safeArea;
             lastScreen = new Vector2Int(Screen.width, Screen.height);
             if (Screen.width < 1 || Screen.height < 1) return;
+            if (medicineHeld) CloseMedicineWheel(true);
             safe.anchorMin = new Vector2(lastSafe.xMin / Screen.width, lastSafe.yMin / Screen.height);
             safe.anchorMax = new Vector2(lastSafe.xMax / Screen.width, lastSafe.yMax / Screen.height);
             Canvas.ForceUpdateCanvases();
@@ -358,8 +412,12 @@ namespace Dustline
         {
             if (Screen.safeArea != lastSafe || Screen.width != lastScreen.x || Screen.height != lastScreen.y) UpdateSafeArea();
             if (toastAnchor.gameObject.activeSelf && Time.unscaledTime >= toastUntil) toastAnchor.gameObject.SetActive(false);
-            fpsFrames++;
-            fpsSeconds += Time.unscaledDeltaTime;
+            if (skipFrameSample) skipFrameSample = false;
+            else
+            {
+                fpsFrames++;
+                fpsSeconds += Time.unscaledDeltaTime;
+            }
             if (fpsSeconds >= 0.6f)
             {
                 sampledFps = fpsFrames / fpsSeconds;
@@ -368,7 +426,11 @@ namespace Dustline
                 UpdateFpsText();
                 if (current == ScreenPage.FieldMap && fullMap != null) UpdateFullMap();
             }
-            if (current == ScreenPage.Field) UpdateHud(false);
+            if (current == ScreenPage.Field)
+            {
+                UpdateMedicineGesture();
+                UpdateHud(false);
+            }
         }
 
         static RectTransform Anchor(string title, Transform parent, float x, float y)

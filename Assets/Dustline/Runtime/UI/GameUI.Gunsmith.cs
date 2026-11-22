@@ -70,6 +70,7 @@ namespace Dustline
                 Label(selection, definition.DisplayName, 24, 17, 21, 239, 58, color: Amber);
                 Label(selection, choice.Bag == session.Loadout ? (item.Slot == EquipmentSlot.Weapon ? "整备背包 / 已装备" : "整备背包") : "仓库储备", 17, 17, 88, 239, 38, color: Aqua);
                 Label(selection, "弹匣容量  " + definition.Weapon.MagazineSize + "\n伤害  " + definition.Weapon.Damage.ToString("0.#") + "\n射速  " + Mathf.RoundToInt(60f / definition.Weapon.FireInterval) + " 发/分", 18, 17, 152, 239, 111);
+                DrawItemSymbol(selection, ItemSymbol(definition), 170, 103, 75, 66, Aqua);
                 Label(selection, "逐级解锁；切换已解锁配件不收费。", 16, 17, 277, 239, 78, color: Muted);
                 Part(WeaponModSlot.Sight, "瞄具", "机瞄", "反射瞄具", "紧凑瞄具", "提高开镜精度；较高等级开镜更慢。", 15);
                 Part(WeaponModSlot.Grip, "握把", "原装", "防滑握把", "稳定握把", "减少腰射散布与后坐；换弹略慢。", 162);

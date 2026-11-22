@@ -195,6 +195,7 @@ namespace Dustline.Tests
                 var motor = other.GetComponent<CharacterController>();
                 motor.radius = .35f; motor.height = 1.8f; motor.center = Vector3.up * .9f;
                 Physics.SyncTransforms();
+                yield return new WaitForFixedUpdate();
                 Assert.That(navigation.Path(start, end).Count, Is.EqualTo(1));
                 if (navigation.TryLocalStep(start, end, null, out var route))
                     Assert.That(Mathf.Abs(route.x), Is.GreaterThan(.3f), "The actor should not push straight into the blocking capsule.");
@@ -232,6 +233,8 @@ namespace Dustline.Tests
                 var motor = blocker.GetComponent<CharacterController>();
                 motor.height = 1.8f; motor.radius = .35f; motor.center = Vector3.up * .9f;
                 blocker.transform.position = shutter.transform.position;
+                Physics.SyncTransforms();
+                yield return new WaitForFixedUpdate();
                 Assert.That(shutter.TryToggle(), Is.False);
                 Assert.That(shutter.IsOpen, Is.True);
                 motor.enabled = false;
@@ -308,16 +311,16 @@ namespace Dustline.Tests
             {
                 owner.SetActive(false);
                 var session = owner.AddComponent<GameSession>();
-                foreach (string id in new[] { "ammo", "medkit", "armor", "circuit", HighItem })
-                {
-                    var item = ScriptableObject.CreateInstance<ItemDefinition>();
-                    item.Id = id;
-                    item.MaxStack = 99;
-                    catalog.Items.Add(item);
-                }
+                AddItem("ammo", ItemKind.Ammo);
+                AddItem("medkit", ItemKind.Medicine);
+                AddItem("bandage", ItemKind.Medicine);
+                AddItem("armor", ItemKind.Armor);
+                AddItem("circuit", ItemKind.Valuable);
+                AddItem(HighItem, ItemKind.Valuable);
                 catalog.RebuildIndex();
                 regular.Rolls = high.Rolls = 1;
-                regular.Entries = Entries("ammo"); high.Entries = Entries(HighItem);
+                regular.Entries = Entries("ammo", "medkit", "bandage", "armor", "circuit");
+                high.Entries = Entries(HighItem);
                 World = world.AddComponent<WorldBuilder>();
                 Assign(session, "Catalog", catalog);
                 Assign(session, "LootTable", regular);
@@ -340,7 +343,21 @@ namespace Dustline.Tests
             return new Vector3(x, y, z);
         }
 
-        static List<LootEntry> Entries(string id) => new List<LootEntry> { new LootEntry { ItemId = id, Weight = 1, Min = 1, Max = 1 } };
+        void AddItem(string id, ItemKind kind)
+        {
+            var item = ScriptableObject.CreateInstance<ItemDefinition>();
+            item.Id = id;
+            item.Kind = kind;
+            item.MaxStack = 99;
+            catalog.Items.Add(item);
+        }
+
+        static List<LootEntry> Entries(params string[] ids)
+        {
+            var entries = new List<LootEntry>(ids.Length);
+            foreach (string id in ids) entries.Add(new LootEntry { ItemId = id, Weight = 1, Min = 1, Max = 1 });
+            return entries;
+        }
 
         static void Assign(GameSession session, string name, object value) => typeof(GameSession).GetProperty(name)
             .GetSetMethod(true).Invoke(session, new[] { value });

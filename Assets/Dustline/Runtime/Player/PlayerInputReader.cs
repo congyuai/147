@@ -38,6 +38,8 @@ namespace Dustline
         public bool MapPressed { get; private set; }
         public bool SwitchWeaponPressed { get; private set; }
         public bool HealPressed { get; private set; }
+        internal string HealInstance { get; private set; }
+        string medicineTapInstance;
         public bool EscapePressed { get; private set; }
         public Vector2 TouchMove;
         Vector2 touchLook, gyroSmoothed;
@@ -64,6 +66,8 @@ namespace Dustline
             LeanRight = touchLeanRight || (keyboard?.eKey.isPressed ?? false);
             InteractPressed = interact || (keyboard?.fKey.wasPressedThisFrame ?? false);
             HealPressed = heal || (keyboard?.hKey.wasPressedThisFrame ?? false);
+            HealInstance = heal ? medicineTapInstance : null;
+            medicineTapInstance = null;
             inventory = reload = crouch = prone = jump = interact = heal = settings = map = weaponSwap = false;
             Move = Vector2.zero;
             if (keyboard != null)
@@ -197,8 +201,15 @@ namespace Dustline
             if (action == "Settings") settings = true;
             if (action == "Map") map = true;
             if (action == "SwitchWeapon") weaponSwap = true;
-            if (action == "Heal") heal = true;
+            if (action == "Heal") TapMedicine();
         }
+
+        internal void TapMedicine(string instance = null)
+        {
+            heal = true;
+            medicineTapInstance = instance;
+        }
+
         public void ReleaseTouch()
         {
             TouchMove = touchLook = Move = Look = Vector2.zero;
@@ -206,6 +217,7 @@ namespace Dustline
             touchFire = touchFireTap = touchLeanLeft = touchLeanRight = autoSprint = false;
             LeanLeft = LeanRight = SwitchWeaponPressed = false;
             ReloadPressed = CrouchPressed = PronePressed = JumpPressed = InteractPressed = HealPressed = false;
+            HealInstance = medicineTapInstance = null;
             reload = crouch = prone = jump = interact = inventory = heal = settings = map = weaponSwap = false;
             CancelAimGesture();
             if (!Gameplay) ReleaseGyro();

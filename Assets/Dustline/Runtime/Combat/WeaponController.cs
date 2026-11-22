@@ -9,7 +9,7 @@ namespace Dustline
         public WeaponDefinition Definition { get; private set; }
         public bool IsMelee => Definition != null && Definition.Melee;
         public bool ActiveIsBound { get; private set; }
-        public int Reserve => Magazine == null ? 0 : CountPocketAmmo(session.Loadout, Definition.AmmoId);
+        public int Reserve => Magazine == null ? 0 : CountPocketAmmo(session.ActiveFieldBag, Definition.AmmoId);
         public bool Automatic => Magazine != null && mainAutomatic;
         public float AimFov => Magazine != null ? stats.AimFov : 75f;
         public float AimSeconds => Magazine != null ? stats.AimSeconds : 0.18f;
@@ -37,7 +37,7 @@ namespace Dustline
 
         void ResolveEquipment(bool toggle, float now)
         {
-            var bag = session.Loadout;
+            var bag = session.ActiveFieldBag;
             var item = bag.Equipped(EquipmentSlot.Weapon);
             string itemId = item?.ItemId;
             var main = item == null ? null : session.Catalog.Find(itemId)?.Weapon;
@@ -57,6 +57,7 @@ namespace Dustline
                 || activeItemId != (useBound ? null : itemId) || !ReferenceEquals(bag, activeBag);
             if (changed)
             {
+                player.CancelTreatment();
                 CancelActions();
                 if (player.WeaponView != null) session.Effects?.CancelMuzzle(player.WeaponView.Muzzle);
                 session.Input.SetAimAvailable(false);
@@ -96,7 +97,7 @@ namespace Dustline
         {
             if (session == null) return;
             var input = session.Input;
-            if (session.Phase != SessionPhase.Raid || !player.Health.Alive)
+            if (!session.InField || !player.Health.Alive)
             {
                 CancelActions();
                 return;
@@ -110,6 +111,9 @@ namespace Dustline
                 emptyClicked = false;
                 return;
             }
+            bool treating = player.WeaponView.MedicineBusy;
+            session.Input.SetAimAvailable(!treating && Magazine != null && !Magazine.Reloading);
+            if (treating) return;
             if (IsMelee)
             {
                 UpdateMelee(now, input.FirePressed);
@@ -129,13 +133,20 @@ namespace Dustline
             if (Automatic ? input.Fire : input.FirePressed) Fire(now, input.Aim);
         }
 
+        internal void BeginTreatment()
+        {
+            CancelActions();
+            session.Effects?.CancelMuzzle(player.WeaponView.Muzzle);
+            session.Input.SetAimAvailable(false);
+        }
+
         bool TryBeginReload()
         {
             if (!Magazine.BeginReload(Reserve, stats.ReloadSeconds)) return false;
             emptyClicked = false;
             session.Input.SetAimAvailable(false);
             var visual = player.WeaponView;
-            visual.BeginReload(stats.ReloadSeconds);
+            visual.BeginReload(Magazine);
             session.Effects?.Reload(visual.Muzzle.position, stats.ReloadSeconds);
             return true;
         }
@@ -156,6 +167,7 @@ namespace Dustline
             int loaded = mag.Step(delta, CountPocketAmmo(bag, ammoId));
             if (mag.Reloading) return;
             session.Input.SetAimAvailable(true);
+            player.WeaponView.EndReload();
             if (loaded == 0) return;
 
             // Consume notifies Changed synchronously; observers must see the new loaded count alongside the new reserve.
@@ -171,7 +183,7 @@ namespace Dustline
 
         ItemStack FindActiveItem()
         {
-            if (ActiveIsBound || !ReferenceEquals(session.Loadout, activeBag)) return null;
+            if (ActiveIsBound || !ReferenceEquals(session.ActiveFieldBag, activeBag)) return null;
             var item = activeBag.Equipped(EquipmentSlot.Weapon);
             return item != null && item.InstanceId == activeId && item.ItemId == activeItemId ? item : null;
         }
@@ -206,6 +218,7 @@ namespace Dustline
                 return;
             }
 
+            session.Practice?.RecordShot();
             nextAttack = now + stats.FireInterval;
             item.LoadedAmmo = Magazine.Rounds;
             var bag = activeBag;
@@ -312,7 +325,7 @@ namespace Dustline
             session.Input.SetAimAvailable(true);
         }
 
-        void CancelActions()
+        internal void CancelActions()
         {
             if (Magazine != null && Magazine.Reloading) CancelReload(Magazine.Rounds);
             if (chainUntil >= 0) CancelSwing();
