@@ -61,6 +61,8 @@ namespace Dustline
                     || !(definition.Storage.CarryBonus >= 0f) || float.IsInfinity(definition.Storage.CarryBonus)
                     || !(definition.Storage.WeightLimit >= 0f) || float.IsInfinity(definition.Storage.WeightLimit)))
                     throw new ArgumentException("Invalid cargo capacity: " + definition.Id, nameof(Items));
+                if (definition.Storage.Pockets != null && !ValidPockets(definition.Storage))
+                    throw new ArgumentException("Invalid pocket layout: " + definition.Id, nameof(Items));
                 if (definition.Kind == ItemKind.Part && (!Enum.IsDefined(typeof(PartSlot), definition.Part.Slot)
                     || definition.Part.Form < 1 || definition.Part.Form > 3 || string.IsNullOrWhiteSpace(definition.Part.Interface)
                     || definition.Part.Slot == PartSlot.Magazine && definition.Part.Capacity < 1))
@@ -76,6 +78,21 @@ namespace Dustline
             }
 
             index = rebuilt;
+        }
+
+        static bool ValidPockets(StorageSpec spec)
+        {
+            var used = new HashSet<(int, int)>();
+            foreach (var pocket in spec.Pockets)
+            {
+                if (pocket.X < 0 || pocket.Y < 0 || pocket.Width <= 0 || pocket.Height <= 0
+                    || pocket.X > spec.Columns - pocket.Width || pocket.Y > spec.Rows - pocket.Height
+                    || spec.Split > 0 && pocket.X < spec.Split && pocket.X + pocket.Width > spec.Split) return false;
+                for (int y = pocket.Y; y < pocket.Y + pocket.Height; y++)
+                    for (int x = pocket.X; x < pocket.X + pocket.Width; x++)
+                        if (!used.Add((x, y))) return false;
+            }
+            return true;
         }
 
         private void OnValidate()

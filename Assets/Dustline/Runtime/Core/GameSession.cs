@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -32,7 +33,7 @@ namespace Dustline
         public bool InField => Phase == SessionPhase.Raid || Phase == SessionPhase.Practice;
         internal PracticeRange Practice { get; private set; }
         GridInventory practiceBag;
-        ItemStack practiceRifle;
+        readonly List<ItemStack> practiceHands = new List<ItemStack>();
         string preferredMedicine, practiceMedicine;
         public ProfileData Profile { get; private set; }
         public PlayerInputReader Input { get; private set; }
@@ -103,7 +104,7 @@ namespace Dustline
                 Profile = store.Load();
                 if (Profile == null)
                 {
-                    Profile = new ProfileData { Version = 2 };
+                    Profile = new ProfileData { Version = ProfileData.CurrentVersion };
                     AddStarterKit(Loadout);
                     Stash.TryAdd("ammo", 120, out _);
                     Stash.TryAdd("medkit", 3, out _);
@@ -111,13 +112,13 @@ namespace Dustline
                 }
                 else
                 {
-                    bool upgrade = Profile.Version == 1;
+                    bool upgrade = Profile.Version < ProfileData.CurrentVersion;
+                    if (Profile.RaidInProgress && upgrade) Profile.Loadout.Clear();
                     if (upgrade) UpgradeInventory(Profile);
                     Stash.Restore(Profile.Stash);
                     Loadout.Restore(Profile.Loadout);
                     if (Profile.RaidInProgress)
                     {
-                        Loadout = GridInventory.Carried(Catalog);
                         Profile.RaidInProgress = false;
                         Notice = "上次突袭中断，随身装备与物资已丢失。";
                         upgrade = true;
@@ -131,19 +132,16 @@ namespace Dustline
 
         void AddStarterKit(GridInventory bag)
         {
-            bag.TryAdd("rifle", 1, out _);
-            bag.TryAdd("armor", 1, out _);
-            bag.TryAdd("ammo", 90, out _);
-            bag.TryAdd("medkit", 2, out _);
-            bag.TryAdd("rig_1", 1, out _);
-            bag.TryAdd("pack_1", 1, out _);
-            foreach (var item in bag.Snapshot())
+            var stock = new GridInventory(12, 10, 100, Catalog);
+            foreach (var (id, slot) in new[] { ("pack_1", EquipmentSlot.Pack), ("rig_1", EquipmentSlot.Rig),
+                ("rifle", EquipmentSlot.Weapon), ("armor", EquipmentSlot.Armor) })
             {
-                if (item.ItemId == "rifle") bag.TryEquip(item.InstanceId, EquipmentSlot.Weapon, out _);
-                if (item.ItemId == "armor") bag.TryEquip(item.InstanceId, EquipmentSlot.Armor, out _);
-                if (item.ItemId == "rig_1") bag.TryEquip(item.InstanceId, EquipmentSlot.Rig, out _);
-                if (item.ItemId == "pack_1") bag.TryEquip(item.InstanceId, EquipmentSlot.Pack, out _);
+                var item = new ItemStack { ItemId = id, InstanceId = Guid.NewGuid().ToString("N") };
+                if (!stock.TryInsert(item, out var error) || !bag.TryWearFrom(stock, item.InstanceId, slot, out error))
+                    throw new InvalidDataException(error);
             }
+            if (!bag.TryAdd("ammo", 90, out var supplies) || !bag.TryAdd("medkit", 2, out supplies))
+                throw new InvalidDataException(supplies);
         }
 
         void Update()
@@ -294,8 +292,19 @@ namespace Dustline
         IEnumerator BuildRaid()
         {
             yield return null;
+            var beforeDeployment = Loadout;
+            bool saved = false;
             try
             {
+                var carried = beforeDeployment.Snapshot();
+                var atHome = carried.FindAll(item => item.Area == CargoArea.Legacy);
+                if (atHome.Count > 0)
+                {
+                    carried.RemoveAll(item => item.Area == CargoArea.Legacy);
+                    var fieldLoadout = GridInventory.Carried(Catalog);
+                    fieldLoadout.Restore(carried);
+                    Loadout = fieldLoadout;
+                }
                 Kills = 0;
                 RaidRemaining = 900;
                 var worldObject = new GameObject("Raid world");
@@ -305,9 +314,10 @@ namespace Dustline
                 worldObject.AddComponent<HarborAtmosphere>().Initialize(this, World.Sun);
                 CreateFieldPlayer(worldObject, World.Spawn, 40f, false);
                 World.SpawnBots();
-                var deployed = new ProfileData { Version = Profile.Version, Credits = Profile.Credits, Stash = Stash.Snapshot(),
+                var deployed = new ProfileData { Version = Profile.Version, Credits = Profile.Credits, Stash = Stash.Snapshot(), Loadout = atHome,
                     BoundBladeId = Profile.BoundBladeId, RaidInProgress = true, Raids = Profile.Raids == int.MaxValue ? int.MaxValue : Profile.Raids + 1, Extractions = Profile.Extractions };
                 store.Save(deployed);
+                saved = true;
                 Profile = deployed;
                 menuCamera.enabled = false;
                 Phase = SessionPhase.Raid;
@@ -315,6 +325,7 @@ namespace Dustline
             }
             catch (Exception error)
             {
+                if (!saved) Loadout = beforeDeployment;
                 ClearRaidWorld();
                 Fail(error);
             }
@@ -336,7 +347,12 @@ namespace Dustline
         public void StartPractice()
         {
             if (Phase != SessionPhase.Menu) return;
-            practiceRifle = Loadout.Equipped(EquipmentSlot.Weapon)?.Clone();
+            practiceHands.Clear();
+            foreach (var slot in LoadoutSlots.Hands)
+            {
+                var item = Loadout.Equipped(slot);
+                if (item != null) practiceHands.Add(item.Clone());
+            }
             Phase = SessionPhase.PracticeLoading;
             UI.ShowLoading(true);
             StartCoroutine(BuildPractice());
@@ -368,26 +384,34 @@ namespace Dustline
         GridInventory CreatePracticeBag()
         {
             var bag = new GridInventory(8, 7, 70f, Catalog);
-            var weapon = practiceRifle?.Clone() ?? new ItemStack { ItemId = "rifle" };
-            weapon.InstanceId = Guid.NewGuid().ToString("N");
-            for (int i = 0; i <= (int)PartSlot.Magazine; i++)
-            {
-                var slot = (PartSlot)i;
-                var part = weapon.Parts.Get(slot);
-                if (part.Empty) continue;
-                part.InstanceId = Guid.NewGuid().ToString("N");
-                weapon.Parts.Set(slot, part);
-            }
-            var def = Catalog.Find(weapon.ItemId)?.Weapon;
+            var supply = new GridInventory(12, 10, 100, Catalog);
             const string unavailable = "靶场练习装备未就绪，请执行 Dustline > Prepare Project。";
-            if (def == null) throw new InvalidDataException(unavailable);
-            if (!def.Melee)
+            if (practiceHands.Count == 0) Equip(new ItemStack { ItemId = "rifle", Slot = EquipmentSlot.Weapon });
+            else foreach (var original in practiceHands) Equip(original);
+
+            void Equip(ItemStack original)
             {
-                weapon.LoadedAmmo = WeaponRules.Capacity(def, weapon, Catalog);
-                weapon.LoadedAmmoId = WeaponRules.LoadedType(def, weapon);
-                if (!bag.TryAdd(weapon.LoadedAmmoId, Math.Max(30, weapon.LoadedAmmo * 4), out _)) throw new InvalidDataException(unavailable);
+                var weapon = original.Clone();
+                weapon.InstanceId = Guid.NewGuid().ToString("N");
+                for (int i = 0; i <= (int)PartSlot.Magazine; i++)
+                {
+                    var socket = (PartSlot)i;
+                    var part = weapon.Parts.Get(socket);
+                    if (part.Empty) continue;
+                    part.InstanceId = Guid.NewGuid().ToString("N");
+                    weapon.Parts.Set(socket, part);
+                }
+                var def = Catalog.Find(weapon.ItemId)?.Weapon;
+                if (def == null) throw new InvalidDataException(unavailable);
+                if (!def.Melee)
+                {
+                    weapon.LoadedAmmoId = WeaponRules.LoadedType(def, weapon);
+                    weapon.LoadedAmmo = WeaponRules.Capacity(def, weapon, Catalog);
+                    if (!bag.TryAdd(weapon.LoadedAmmoId, Math.Max(30, weapon.LoadedAmmo * 4), out _)) throw new InvalidDataException(unavailable);
+                }
+                if (!supply.TryInsert(weapon, out _) || !bag.TryWearFrom(supply, weapon.InstanceId, original.Slot, out _))
+                    throw new InvalidDataException(unavailable);
             }
-            if (!bag.TryInsert(weapon, out _) || !bag.TryEquip(weapon.InstanceId, EquipmentSlot.Weapon, out _)) throw new InvalidDataException(unavailable);
             foreach (var id in new[] { "medkit", "bandage", "trauma_case", "tourniquet", "splint", "pain_tabs", "surgery" })
                 if (!bag.TryAdd(id, id == "bandage" ? 5 : 2, out _)) throw new InvalidDataException(unavailable);
             return bag;
@@ -431,7 +455,7 @@ namespace Dustline
             ClearField(field);
             Practice = null;
             practiceBag = null;
-            practiceRifle = null;
+            practiceHands.Clear();
             practiceMedicine = null;
         }
 
@@ -468,6 +492,12 @@ namespace Dustline
                     foreach (var item in items)
                         if (item.Slot == EquipmentSlot.Rig || item.Slot == EquipmentSlot.Pack)
                             carried.TryTransferTo(item.InstanceId, stash, out _);
+                }
+                if (Profile.Loadout.Count > 0)
+                {
+                    var returned = carried.Snapshot();
+                    returned.AddRange(Profile.Loadout);
+                    carried.Restore(returned);
                 }
                 int reward = extracted ? (int)Math.Min(int.MaxValue - Profile.Credits, 150L + Math.Max(0, Kills) * 25L) : 0;
                 var settled = new ProfileData { Version = Profile.Version,
@@ -556,8 +586,13 @@ namespace Dustline
             if (Profile.Credits >= Catalog.Find("rifle").Value || Stash.Count("rifle") + Loadout.Count("rifle") > 0)
             { UI.Notify("仅在没有步枪且信用点不足以购买时，才能领取应急装备。"); return; }
             var draft = Loadout.Draft();
-            if (!draft.TryAdd("rifle", 1, out var error) || !draft.TryAdd("ammo", 30, out error)) { UI.Notify(error); return; }
-            if (SaveMenuInventory(Stash, draft, Profile.Credits)) UI.RefreshInventory();
+            var stock = Stash.Draft();
+            var rifle = new ItemStack { ItemId = "rifle", InstanceId = Guid.NewGuid().ToString("N") };
+            if (!stock.TryInsert(rifle, out var error)) { UI.Notify(error); return; }
+            var slot = draft.Equipped(EquipmentSlot.Weapon) == null ? EquipmentSlot.Weapon : EquipmentSlot.PrimaryTwo;
+            if (draft.Equipped(slot) == null) draft.TryWearFrom(stock, rifle.InstanceId, slot, out _);
+            if (!draft.TryAdd("ammo", 30, out error) && !stock.TryAdd("ammo", 30, out error)) { UI.Notify(error); return; }
+            if (SaveMenuInventory(stock, draft, Profile.Credits)) UI.RefreshInventory();
         }
 
         internal ItemStack QuickMedicine(string itemId = null)

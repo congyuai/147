@@ -329,7 +329,7 @@ namespace Dustline
         [TestCase("{\"Version\":1,\"Stash\":[],\"Loadout\":[]}")]
         [TestCase("{\"Version\":1,\"Credits\":1000,\"Loadout\":[]}")]
         [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[]}")]
-        [TestCase("{\"Version\":3,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":4,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
         [TestCase("{\"Version\":0,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
         [TestCase("{\"Version\":\"1\",\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
         [TestCase("{\"Version\":1,\"Credits\":-1,\"Stash\":[],\"Loadout\":[]}")]
@@ -427,7 +427,7 @@ namespace Dustline
                         profile.Stash[0].ItemId = WeaponDefinition.RifleId;
                         profile.Stash[0].Mods = new WeaponMods { Grip = 2, OwnedGrip = 1 };
                         break;
-                    case "invalid-version": profile.Version = 3; break;
+                    case "invalid-version": profile.Version = ProfileData.CurrentVersion + 1; break;
                     case "negative-credits": profile.Credits = -1; break;
                     case "negative-raids": profile.Raids = -1; break;
                     case "negative-extractions": profile.Extractions = -1; break;

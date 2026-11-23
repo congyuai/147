@@ -4,7 +4,7 @@ using System.IO;
 
 namespace Dustline
 {
-    public sealed class GridInventory
+    public sealed partial class GridInventory
     {
         private readonly List<ItemStack> items = new List<ItemStack>();
         private readonly IReadOnlyList<ItemStack> view;
@@ -13,7 +13,15 @@ namespace Dustline
         readonly float baseWeight;
         readonly bool adaptive;
 
-        public static GridInventory Carried(ItemCatalog catalog) => new GridInventory(6, 6, 30, catalog, null, true);
+        static readonly CargoArea[] CarryAreas = { CargoArea.Main, CargoArea.Rig, CargoArea.Pockets };
+        static readonly StorageSpec PersonalPockets = new StorageSpec
+        {
+            Columns = 5, Rows = 1,
+            Pockets = new[] { new CargoPocket(0, 0, 1, 1), new CargoPocket(1, 0, 1, 1), new CargoPocket(2, 0, 1, 1),
+                new CargoPocket(3, 0, 1, 1), new CargoPocket(4, 0, 1, 1) }
+        };
+
+        public static GridInventory Carried(ItemCatalog catalog) => new GridInventory(1, 1, 30, catalog, null, true);
 
         public GridInventory(int width, int height, float maxWeight, ItemCatalog catalog) : this(width, height, maxWeight, catalog, null) { }
 
@@ -45,6 +53,35 @@ namespace Dustline
         public int Columns(CargoArea area) => Dimensions(area, items).Columns;
         public int Rows(CargoArea area) => Dimensions(area, items).Rows;
         public int Split(CargoArea area) => Dimensions(area, items).Split;
+        public StorageSpec Layout(CargoArea area) => Dimensions(area, items);
+        public int OccupiedCells(CargoArea area)
+        {
+            int count = 0;
+            foreach (var item in items)
+                if (item.Slot == EquipmentSlot.None && item.Area == area)
+                {
+                    var definition = Catalog.Find(item.ItemId);
+                    count += definition.Width * definition.Height;
+                }
+            return count;
+        }
+
+        internal long EquipmentValue
+        {
+            get
+            {
+                long total = 0;
+                foreach (var item in items)
+                {
+                    if (item.Slot == EquipmentSlot.None) continue;
+                    total += Catalog.Find(item.ItemId).Value;
+                    foreach (var slot in (PartSlot[])Enum.GetValues(typeof(PartSlot)))
+                        total += Catalog.Find(item.Parts.Get(slot).ItemId)?.Value ?? 0;
+                }
+                return total;
+            }
+        }
+
         public float CargoWeight(CargoArea area) => (float)AreaWeight(area, items);
         public float CargoLimit(CargoArea area) => AreaLimit(Dimensions(area, items));
 
@@ -60,13 +97,11 @@ namespace Dustline
 
         StorageSpec Dimensions(CargoArea area, List<ItemStack> load)
         {
+            if (!adaptive) return area == CargoArea.Main ? new StorageSpec { Columns = baseWidth, Rows = baseHeight } : default;
+            if (area == CargoArea.Pockets) return PersonalPockets;
+            if (area == CargoArea.Legacy) return new StorageSpec { Columns = 12, Rows = 12, WeightLimit = float.MaxValue };
             if (area != CargoArea.Main && area != CargoArea.Rig) return default;
-            if (adaptive)
-            {
-                var gear = Gear(area == CargoArea.Main ? EquipmentSlot.Pack : EquipmentSlot.Rig, load);
-                if (gear != null && gear.Storage.Columns > 0) return gear.Storage;
-            }
-            return area == CargoArea.Main ? new StorageSpec { Columns = baseWidth, Rows = baseHeight } : default;
+            return Gear(area == CargoArea.Main ? EquipmentSlot.Pack : EquipmentSlot.Rig, load)?.Storage ?? default;
         }
 
         ItemDefinition Gear(EquipmentSlot slot, List<ItemStack> load)
@@ -117,7 +152,7 @@ namespace Dustline
             int limit = StackLimit(definition);
             foreach (ItemStack stack in staged)
             {
-                if (stack.Slot != EquipmentSlot.None || stack.ItemId != itemId)
+                if (stack.Slot != EquipmentSlot.None || stack.ItemId != itemId || stack.Area == CargoArea.Legacy)
                     continue;
 
                 int added = FitQuantity(staged, stack.Area, definition, Math.Min(remaining, limit - stack.Quantity));
@@ -163,9 +198,8 @@ namespace Dustline
         {
             if (!adaptive || amount <= 1) return false;
             bool orientation = stack.Rotated;
-            for (int i = 0; i < 2; i++)
+            foreach (var area in CarryAreas)
             {
-                var area = (CargoArea)i;
                 stack.Area = area;
                 stack.Rotated = orientation;
                 stack.Quantity = FitQuantity(occupied, area, definition, amount);
@@ -207,7 +241,9 @@ namespace Dustline
             moved.X = x;
             moved.Y = y;
             moved.Rotated = rotated;
-            if (!Fits(moved, Catalog.Find(stack.ItemId), items, stack.InstanceId))
+            if (stack.Area == CargoArea.Legacy && area != CargoArea.Legacy && !CanCarry(CalculateWeight(items) + StackWeight(stack)))
+            { error = "已超出负重上限。"; return false; }
+            if (area == CargoArea.Legacy || !Fits(moved, Catalog.Find(stack.ItemId), items, stack.InstanceId))
             {
                 error = "该位置已被占用或超出背包范围。";
                 return false;
@@ -241,7 +277,7 @@ namespace Dustline
                 return false;
             }
 
-            if (adaptive && CapacitySlot(slot))
+            if (adaptive && (CapacitySlot(slot) || stack.Area == CargoArea.Legacy))
             {
                 var next = Snapshot();
                 var staged = next.Find(item => item.InstanceId == instanceId);
@@ -267,17 +303,20 @@ namespace Dustline
         {
             error = null;
             var input = source.Find(id);
-            if (input == null || input.Slot != EquipmentSlot.None || !ValidateStack(input, out var definition, out error)
+            bool same = ReferenceEquals(source, this);
+            if (input == null || (!same && input.Slot != EquipmentSlot.None) || !ValidateStack(input, out var definition, out error)
                 || !MatchesSlot(definition, slot))
             { error ??= "该物品不适用于此装备栏位。"; return false; }
-            bool same = ReferenceEquals(source, this);
+            if (same && input.Slot == slot) return true;
             if (!same && !CanInsertIdentity(input)) { error = "物品或配件实例重复。"; return false; }
+            if (!same && (long)Count(input.ItemId) + input.Quantity > int.MaxValue)
+            { error = "已超出物品数量上限。"; return false; }
             var next = Snapshot();
             var old = next.Find(item => item.Slot == slot);
             if (old != null)
             {
-                old.Slot = EquipmentSlot.None;
-                old.X = -1;
+                if (same && MatchesSlot(Catalog.Find(old.ItemId), input.Slot)) SetEquipped(old, input.Slot);
+                else { old.Slot = EquipmentSlot.None; old.X = -1; }
             }
             var incoming = same ? next.Find(item => item.InstanceId == id) : input.Clone();
             SetEquipped(incoming, slot);
@@ -336,7 +375,7 @@ namespace Dustline
             gear.Area = area;
             gear.X = x; gear.Y = y; gear.Rotated = rotated;
             var def = Catalog.Find(gear.ItemId);
-            if (!Fits(gear, def, next, gear.InstanceId, checkCargoWeight: false)
+            if (area == CargoArea.Legacy || !Fits(gear, def, next, gear.InstanceId, checkCargoWeight: false)
                 || (float)StackWeight(gear) > AreaLimit(Dimensions(area, next)))
             { error = "无法放入目标格，请检查容量和负重。"; return false; }
             if (!Repack(next, out error, gear)) return false;
@@ -583,9 +622,7 @@ namespace Dustline
 
             foreach (var stack in restored)
             {
-                var area = Dimensions(stack.Area, restored);
-                if (stack.X >= area.Columns || stack.Y >= area.Rows || stack.Slot == EquipmentSlot.None
-                    && !Fits(stack, Catalog.Find(stack.ItemId), restored, stack.InstanceId))
+                if (stack.Slot == EquipmentSlot.None && !Fits(stack, Catalog.Find(stack.ItemId), restored, stack.InstanceId))
                     throw new InvalidDataException("物品相互重叠或超出背包范围。");
             }
             if ((float)CalculateWeight(restored) > Limit(restored))
@@ -629,7 +666,7 @@ namespace Dustline
                 candidate.Area = area.Value;
                 candidate.X = x; candidate.Y = y; candidate.Rotated = rotated;
             }
-            if (area.HasValue ? !Fits(candidate, definition, items, null) : !TryPlace(candidate, definition, items))
+            if (area.HasValue ? area == CargoArea.Legacy || !Fits(candidate, definition, items, null) : !TryPlace(candidate, definition, items))
             {
                 error = "背包空间不足。";
                 return false;
@@ -723,27 +760,69 @@ namespace Dustline
 
         private bool TryPlace(ItemStack stack, ItemDefinition definition, List<ItemStack> occupied, bool onlyArea = false)
         {
-            bool preferred = stack.Rotated;
-            var first = adaptive ? stack.Area : CargoArea.Main;
-            for (int area = 0; area < (adaptive && !onlyArea ? 2 : 1); area++)
-            {
-                stack.Area = area == 0 ? first : first == CargoArea.Main ? CargoArea.Rig : CargoArea.Main;
-                var shape = Dimensions(stack.Area, occupied);
-                for (int orientation = 0; orientation < 2; orientation++)
-                {
-                    stack.Rotated = orientation == 0 ? preferred : !preferred;
-                    int w = stack.Rotated ? definition.Height : definition.Width;
-                    int h = stack.Rotated ? definition.Width : definition.Height;
-                    for (int y = 0; y <= shape.Rows - h; y++)
-                        for (int x = 0; x <= shape.Columns - w; x++)
-                        {
-                            stack.X = x; stack.Y = y;
-                            if (Fits(stack, definition, occupied, null)) return true;
-                        }
-                    if (definition.Width == definition.Height) break;
-                }
-            }
+            var first = adaptive && stack.Area != CargoArea.Legacy ? stack.Area : CargoArea.Main;
+            if (PlaceIn(stack, definition, occupied, first)) return true;
+            if (adaptive && !onlyArea)
+                foreach (var area in CarryAreas)
+                    if (area != first && PlaceIn(stack, definition, occupied, area)) return true;
             return false;
+        }
+
+        bool PlaceIn(ItemStack stack, ItemDefinition definition, List<ItemStack> occupied, CargoArea area)
+        {
+            bool preferred = stack.Rotated;
+            stack.Area = area;
+            var shape = Dimensions(area, occupied);
+            for (int orientation = 0; orientation < 2; orientation++)
+            {
+                stack.Rotated = orientation == 0 ? preferred : !preferred;
+                int w = stack.Rotated ? definition.Height : definition.Width;
+                int h = stack.Rotated ? definition.Width : definition.Height;
+                for (int y = 0; y <= shape.Rows - h; y++)
+                    for (int x = 0; x <= shape.Columns - w; x++)
+                    {
+                        stack.X = x; stack.Y = y;
+                        if (Fits(stack, definition, occupied, null)) return true;
+                    }
+                if (definition.Width == definition.Height) break;
+            }
+            stack.Rotated = preferred;
+            return false;
+        }
+
+        internal void MigrateCarried(List<ItemStack> previous)
+        {
+            var incoming = previous.ConvertAll(item => item.Clone());
+            var placed = incoming.FindAll(item => item.Slot != EquipmentSlot.None);
+            foreach (var item in placed)
+            {
+                if (!ValidateStack(item, out var definition, out string error)) throw new InvalidDataException(error);
+                if (item.Slot == EquipmentSlot.Weapon && definition.Kind != ItemKind.Weapon)
+                    throw new InvalidDataException("旧存档的武器栏无效。");
+                SetEquipped(item, item.Slot == EquipmentSlot.Weapon ? definition.Equipment : item.Slot);
+            }
+            var displaced = new List<ItemStack>();
+            foreach (var item in incoming)
+            {
+                if (item.Slot != EquipmentSlot.None) continue;
+                if (!ValidateStack(item, out var definition, out string error)) throw new InvalidDataException(error);
+                if (Fits(item, definition, placed, null)) placed.Add(item);
+                else displaced.Add(item);
+            }
+            foreach (var item in displaced)
+            {
+                var definition = Catalog.Find(item.ItemId);
+                int x = item.X, y = item.Y;
+                if (!TryPlace(item, definition, placed))
+                {
+                    item.Area = CargoArea.Legacy;
+                    item.X = x; item.Y = y;
+                    if (!Fits(item, definition, placed, null) && !PlaceIn(item, definition, placed, CargoArea.Legacy))
+                        throw new InvalidDataException("无法在保留物品的前提下升级随身栏。");
+                }
+                placed.Add(item);
+            }
+            Restore(incoming);
         }
 
         private bool Fits(ItemStack candidate, ItemDefinition definition, List<ItemStack> occupied,
@@ -751,11 +830,8 @@ namespace Dustline
         {
             int width = candidate.Rotated ? definition.Height : definition.Width;
             int height = candidate.Rotated ? definition.Width : definition.Height;
-            if (candidate.Area != CargoArea.Main && candidate.Area != CargoArea.Rig) return false;
             var shape = Dimensions(candidate.Area, occupied);
-            if (candidate.X < 0 || candidate.Y < 0 || candidate.X > shape.Columns - width
-                || candidate.Y > shape.Rows - height || (shape.Split > 0 && candidate.X < shape.Split && candidate.X + width > shape.Split))
-                return false;
+            if (!shape.Fits(candidate.X, candidate.Y, width, height)) return false;
 
             double mass = checkCargoWeight ? StackWeight(candidate) : 0d;
             foreach (ItemStack other in occupied)
@@ -778,7 +854,7 @@ namespace Dustline
         {
             double weight = 0d;
             foreach (ItemStack stack in stacks)
-                weight += StackWeight(stack);
+                if (stack.Area != CargoArea.Legacy) weight += StackWeight(stack);
             return weight;
         }
 
@@ -804,7 +880,8 @@ namespace Dustline
 
         private static bool MatchesSlot(ItemDefinition definition, EquipmentSlot slot)
         {
-            return slot != EquipmentSlot.None && definition.Equipment == slot;
+            return slot != EquipmentSlot.None && (definition.Equipment == slot
+                || slot == EquipmentSlot.PrimaryTwo && definition.Equipment == EquipmentSlot.Weapon);
         }
 
         private void Commit(List<ItemStack> replacement)

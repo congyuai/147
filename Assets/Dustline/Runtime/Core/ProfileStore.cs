@@ -11,6 +11,7 @@ namespace Dustline
     [Serializable]
     public sealed class ProfileData
     {
+        public const int CurrentVersion = 3;
         public int Version = 1;
         public int Credits = 1000;
         public List<ItemStack> Stash = new List<ItemStack>();
@@ -36,6 +37,7 @@ namespace Dustline
         public string Path { get; }
         public string LegacyBackupPath => Path + ".v1.bak";
         public string UpgradeBackupPath => Path + ".pre-v2.bak";
+        public string LoadoutUpgradeBackupPath => Path + ".pre-v3.bak";
 
         public ProfileData Load() => ReadProfile(out _, out _);
 
@@ -104,7 +106,9 @@ namespace Dustline
                 if (previous != null)
                 {
                     if (profile.Version < previous.Version) throw new InvalidDataException("Cannot downgrade an existing profile.");
-                    if (previous.Version == 1 && profile.Version == 2)
+                    if (previous.Version < ProfileData.CurrentVersion && profile.Version == ProfileData.CurrentVersion)
+                        BackupOriginal(LoadoutUpgradeBackupPath, original);
+                    else if (previous.Version == 1 && profile.Version == 2)
                         BackupOriginal(UpgradeBackupPath, original);
                     else if (requiresUpgrade)
                         BackupOriginal(LegacyBackupPath, original);
@@ -158,7 +162,7 @@ namespace Dustline
 
         private static void ValidateProfile(ProfileData profile)
         {
-            if (profile == null || (profile.Version != 1 && profile.Version != 2) || profile.Credits < 0
+            if (profile == null || profile.Version < 1 || profile.Version > ProfileData.CurrentVersion || profile.Credits < 0
                 || profile.Raids < 0 || profile.Extractions < 0 || profile.Extractions > profile.Raids
                 || profile.Stash == null || profile.Loadout == null)
                 throw new InvalidDataException("Invalid profile version, balances, counters or item lists.");
@@ -168,6 +172,9 @@ namespace Dustline
             var ids = new HashSet<string>(StringComparer.Ordinal);
             ValidateItems(profile.Stash, ids, profile.Version);
             ValidateItems(profile.Loadout, ids, profile.Version);
+            if (profile.Version >= 3 && profile.RaidInProgress
+                && profile.Loadout.Exists(item => item.Area != CargoArea.Legacy || item.Slot != EquipmentSlot.None))
+                throw new InvalidDataException("An in-progress raid can only retain migration items at home.");
         }
 
         private static bool IsValidBladeId(string id) => id == "" || !string.IsNullOrWhiteSpace(id);
@@ -183,6 +190,7 @@ namespace Dustline
                     || !Enum.IsDefined(typeof(EquipmentSlot), item.Slot))
                     throw new InvalidDataException("Invalid profile item or duplicate instance ID.");
                 if (!Enum.IsDefined(typeof(CargoArea), item.Area) || item.UsesSpent < 0 || item.Wear < 0
+                    || version < 3 && ((int)item.Slot > (int)EquipmentSlot.Pack || (int)item.Area > (int)CargoArea.Rig)
                     || version == 1 && ((int)item.Slot > (int)EquipmentSlot.Armor || item.Area != CargoArea.Main || !item.Parts.Empty
                         || !string.IsNullOrEmpty(item.LoadedAmmoId) || item.UsesSpent != 0 || item.Wear != 0))
                     throw new InvalidDataException("Item data does not match the profile version.");
@@ -195,7 +203,7 @@ namespace Dustline
                 if (!WeaponTuning.IsValidForItem(item.ItemId, item.Mods))
                     throw new InvalidDataException("Invalid weapon upgrade levels.");
                 if (item.Slot != EquipmentSlot.None && (item.Quantity != 1 || !slots.Add(item.Slot)
-                    || version == 2 && (item.Area != CargoArea.Main || item.X != 0 || item.Y != 0)))
+                    || version >= 2 && (item.Area != CargoArea.Main || item.X != 0 || item.Y != 0)))
                     throw new InvalidDataException("Invalid or duplicate equipped item.");
             }
         }
@@ -230,7 +238,7 @@ namespace Dustline
                         {
                             case "Version":
                                 version = ReadInteger();
-                                if (version != 1 && version != 2) Fail("Unsupported profile version.");
+                                if (version < 1 || version > ProfileData.CurrentVersion) Fail("Unsupported profile version.");
                                 break;
                             case "Credits":
                             case "Raids":
@@ -312,7 +320,7 @@ namespace Dustline
                                     break;
                                 case "Area":
                                     int area = ReadInteger();
-                                    if (area < 0 || area > (int)CargoArea.Rig) Fail("Invalid cargo area.");
+                                    if (area < 0 || area > (int)CargoArea.Legacy) Fail("Invalid cargo area.");
                                     break;
                                 case "UsesSpent":
                                 case "Wear":
@@ -327,7 +335,7 @@ namespace Dustline
                                     break;
                                 case "Slot":
                                     int slot = ReadInteger();
-                                    if (slot < (int)EquipmentSlot.None || slot > (int)EquipmentSlot.Pack)
+                                    if (slot < (int)EquipmentSlot.None || slot > (int)EquipmentSlot.Melee)
                                         Fail("Invalid equipment slot.");
                                     break;
                                 case "Rotated":

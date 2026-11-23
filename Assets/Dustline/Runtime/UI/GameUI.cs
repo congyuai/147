@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
@@ -11,6 +12,11 @@ namespace Dustline
         enum ScreenPage { Lobby, Stash, Shop, Operator, Gunsmith, MenuSettings, Loading, Field, FieldInventory, FieldMap, FieldSettings, Health, ExitConfirm, PracticePanel, TouchLayout, Results, Error }
 
         ScreenPage current;
+        readonly Stack<Action> backRoutes = new Stack<Action>();
+        Action pageRestore, capturePageState;
+        SessionPhase routePhase;
+        bool restoringRoute;
+        int backHandledFrame = -1;
         public bool InventoryOpen => current == ScreenPage.FieldInventory;
         public bool BlocksGameplay => current != ScreenPage.Field || MedicineWheelOpen;
         GameSession session;
@@ -56,6 +62,7 @@ namespace Dustline
             BuildHud();
             touch = Stretch("Touch controls", safe);
             BuildTouch();
+            BuildWeaponBar();
             page = Stretch("Pages", safe);
             toastAnchor = Anchor("Toast anchor", safe, 0.5f, 0);
             var toastPanel = At("Toast panel", toastAnchor, -290, -101, 580, 71);
@@ -68,6 +75,7 @@ namespace Dustline
             events.GetComponent<DustlineEventSystem>().BeforeInput = CheckSafeArea;
             hud.gameObject.SetActive(false);
             touch.gameObject.SetActive(false);
+            weaponBar.gameObject.SetActive(false);
             UpdateSafeArea();
         }
 
@@ -82,9 +90,17 @@ namespace Dustline
             Label(left, "当前区域 / 北岬货运港", 19, 22, 85, 368, 33, color: Amber);
             Label(left, "沿河道、厂房与装卸站搜索物资，在突袭结束前通过任一撤离点离开。", 20, 22, 132, 354, 82, color: Muted);
             Fill(At("Summary divider", left, 22, 228, 366, 1), Border);
-            string equipped = ItemName(session.Loadout.Equipped(EquipmentSlot.Weapon), "仅携带随身刀");
+            var equipped = new List<string>();
+            foreach (var slot in LoadoutSlots.Hands)
+            {
+                var stack = session.Loadout.Equipped(slot);
+                if (stack != null) equipped.Add(ItemName(stack, ""));
+            }
             Label(left, "当前整备", 16, 22, 246, 340, 27, color: Muted);
-            Label(left, equipped, 25, 22, 280, 366, 40);
+            var gearReadout = Label(left, equipped.Count == 0 ? "仅携带随身刀" : string.Join(" / ", equipped), 25, 22, 278, 366, 48);
+            gearReadout.resizeTextForBestFit = true;
+            gearReadout.resizeTextMinSize = 15;
+            gearReadout.resizeTextMaxSize = 25;
             Label(left, "随身刀 / " + session.BoundBladeName, 18, 22, 328, 366, 31, color: Aqua);
             if (!string.IsNullOrEmpty(session.Notice))
                 Label(left, session.Notice, 17, 22, 374, 366, 81, color: Amber);
@@ -140,12 +156,12 @@ namespace Dustline
                 DrawItemIcon(blade.transform, null, null, 8, 5, 54, 44, blade: option.Weapon.Form);
             }
             Label(dossier, "随身刀不可卸下、出售，不因阵亡丢失。", 17, 24, 388, 617, 49, color: Aqua);
-            Button(panel, "返回大厅", 1014, 615, 198, 49, ShowMenu, true);
         }
 
         void ShowSettings(bool field, bool controls = false)
         {
             var panel = Display(field ? ScreenPage.FieldSettings : ScreenPage.MenuSettings, "Game settings");
+            SetPageRestore(() => ShowSettings(field, controls));
             bool practice = field && session.Phase == SessionPhase.Practice;
             Header(panel, "设置", practice ? "离线靶场 / 本机偏好" : field ? "突袭 / 设置不会暂停游戏" : "大厅 / 本机偏好");
             Button(panel, "画面", 26, 120, 188, 44, () => ShowSettings(field), !controls);
@@ -167,7 +183,6 @@ namespace Dustline
             if (practice) Button(panel, "靶场控制", 26, 615, 171, 49, ShowPracticePanel);
             if (field && session.Phase == SessionPhase.Raid)
                 Button(panel, "退出本局", 26, 615, 171, 49, ShowExitConfirm, false, new Color32(91, 47, 39, 255));
-            Button(panel, practice ? "返回靶场" : field ? "返回突袭" : "返回大厅", 1014, 615, 198, 49, BackOrSettings, true);
         }
 
         void BuildVisualOptions(RectTransform body)
@@ -255,17 +270,26 @@ namespace Dustline
 
         public void BackOrSettings()
         {
+            // A UI click and Escape can both arrive before the next frame.
+            if (session.Phase != routePhase || backHandledFrame == Time.frameCount) return;
+            backHandledFrame = Time.frameCount;
             if (MedicineWheelOpen) { CloseMedicineWheel(true); return; }
-            if (current == ScreenPage.TouchLayout) ShowSettings(session.InField, true);
-            else if (current == ScreenPage.Shop && session.Phase == SessionPhase.Menu) ShowStash();
-            else if (session.Phase == SessionPhase.Menu && current != ScreenPage.Lobby) ShowMenu();
-            else if (session.InField)
+            if (CloseInventoryOverlay()) return;
+            if (current == ScreenPage.Results) session.ReturnToMenu();
+            else if (backRoutes.Count > 0)
             {
-                if (current == ScreenPage.Field) ShowSettings(true);
-                else if (current == ScreenPage.ExitConfirm) EnterField();
-                else if (current == ScreenPage.FieldInventory || current == ScreenPage.FieldSettings || current == ScreenPage.FieldMap
-                    || current == ScreenPage.PracticePanel || current == ScreenPage.Health) EnterField();
+                var restore = backRoutes.Pop();
+                restoringRoute = true;
+                try { restore(); }
+                finally { restoringRoute = false; }
             }
+            else if (current == ScreenPage.Field && session.InField) ShowSettings(true);
+        }
+
+        void SetPageRestore(Action restore, Action capture = null)
+        {
+            pageRestore = restore;
+            capturePageState = capture;
         }
 
         void ShowExitConfirm()
@@ -276,7 +300,11 @@ namespace Dustline
             var body = At("Exit warning", panel, 26, 135, 1186, 438);
             Fill(body, Ink);
             Label(body, "随身装备和搜刮物资将丢失。\n绑定近战武器和已有仓库物资会保留。", 26, 36, 89, 1100, 147, color: Pale);
-            Button(panel, "取消 · 继续本局", 26, 615, 225, 49, EnterField, true);
+            Button(panel, "取消 · 继续本局", 26, 615, 225, 49, () =>
+            {
+                backHandledFrame = Time.frameCount;
+                EnterField();
+            }, true);
             Button(panel, "确认退出", 1014, 615, 198, 49, session.AbandonRaid, false, new Color32(91,47,39,255));
         }
 
@@ -291,13 +319,12 @@ namespace Dustline
         {
             ResetDamageCues();
             EnterField();
-            Notify(session.Input.TouchMode ? "点击地图键或背包键打开靶场控制。练习装备不带出。" : "Tab 或 M：靶场控制 / J：健康 / H：用药 / R：换弹");
         }
 
         internal void TogglePracticePanel()
         {
             if (session.Phase != SessionPhase.Practice) return;
-            if (current == ScreenPage.PracticePanel) EnterField();
+            if (current == ScreenPage.PracticePanel) BackOrSettings();
             else if (current == ScreenPage.Field) ShowPracticePanel();
         }
 
@@ -316,16 +343,16 @@ namespace Dustline
             Button(body, "模拟受伤", 651, 285, 220, 61, () => { session.PracticeHealthSample(); EnterField(); });
             Button(body, "重伤演练", 896, 285, 220, 61, () => { session.PracticeSevereSample(); ShowHealth(); });
             Button(panel, "返回大厅", 26, 615, 162, 49, session.LeavePractice);
-            Button(panel, "继续练习", 1014, 615, 198, 49, EnterField, true);
         }
 
         public void ShowRaid()
         {
             ResetDamageCues();
+            mapZoom = 0f;
             EnterField();
             Notify(session.Input.TouchMode
-                ? "摇杆前推冲刺。地图标出撤离点；双箭头切换主武器和随身刀。"
-                : "F 交互 / X 切换随身刀 / J 健康 / M 地图 / Tab 背包 / Esc 设置");
+                ? "摇杆前推冲刺。地图标出撤离点；点按战斗栏切换武器。"
+                : "F 交互 / 1–4 或 X 切换武器 / J 健康 / M 地图 / Tab 背包 / Esc 设置");
         }
 
         public void ShowResults()
@@ -336,7 +363,6 @@ namespace Dustline
             Fill(report, Ink);
             Fill(At("Report accent", report, 0, 0, 4, 109), Amber);
             Label(report, session.Result, 25, 24, 27, 1138, 389);
-            Button(panel, "返回大厅", 26, 615, 192, 49, session.ReturnToMenu);
             Button(panel, "前往仓库", 1015, 615, 197, 49, () =>
             {
                 session.ReturnToMenu();
@@ -361,12 +387,42 @@ namespace Dustline
 
         void Switch(ScreenPage next)
         {
+            var phase = session.Phase;
+            if (routePhase != phase || next == ScreenPage.Lobby || next == ScreenPage.Field
+                || next == ScreenPage.Loading || next == ScreenPage.Results || next == ScreenPage.Error)
+                backRoutes.Clear();
+            else if (next != current && !restoringRoute)
+            {
+                var source = pageRestore;
+                if (current == ScreenPage.FieldInventory)
+                {
+                    var container = loot;
+                    source = () => ShowFieldInventory(container);
+                }
+                if (source != null)
+                {
+                    capturePageState?.Invoke();
+                    backRoutes.Push(source);
+                }
+            }
+            routePhase = phase;
+            SetPageRestore(next switch
+            {
+                ScreenPage.Lobby => (Action)ShowMenu,
+                ScreenPage.Stash => ShowStash,
+                ScreenPage.Operator => ShowOperator,
+                ScreenPage.Field => EnterField,
+                ScreenPage.PracticePanel => ShowPracticePanel,
+                _ => null
+            });
+
             CancelFieldGestures();
             session.SaveControlPreferences();
             operatorPreview?.Dispose();
             operatorPreview = null;
             DisposeGunsmithPreview();
             healthRefresh = null;
+            ResetInventoryView();
             Clear(page);
             panelRoot = null;
             reflowWidePage = null;
@@ -375,11 +431,11 @@ namespace Dustline
             fullMap = null;
             layoutSelection = null;
             layoutField = null;
-            ResetInventoryView();
             current = next;
             bool field = next == ScreenPage.Field;
             hud.gameObject.SetActive(field);
             touch.gameObject.SetActive(field && session.Input.TouchMode);
+            weaponBar.gameObject.SetActive(field);
             toastAnchor.gameObject.SetActive(false);
             session.SyncControls();
         }
@@ -397,16 +453,26 @@ namespace Dustline
             return panelRoot;
         }
 
+        Button AddMenuBack(RectTransform root)
+        {
+            return Button(root, "‹ 返回", 12, 7, 100, 36, BackOrSettings);
+        }
+
+        bool HasMenuBack => backRoutes.Count > 0 || current == ScreenPage.Results;
+
         void WideHeader(RectTransform root, string title, string subtitle, bool showCredits)
         {
             float w = root.rect.width;
             Fill(At("Compact header", root, 0, 0, w, 50), Ink);
             Fill(At("Header highlight", root, 0, 0, w, 2), Amber);
-            var heading = Label(root, title, 26, 16, 4, Mathf.Min(w * .38f, 430), 43, TextAnchor.MiddleLeft);
+            float left = HasMenuBack ? 126f : 16f;
+            if (HasMenuBack) AddMenuBack(root);
+            float subtitleX = w * .39f;
+            var heading = Label(root, title, 26, left, 4, Mathf.Min(subtitleX - left - 14f, 430f), 43, TextAnchor.MiddleLeft);
             heading.resizeTextForBestFit = true;
             heading.resizeTextMinSize = 16;
             heading.resizeTextMaxSize = 26;
-            Label(root, subtitle, 15, w * .39f, 6, w * .37f, 37, TextAnchor.MiddleLeft, Muted);
+            Label(root, subtitle, 15, subtitleX, 6, (showCredits ? w - 245f : w - 16f) - subtitleX, 37, TextAnchor.MiddleLeft, Muted);
             if (!showCredits) return;
             creditsReadout = Label(root, "", 19, w - 235, 4, 218, 43, TextAnchor.MiddleRight, Aqua);
             UpdateCredits();
@@ -421,8 +487,10 @@ namespace Dustline
         {
             Fill(At("Header fill", root, 0, 0, 1240, 110), Ink);
             Fill(At("Header highlight", root, 0, 0, 1240, 3), Amber);
-            Label(root, title, 35, 26, 23, 785, 57);
-            Label(root, subtitle, 16, 26, 78, 770, 25, color: Muted);
+            float left = HasMenuBack ? 126f : 26f;
+            if (HasMenuBack) AddMenuBack(root);
+            Label(root, title, 35, left, 23, 811f - left, 57);
+            Label(root, subtitle, 16, left, 78, 796f - left, 25, color: Muted);
             Label(root, "尘线 / " + Application.version, 19, 816, 28, 396, 40, TextAnchor.UpperRight, Amber);
             if (session.Profile != null && session.Phase == SessionPhase.Menu)
                 creditsReadout = Label(root, session.Profile.Credits + " 信用点", 19, 853, 73, 359, 30, TextAnchor.UpperRight, Muted);
@@ -467,7 +535,7 @@ namespace Dustline
         {
             toast.text = message;
             toastUntil = Time.unscaledTime + 4.5f;
-            float y = current == ScreenPage.Field ? 117 : 145;
+            float y = current == ScreenPage.Field ? 180f : 145f;
             toastAnchor.GetChild(0).GetComponent<RectTransform>().anchoredPosition = new Vector2(-290, y);
             toastAnchor.gameObject.SetActive(true);
         }

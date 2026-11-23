@@ -41,6 +41,8 @@ namespace Dustline
         public bool SettingsPressed { get; private set; }
         public bool MapPressed { get; private set; }
         public bool SwitchWeaponPressed { get; private set; }
+        internal bool WeaponSelectionPending => SwitchWeaponPressed || weaponSlot != EquipmentSlot.None;
+        EquipmentSlot weaponSlot;
         public bool HealPressed { get; private set; }
         internal string HealInstance { get; private set; }
         string medicineTapInstance;
@@ -61,12 +63,17 @@ namespace Dustline
             var keyboard = Keyboard.current;
             var mouse = Mouse.current;
             InventoryPressed = inventory || (keyboard?.tabKey.wasPressedThisFrame ?? false);
-            EscapePressed = keyboard?.escapeKey.wasPressedThisFrame ?? false;
+            EscapePressed = BackPressed();
             SettingsPressed = settings;
             HealthPressed = healthPage || (keyboard?.jKey.wasPressedThisFrame ?? false);
             healthPage = false;
             MapPressed = map || (keyboard?.mKey.wasPressedThisFrame ?? false);
             SwitchWeaponPressed = Gameplay && (weaponSwap || (keyboard?.xKey.wasPressedThisFrame ?? false));
+            weaponSlot = !Gameplay || keyboard == null ? EquipmentSlot.None
+                : keyboard.digit1Key.wasPressedThisFrame ? EquipmentSlot.Weapon
+                : keyboard.digit2Key.wasPressedThisFrame ? EquipmentSlot.PrimaryTwo
+                : keyboard.digit3Key.wasPressedThisFrame ? EquipmentSlot.Sidearm
+                : keyboard.digit4Key.wasPressedThisFrame ? EquipmentSlot.Melee : EquipmentSlot.None;
             ReloadPressed = reload || (keyboard?.rKey.wasPressedThisFrame ?? false);
             CrouchPressed = crouch || (keyboard?.cKey.wasPressedThisFrame ?? false);
             PronePressed = prone || (keyboard?.zKey.wasPressedThisFrame ?? false);
@@ -114,6 +121,16 @@ namespace Dustline
             Sprint = SprintAllowed && !Aim && SprintHeld;
             if (!Gameplay) { Move = Look = Vector2.zero; Aim = Sprint = LeanLeft = LeanRight = false; }
             wasFire = Gameplay && held;
+        }
+
+        internal static bool BackPressed()
+        {
+            var keyboard = Keyboard.current;
+            if (keyboard?.escapeKey.wasPressedThisFrame == true) return true;
+            if (Application.platform == RuntimePlatform.Android)
+                foreach (var candidate in InputSystem.devices)
+                    if (candidate is Keyboard source && source != keyboard && source.escapeKey.wasPressedThisFrame) return true;
+            return false;
         }
 
         public static int ClampSprintThreshold(int percent) => Mathf.Clamp(percent, MinSprintThreshold, MaxSprintThreshold);
@@ -216,6 +233,13 @@ namespace Dustline
             if (action == "Heal") TapMedicine();
         }
 
+        internal EquipmentSlot TakeWeaponSlot()
+        {
+            var selected = weaponSlot;
+            weaponSlot = EquipmentSlot.None;
+            return Gameplay ? selected : EquipmentSlot.None;
+        }
+
         internal bool TakeWeaponSwap()
         {
             bool toggle = Gameplay && SwitchWeaponPressed;
@@ -258,6 +282,7 @@ namespace Dustline
             HealPart = medicineTapPart = null;
             touchFire = touchFireTap = touchLeanLeft = touchLeanRight = autoSprint = false;
             LeanLeft = LeanRight = SwitchWeaponPressed = false;
+            weaponSlot = EquipmentSlot.None;
             ReloadPressed = CrouchPressed = PronePressed = JumpPressed = InteractPressed = HealPressed = false;
             HealInstance = medicineTapInstance = null;
             reload = crouch = prone = jump = interact = inventory = heal = settings = map = weaponSwap = false;

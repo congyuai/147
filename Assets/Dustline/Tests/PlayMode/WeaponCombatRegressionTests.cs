@@ -109,6 +109,43 @@ namespace Dustline.Tests
         }
 
         [Test]
+        public void SwitchingSameModelRestoresItsOwnMagazineAndCancelsTheOutgoingReload()
+        {
+            var f = new Fight(this, 2, 12);
+            f.Rifle.FrameInterface = "fixture-frame";
+            var longMagazine = AddAsset<ItemDefinition>();
+            longMagazine.Id = "test-magazine";
+            longMagazine.Kind = ItemKind.Part;
+            longMagazine.Part = new PartSpec { Slot = PartSlot.Magazine, Interface = f.Rifle.FrameInterface, Capacity = 12, Form = 1 };
+            f.Session.Catalog.Items.Add(longMagazine);
+            f.Session.Catalog.RebuildIndex();
+            var spare = new ItemStack { InstanceId = "second-hand", ItemId = WeaponDefinition.RifleId, LoadedAmmo = 7, LoadedAmmoId = "ammo" };
+            spare.Parts.Magazine = new PartLink { ItemId = longMagazine.Id, InstanceId = "second-magazine" };
+            Assert.That(f.Bag.TryInsert(spare, out var error), Is.True, error);
+            Assert.That(f.Bag.TryEquip(spare.InstanceId, EquipmentSlot.PrimaryTwo, out error), Is.True, error);
+
+            f.Tick(.25f, reload: true);
+            Assert.That(f.Weapon.Magazine.Reloading, Is.True);
+            Assert.That(f.Weapon.SelectSlot(EquipmentSlot.PrimaryTwo), Is.True);
+            Assert.That(f.Weapon.Magazine.Reloading, Is.False);
+            Assert.That(f.Weapon.Magazine.Capacity, Is.EqualTo(12));
+            Assert.That(f.Weapon.Magazine.Rounds, Is.EqualTo(7));
+            Assert.That(f.Actor.WeaponView.AppearanceKey, Is.EqualTo(WeaponRules.Look(spare, f.Session.Catalog)));
+            f.Tick(1.2f, fire: true);
+            Assert.That(f.Bag.Equipped(EquipmentSlot.PrimaryTwo).LoadedAmmo, Is.EqualTo(6));
+            Assert.That(f.Equipped.LoadedAmmo, Is.EqualTo(2));
+            Assert.That(f.Bag.Count("ammo"), Is.EqualTo(12));
+            Assert.That(f.Weapon.SelectSlot(EquipmentSlot.Sidearm), Is.False);
+            Assert.That(f.Weapon.ActiveSlot, Is.EqualTo(EquipmentSlot.PrimaryTwo));
+            Assert.That(f.Weapon.SelectSlot(EquipmentSlot.Weapon), Is.True);
+            Assert.That(f.Weapon.Magazine.Capacity, Is.EqualTo(8));
+            Assert.That(f.Weapon.Magazine.Rounds, Is.EqualTo(2));
+            Assert.That(f.Actor.WeaponView.AppearanceKey, Is.EqualTo(WeaponRules.Look(f.Equipped, f.Session.Catalog)));
+            Assert.That(f.Weapon.SelectSlot(EquipmentSlot.PrimaryTwo), Is.True);
+            Assert.That(f.Weapon.Magazine.Rounds, Is.EqualTo(6));
+        }
+
+        [Test]
         public void ForegroundMagazineFollowsTheReloadTimerAndReseatsOnCompletion()
         {
             var f = new Fight(this, 2, 12);

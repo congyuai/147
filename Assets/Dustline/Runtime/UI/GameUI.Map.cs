@@ -146,16 +146,21 @@ namespace Dustline
         public void ToggleMap()
         {
             if (session.Phase != SessionPhase.Raid) return;
-            if (current == ScreenPage.FieldMap) EnterField();
+            if (current == ScreenPage.FieldMap) BackOrSettings();
             else if (current == ScreenPage.Field) ShowFieldMap();
         }
 
         void ShowFieldMap()
         {
+            if (mapZoom <= 0f)
+            {
+                var position = session.Player.transform.position;
+                mapCentre = new Vector2(position.x, position.z);
+                mapZoom = PortLayout.Size;
+            }
             var panel = Display(ScreenPage.FieldMap, "Raid map");
+            SetPageRestore(ShowFieldMap);
             Header(panel, "港区地图", "北向上 / 查看地图不会暂停突袭");
-            mapCentre = new Vector2(session.Player.transform.position.x, session.Player.transform.position.z);
-            mapZoom = PortLayout.Size;
             fullMap = CreateMap(panel, 47, 121, 478, false, true);
             Fill(fullMap.Root, Color.clear, true);
             var drag = fullMap.Root.gameObject.AddComponent<RaidMapDrag>();
@@ -181,7 +186,6 @@ namespace Dustline
                 if (mapZoom >= PortLayout.Size) mapZoom = 440f;
                 UpdateFullMap();
             });
-            Button(panel, "返回突袭", 1014, 615, 198, 49, EnterField, true);
             UpdateFullMap();
         }
 

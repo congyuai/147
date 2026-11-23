@@ -38,6 +38,21 @@ namespace Dustline
             internal string Name;
         }
 
+        sealed class WorkshopState
+        {
+            internal PartSlot? Slot;
+            internal WorkshopOption Preview;
+            internal bool Expanded;
+            internal float CardScroll, ViewZoom = 1f;
+            internal Vector2 ViewDrag;
+
+            internal void ResetView()
+            {
+                ViewDrag = Vector2.zero;
+                ViewZoom = 1f;
+            }
+        }
+
         sealed class WorkshopPin
         {
             internal RectTransform Dot, Card, Line;
@@ -81,30 +96,49 @@ namespace Dustline
             };
         }
 
-        void ShowGunsmith(GridInventory selectedBag = null, string selectedId = null)
+        void ShowGunsmith(GridInventory selectedBag = null, string selectedId = null) => BuildGunsmith(selectedBag, selectedId, null);
+
+        void BuildGunsmith(GridInventory selectedBag, string selectedId, WorkshopState state)
         {
             if (session.Phase != SessionPhase.Menu) return;
             var panel = Display(ScreenPage.Gunsmith, "Gunsmith", wide: true);
             var guns = new List<InventoryChoice>();
             AddGuns(session.Loadout); AddGuns(session.Stash);
-            int index = Mathf.Max(0, guns.FindIndex(choice => choice.Bag == selectedBag && choice.Id == selectedId));
-            PartSlot? activeSlot = null;
-            WorkshopOption preview = null;
-            bool expanded = false;
-            float cardScroll = 0f;
+            int index = guns.FindIndex(choice => choice.Bag == selectedBag && choice.Id == selectedId);
+            if (index < 0 && selectedId != null) index = guns.FindIndex(choice => choice.Id == selectedId);
+            if (index < 0) { index = 0; state = null; }
+            state ??= new WorkshopState();
             string renderedId = null;
             RectTransform surface = null, tray = null, statsPanel = null, partFrame = null, confirmation = null;
+            ScrollRect candidatesScroll = null;
             Text title = null, total = null, note = null, previewHeader = null;
             Button cancel = null, statsButton = null;
             var pins = new WorkshopPin[(int)PartSlot.Magazine + 1];
+            SetPageRestore(() =>
+            {
+                if (guns.Count == 0) ShowGunsmith();
+                else
+                {
+                    var choice = guns[index];
+                    BuildGunsmith(choice.Bag, choice.Id, state);
+                }
+            }, CaptureCardScroll);
             reflowWidePage = Build;
             Build();
 
+            void CaptureCardScroll()
+            {
+                if (candidatesScroll != null) state.CardScroll = Mathf.Clamp01(candidatesScroll.horizontalNormalizedPosition);
+            }
+
             void AddGuns(GridInventory bag)
             {
-                var equipped = bag.Equipped(EquipmentSlot.Weapon);
-                if (equipped != null) Add(equipped);
-                foreach (var item in bag.Items) if (item != equipped) Add(item);
+                foreach (var slot in LoadoutSlots.Hands)
+                {
+                    var equipped = bag.Equipped(slot);
+                    if (equipped != null) Add(equipped);
+                }
+                foreach (var item in bag.Items) if (!LoadoutSlots.IsHand(item.Slot)) Add(item);
 
                 void Add(ItemStack item)
                 {
@@ -115,13 +149,14 @@ namespace Dustline
 
             void Build()
             {
+                CaptureCardScroll();
+                candidatesScroll = null;
                 if (statsPanel != null && !statsPanel.gameObject.activeSelf) Destroy(statsPanel.gameObject);
                 Clear(panel);
                 float width = panel.rect.width;
                 WideHeader(panel, "枪械改装", "单指旋转 · 双指缩放 · 点枪模选槽", true);
                 Fill(At("Workshop footer", panel, 0, 630, width, 50), Ink);
-                Button(panel, "返回仓库", 12, 634, 127, 41, ShowStash);
-                Button(panel, "配件商店", 148, 634, 127, 41, () => ShowShop(ItemKind.Part));
+                Button(panel, "配件商店", 12, 634, 127, 41, () => ShowShop(ItemKind.Part));
                 if (guns.Count == 0)
                 {
                     Label(panel, "还没有可改装的枪械", 26, 13, 205, width - 26, 58, TextAnchor.MiddleCenter);
@@ -152,8 +187,20 @@ namespace Dustline
                 }
                 gunsmithImage.texture = gunsmithTexture;
                 workshopGesture = surface.gameObject.AddComponent<WorkshopGesture>();
-                workshopGesture.Rotate = delta => { gunsmithStage.Rotate(delta); gunsmithDirty = true; };
-                workshopGesture.Zoom = scale => { gunsmithStage.Zoom(scale); gunsmithDirty = true; };
+                workshopGesture.Rotate = delta =>
+                {
+                    // Store gesture totals relative to the preview stage's neutral view.
+                    state.ViewDrag.x = Mathf.Repeat(state.ViewDrag.x + delta.x, 360f / .55f);
+                    state.ViewDrag.y = Mathf.Clamp(state.ViewDrag.y + delta.y, (7f - 75f) / .44f, (7f + 75f) / .44f);
+                    gunsmithStage.Rotate(delta);
+                    gunsmithDirty = true;
+                };
+                workshopGesture.Zoom = scale =>
+                {
+                    state.ViewZoom = Mathf.Clamp(state.ViewZoom * scale, .76f, 1.58f);
+                    gunsmithStage.Zoom(scale);
+                    gunsmithDirty = true;
+                };
                 workshopGesture.Tap = PickPin;
                 for (int n = 0; n < pins.Length; n++) pins[n] = CreatePin((PartSlot)n);
                 foreach (var pin in pins) pin.Card.SetAsLastSibling();
@@ -169,7 +216,12 @@ namespace Dustline
                 previewHeader = Label(surface, "", 16, viewWidth * .39f, 9, viewWidth * .61f - 234, 33, TextAnchor.MiddleCenter, Aqua);
                 Button(surface, "上一把", viewWidth - 225, 11, 103, 37, () => ChangeGun(-1)).interactable = guns.Count > 1;
                 Button(surface, "下一把", viewWidth - 114, 11, 103, 37, () => ChangeGun(1)).interactable = guns.Count > 1;
-                Button(surface, "重置视角", viewWidth - 114, viewHeight - 47, 103, 36, () => { gunsmithStage.ResetView(); gunsmithDirty = true; });
+                Button(surface, "重置视角", viewWidth - 114, viewHeight - 47, 103, 36, () =>
+                {
+                    state.ResetView();
+                    gunsmithStage.ResetView();
+                    gunsmithDirty = true;
+                });
 
                 float compareWidth = width - 156f;
                 note = Label(panel, "", 21, 14, 481, compareWidth - 10, 41, TextAnchor.MiddleLeft, Aqua);
@@ -177,11 +229,11 @@ namespace Dustline
                 note.resizeTextForBestFit = true;
                 note.resizeTextMinSize = 15;
                 note.resizeTextMaxSize = 21;
-                statsButton = Button(panel, "完整参数", width - 130, 483, 118, 36, () => { expanded = !expanded; DrawMetrics(); });
+                statsButton = Button(panel, "完整参数", width - 130, 483, 118, 36, () => { state.Expanded = !state.Expanded; DrawMetrics(); });
                 tray = At("Workshop candidates", panel, 12, 525, viewWidth, 100);
                 Fill(tray, Ink);
                 statsPanel = At("Workshop parameters", panel, width - 343, 111, 320, 340);
-                cancel = Button(panel, "取消预览", width - 351, 634, 130, 41, () => { preview = null; Refresh(); });
+                cancel = Button(panel, "取消预览", width - 351, 634, 130, 41, () => { CaptureCardScroll(); state.Preview = null; Refresh(); });
                 confirmation = At("Installation confirmation", panel, width - 209, 634, 197, 41);
                 Refresh();
             }
@@ -224,7 +276,7 @@ namespace Dustline
                     SetActive(marker.Card.gameObject, visible);
                     SetActive(marker.Line.gameObject, visible);
                     if (!visible) continue;
-                    bool selected = slot == activeSlot;
+                    bool selected = slot == state.Slot;
                     var target = new Vector2(uv.x * w, (1 - uv.y) * h);
                     marker.Target = target;
                     marker.Region = new Rect(region.xMin * w, (1f - region.yMax) * h, region.width * w, region.height * h);
@@ -252,7 +304,7 @@ namespace Dustline
                     marker.Line.anchoredPosition = new Vector2(target.x, -target.y);
                     marker.Line.localRotation = Quaternion.Euler(0, 0, -Mathf.Atan2(d.y, d.x) * Mathf.Rad2Deg);
                     marker.Line.sizeDelta = new Vector2(Mathf.Max(0, d.magnitude - 24), 1.4f);
-                    marker.Line.GetComponent<Image>().color = (PartSlot)n == activeSlot ? Amber : Aqua;
+                    marker.Line.GetComponent<Image>().color = (PartSlot)n == state.Slot ? Amber : Aqua;
                 }
                 SetActive(partFrame.gameObject, frameVisible);
             }
@@ -309,19 +361,20 @@ namespace Dustline
 
             void ChooseSlot(PartSlot slot)
             {
-                if (activeSlot == slot) return;
-                activeSlot = slot;
-                preview = null;
-                cardScroll = 0;
+                if (state.Slot == slot) return;
+                state.Slot = slot;
+                state.Preview = null;
+                state.CardScroll = 0;
                 Refresh();
             }
 
             void ChangeGun(int step)
             {
                 index = (index + step + guns.Count) % guns.Count;
-                activeSlot = null;
-                preview = null;
-                cardScroll = 0;
+                state.Slot = null;
+                state.Preview = null;
+                state.CardScroll = 0;
+                state.ResetView();
                 Refresh();
             }
 
@@ -330,16 +383,25 @@ namespace Dustline
                 var gun = guns[index].Item;
                 if (gun == null) { ShowGunsmith(); return; }
                 var def = session.Catalog.Find(gun.ItemId);
+                var options = state.Slot.HasValue ? OptionsFor(gun, def, state.Slot.Value) : null;
+                var prior = state.Preview;
+                if (prior != null) state.Preview = options?.Find(option => !option.Installed && option.Part == prior.Part && option.Level == prior.Level);
                 title.text = def.DisplayName;
-                total.text = (index + 1) + " / " + guns.Count + (gun.Slot == EquipmentSlot.Weapon ? "  · 已装备" : "  · 未装备");
-                previewHeader.text = preview != null ? "预览 · " + preview.Name : "当前装配";
+                total.text = (index + 1) + " / " + guns.Count + (LoadoutSlots.IsHand(gun.Slot) ? "  · 已装备" : "  · 未装备");
+                previewHeader.text = state.Preview != null ? "预览 · " + state.Preview.Name : "当前装配";
                 var next = Proposed(gun, def);
-                gunsmithStage.Set(def, next, session.Catalog, keepAngle: renderedId == gun.InstanceId);
-                gunsmithStage.Focus(activeSlot);
+                bool sameGun = renderedId == gun.InstanceId;
+                gunsmithStage.Set(def, next, session.Catalog, keepAngle: sameGun);
+                if (!sameGun)
+                {
+                    gunsmithStage.Rotate(state.ViewDrag);
+                    gunsmithStage.Zoom(state.ViewZoom);
+                }
+                gunsmithStage.Focus(state.Slot);
                 renderedId = gun.InstanceId;
                 gunsmithDirty = true;
                 UpdateCredits();
-                DrawOptions(gun, def);
+                DrawOptions(gun, def, options);
                 DrawMetrics();
                 DrawConfirmation();
             }
@@ -347,8 +409,8 @@ namespace Dustline
             void DrawConfirmation()
             {
                 Clear(confirmation);
-                var option = preview;
-                var slot = activeSlot;
+                var option = state.Preview;
+                var slot = state.Slot;
                 var choice = guns[index];
                 var button = Button(confirmation, "确认安装", 0, 0, 197, 41, null, true);
                 button.interactable = false;
@@ -366,26 +428,18 @@ namespace Dustline
 
             ItemStack Proposed(ItemStack gun, ItemDefinition def)
             {
-                if (preview == null || !activeSlot.HasValue) return gun;
+                var preview = state.Preview;
+                if (preview == null || !state.Slot.HasValue) return gun;
                 var next = gun.Clone();
-                var slot = activeSlot.Value;
+                var slot = state.Slot.Value;
                 next.Parts.Set(slot, preview.Part != null ? new PartLink { ItemId = preview.Part.Id } : default);
                 if (preview.Part == null && UsesFactory(def, slot))
                     WeaponTuning.TrySelect(gun.Mods, (WeaponModSlot)slot, preview.Level, out next.Mods, out _);
                 return next;
             }
 
-            void DrawOptions(ItemStack gun, ItemDefinition def)
+            List<WorkshopOption> OptionsFor(ItemStack gun, ItemDefinition def, PartSlot slot)
             {
-                Clear(tray);
-                float width = tray.rect.width;
-                if (!activeSlot.HasValue)
-                {
-                    Label(tray, "点枪上的标记，查看兼容配件。试装不会扣费或改动当前装备。", 21, 12, 7, width - 24, 84,
-                        TextAnchor.MiddleCenter, Muted);
-                    return;
-                }
-                var slot = activeSlot.Value;
                 var installed = gun.Parts.Get(slot);
                 bool factory = UsesFactory(def, slot);
                 var options = new List<WorkshopOption>();
@@ -402,15 +456,36 @@ namespace Dustline
                     options.Add(new WorkshopOption { Level = level, Cost = cost, Name = FactoryName(slot, level),
                         Installed = installed.Empty && (!factory || level == WeaponTuning.Level(gun.Mods, (WeaponModSlot)slot)) });
                 }
+                return options;
+            }
+
+            void DrawOptions(ItemStack gun, ItemDefinition def, List<WorkshopOption> options)
+            {
+                Clear(tray);
+                candidatesScroll = null;
+                float width = tray.rect.width;
+                if (options == null)
+                {
+                    Label(tray, "点枪上的标记，查看兼容配件。试装不会扣费或改动当前装备。", 21, 12, 7, width - 24, 84,
+                        TextAnchor.MiddleCenter, Muted);
+                    return;
+                }
+                var slot = state.Slot.Value;
+                bool factory = UsesFactory(def, slot);
                 const float stride = 226f;
                 var content = HorizontalStrip(tray, "Compatible catalog / " + slot, 0, 1, width, 98,
-                    options.Count * stride - 8f, cardScroll, value => cardScroll = value);
+                    options.Count * stride - 8f, state.CardScroll, value => state.CardScroll = value);
+                candidatesScroll = content.parent.GetComponent<ScrollRect>();
                 for (int i = 0; i < options.Count; i++)
                 {
                     var option = options[i];
-                    bool selected = preview != null && preview.Part == option.Part && preview.Level == option.Level;
-                    var card = Button(content, "", i * stride, 0, stride - 8f, 91, () => { preview = option.Installed ? null : option; Refresh(); },
-                        false, selected ? Color.Lerp(Plate, Aqua, .31f) : Plate);
+                    bool selected = state.Preview == option;
+                    var card = Button(content, "", i * stride, 0, stride - 8f, 91, () =>
+                    {
+                        CaptureCardScroll();
+                        state.Preview = option.Installed ? null : option;
+                        Refresh();
+                    }, false, selected ? Color.Lerp(Plate, Aqua, .31f) : Plate);
                     card.name = "Candidate / " + (option.Part != null ? option.Part.Id : "factory-" + option.Level);
                     Fill(At("Candidate rule", card.transform, 0, 0, 218, 2), selected ? Amber : option.Installed ? Aqua : Border);
                     if (option.Part != null) DrawItemIcon(card.transform, option.Part, null, 6, 11, 76, 75);
@@ -451,17 +526,18 @@ namespace Dustline
                     if (changes < 3) headline += (changes == 0 ? "" : "   ·   ") + row.Readout;
                     changes++;
                 }
-                note.text = preview == null ? metrics[0].Readout + "   ·   " + (activeSlot.HasValue ? "选择" + PartName(activeSlot.Value) : "当前配置")
+                bool previewing = state.Preview != null;
+                note.text = !previewing ? metrics[0].Readout + "   ·   " + (state.Slot.HasValue ? "选择" + PartName(state.Slot.Value) : "当前配置")
                     : changes == 0 ? "仅外观变化 · 参数不变" : headline;
-                note.color = preview == null ? Pale : Aqua;
-                statsButton.GetComponentInChildren<Text>().text = expanded ? "收起参数" : "完整参数";
-                SetActive(statsPanel.gameObject, expanded);
-                if (!expanded) return;
+                note.color = previewing ? Aqua : Pale;
+                statsButton.GetComponentInChildren<Text>().text = state.Expanded ? "收起参数" : "完整参数";
+                SetActive(statsPanel.gameObject, state.Expanded);
+                if (!state.Expanded) return;
                 Clear(statsPanel);
                 var backing = At("Parameter backdrop", statsPanel, 0, 0, 320, 340);
                 Fill(backing, new Color32(12, 22, 29, 249), true);
                 Fill(At("Parameter accent", statsPanel, 0, 0, 320, 2), Aqua);
-                Label(statsPanel, preview != null ? "当前 → 预览" : "当前参数", 19, 12, 3, 298, 31, TextAnchor.MiddleLeft);
+                Label(statsPanel, previewing ? "当前 → 预览" : "当前参数", 19, 12, 3, 298, 31, TextAnchor.MiddleLeft);
                 int rowIndex = 0;
                 foreach (var row in metrics)
                 {
@@ -498,7 +574,7 @@ namespace Dustline
                     ? session.TryFitCatalogPart(choice.Bag, choice.Id, slot, option.Part.Id, option.Cost, out error)
                     : session.TryFitWorkshopOriginal(choice.Bag, choice.Id, slot, option.Level, option.Cost, out error);
                 if (current != ScreenPage.Gunsmith) return;
-                if (ok) { Notify("配件配置已保存。"); preview = null; Refresh(); }
+                if (ok) { CaptureCardScroll(); Notify("配件配置已保存。"); state.Preview = null; Refresh(); }
                 else Notify(error ?? "未能更改配件。");
             }
         }

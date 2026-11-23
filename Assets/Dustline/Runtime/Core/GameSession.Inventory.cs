@@ -8,9 +8,15 @@ namespace Dustline
     {
         void UpgradeInventory(ProfileData data)
         {
-            FillLegacyAmmunition(data.Stash);
-            FillLegacyAmmunition(data.Loadout);
-            data.Version = 2;
+            if (data.Version == 1)
+            {
+                FillLegacyAmmunition(data.Stash);
+                FillLegacyAmmunition(data.Loadout);
+            }
+            var carried = GridInventory.Carried(Catalog);
+            carried.MigrateCarried(data.Loadout);
+            data.Loadout = carried.Snapshot();
+            data.Version = ProfileData.CurrentVersion;
         }
 
         void FillLegacyAmmunition(List<ItemStack> items)
@@ -25,7 +31,7 @@ namespace Dustline
 
         bool SaveMenuInventory(GridInventory stash, GridInventory carried, int credits)
         {
-            var next = new ProfileData { Version = 2, Credits = credits, Stash = stash.Snapshot(), Loadout = carried.Snapshot(),
+            var next = new ProfileData { Version = ProfileData.CurrentVersion, Credits = credits, Stash = stash.Snapshot(), Loadout = carried.Snapshot(),
                 BoundBladeId = Profile.BoundBladeId, Raids = Profile.Raids, Extractions = Profile.Extractions, RaidInProgress = Profile.RaidInProgress };
             try { store.Save(next); }
             catch (Exception error) { Fail(error); return false; }
@@ -46,8 +52,8 @@ namespace Dustline
             {
                 if ((source != Stash && source != Loadout) || (destination != Stash && destination != Loadout))
                 { error = "当前物品栏不可操作。"; return false; }
-                var stash = Stash.Draft();
-                var carried = Loadout.Draft();
+                var stash = source == Stash || destination == Stash ? Stash.Draft() : Stash;
+                var carried = source == Loadout || destination == Loadout ? Loadout.Draft() : Loadout;
                 if (!edit(source == Stash ? stash : carried, destination == Stash ? stash : carried, out error)) return false;
                 return SaveMenuInventory(stash, carried, Profile.Credits);
             }
@@ -58,15 +64,25 @@ namespace Dustline
             return true;
         }
 
-        internal bool TryLoadAmmunition(GridInventory source, string id, out string error)
+        internal bool SortStash(out string error)
         {
-            if (Phase != SessionPhase.Menu) { error = "请在整备时装填。"; return false; }
+            if (Phase != SessionPhase.Menu) { error = "只能在整备时整理仓库。"; return false; }
+            var stash = Stash.Draft();
+            return stash.TrySortStash(out error) && SaveMenuInventory(stash, Loadout, Profile.Credits);
+        }
+
+        internal bool TryLoadAmmunition(GridInventory source, string id, EquipmentSlot slot, out string error)
+        {
+            if (Phase != SessionPhase.Menu || !LoadoutSlots.IsHand(slot) || slot == EquipmentSlot.Melee)
+            { error = "请在整备时选择枪械装填。"; return false; }
             return EditInventory(source, Loadout, (GridInventory ammoBag, GridInventory carried, out string why) =>
             {
                 var stack = ammoBag.Find(id);
-                var gun = carried.Equipped(EquipmentSlot.Weapon);
+                var gun = carried.Equipped(slot);
                 var weapon = Catalog.Find(gun?.ItemId)?.Weapon;
-                if (!WeaponRules.CanLoad(weapon, gun, Catalog.Find(stack?.ItemId), out why)) return false;
+                if (gun == null || stack == null || stack.Slot != EquipmentSlot.None)
+                { why = "未找到选中的枪械或备弹。"; return false; }
+                if (!WeaponRules.CanLoad(weapon, gun, Catalog.Find(stack.ItemId), out why)) return false;
                 int loaded = Math.Max(0, gun.LoadedAmmo);
                 int amount = Math.Min(stack.Quantity, WeaponRules.Capacity(weapon, gun, Catalog) - loaded);
                 if (amount <= 0) { why = "弹匣已满。"; return false; }

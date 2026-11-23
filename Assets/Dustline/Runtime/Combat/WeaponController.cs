@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -9,6 +10,7 @@ namespace Dustline
         public WeaponDefinition Definition { get; private set; }
         public bool IsMelee => Definition != null && Definition.Melee;
         public bool ActiveIsBound { get; private set; }
+        public EquipmentSlot ActiveSlot { get; private set; }
         public int Reserve => Magazine == null ? 0 : CountPocketAmmo(session.ActiveFieldBag, SelectReloadType());
         public WeaponStats Stats => stats;
         public float MoveFactor => IsMelee ? 1.13f : Mathf.Clamp(Definition != null ? Definition.MoveFactor : 1f, .65f, 1.2f);
@@ -20,13 +22,13 @@ namespace Dustline
         GameSession session;
         PlayerController player;
         GridInventory activeBag;
-        WeaponDefinition mainDefinition;
-        string activeId, activeItemId, mainId;
+        readonly Dictionary<string, bool> fireModes = new Dictionary<string, bool>(System.StringComparer.Ordinal);
+        string activeId, activeItemId;
         WeaponMods appliedMods;
         WeaponParts appliedParts;
         string appliedAmmo, reloadAmmo;
         WeaponStats stats;
-        bool preferBound, mainAutomatic, emptyClicked, queuedSwing;
+        bool mainAutomatic, emptyClicked, queuedSwing;
         float nextAttack, contactAt = -1, chainUntil = -1;
         int comboStep, contactStep;
 
@@ -38,35 +40,61 @@ namespace Dustline
             SyncEquipment();
         }
 
-        public void SyncEquipment() => ResolveEquipment(false, Time.time);
+        public void SyncEquipment() => ResolveEquipment(ActiveSlot, Time.time);
 
-        internal void SyncHandForMovement(float now)
+        public bool SelectSlot(EquipmentSlot slot)
         {
-            if (session.Input.TakeWeaponSwap()) ResolveEquipment(true, now);
+            if (session == null || !session.InField || !session.Input.Gameplay || !player.Health.Alive || !Available(slot, session.ActiveFieldBag)) return false;
+            ResolveEquipment(slot, Time.time);
+            return true;
         }
 
-        void ResolveEquipment(bool toggle, float now)
+        internal void SyncHandForMovement(float now) => ReadSwitch(now);
+
+        void ReadSwitch(float now)
         {
             var bag = session.ActiveFieldBag;
-            var item = bag.Equipped(EquipmentSlot.Weapon);
-            string itemId = item?.ItemId;
-            var main = item == null ? null : session.Catalog.Find(itemId)?.Weapon;
-            if (mainId != item?.InstanceId || mainDefinition != main || !ReferenceEquals(bag, activeBag))
+            var requested = session.Input.TakeWeaponSlot();
+            bool cycle = session.Input.TakeWeaponSwap();
+            if (requested != EquipmentSlot.None)
             {
-                mainId = item?.InstanceId;
-                mainDefinition = main;
-                mainAutomatic = main != null && main.Automatic;
+                if (Available(requested, bag)) ResolveEquipment(requested, now);
             }
-            if (main == null) preferBound = false;
-            else if (toggle) preferBound = !preferBound;
-            bool useBound = main == null || preferBound;
-            var definition = useBound ? session.BoundBlade : main;
-            string id = useBound ? null : item.InstanceId;
-            var mods = useBound ? default : item.Mods;
-            var parts = useBound ? default : item.Parts;
-            int capacity = useBound ? 0 : WeaponRules.Capacity(definition, item, session.Catalog);
-            string ammo = useBound ? null : WeaponRules.LoadedType(definition, item);
-            bool changed = Definition != definition || ActiveIsBound != useBound || activeId != id
+            else if (cycle)
+            {
+                int start = System.Array.IndexOf(LoadoutSlots.Hands, ActiveSlot);
+                for (int offset = 1; offset <= LoadoutSlots.Hands.Length; offset++)
+                {
+                    var slot = LoadoutSlots.Hands[(start + offset) % LoadoutSlots.Hands.Length];
+                    if (!Available(slot, bag)) continue;
+                    ResolveEquipment(slot, now);
+                    break;
+                }
+            }
+        }
+
+        bool Available(EquipmentSlot slot, GridInventory bag) => LoadoutSlots.IsHand(slot)
+            && (slot == EquipmentSlot.Melee || session.Catalog.Find(bag?.Equipped(slot)?.ItemId)?.Weapon != null);
+
+        void ResolveEquipment(EquipmentSlot slot, float now)
+        {
+            var bag = session.ActiveFieldBag;
+            if (!Available(slot, bag))
+            {
+                foreach (var hand in LoadoutSlots.Hands)
+                    if (Available(hand, bag)) { slot = hand; break; }
+            }
+            var item = bag?.Equipped(slot);
+            string itemId = item?.ItemId;
+            bool useBound = slot == EquipmentSlot.Melee && item == null;
+            var definition = useBound ? session.BoundBlade : session.Catalog.Find(itemId)?.Weapon;
+            if (definition == null) return;
+            string id = item?.InstanceId;
+            var mods = item?.Mods ?? default;
+            var parts = item?.Parts ?? default;
+            int capacity = WeaponRules.Capacity(definition, item, session.Catalog);
+            string ammo = WeaponRules.LoadedType(definition, item);
+            bool changed = Definition != definition || ActiveSlot != slot || ActiveIsBound != useBound || activeId != id
                 || activeItemId != (useBound ? null : itemId) || !ReferenceEquals(bag, activeBag)
                 || capacity != (Magazine?.Capacity ?? 0);
             if (changed)
@@ -75,11 +103,14 @@ namespace Dustline
                 CancelActions();
                 if (player.WeaponView != null) session.Effects?.CancelMuzzle(player.WeaponView.Muzzle);
                 session.Input.SetAimAvailable(false);
+                if (!ReferenceEquals(bag, activeBag)) fireModes.Clear();
                 activeBag = bag;
                 activeId = id;
-                activeItemId = useBound ? null : itemId;
+                activeItemId = itemId;
                 Definition = definition;
+                ActiveSlot = slot;
                 ActiveIsBound = useBound;
+                mainAutomatic = !definition.Melee && definition.Automatic && (!fireModes.TryGetValue(id, out bool mode) || mode);
                 Magazine = useBound || definition.Melee ? null : new Magazine(capacity, item.LoadedAmmo);
                 nextAttack = now + 0.18f;
                 emptyClicked = false;
@@ -105,7 +136,7 @@ namespace Dustline
 
         public void ToggleFireMode()
         {
-            if (Magazine != null && Definition.Automatic) mainAutomatic = !mainAutomatic;
+            if (Magazine != null && Definition.Automatic) fireModes[activeId] = mainAutomatic = !mainAutomatic;
         }
 
         void Update() => Tick(Time.time, Time.deltaTime);
@@ -121,7 +152,8 @@ namespace Dustline
             }
 
             // Switching or inventory replacement must run before completing a pending action.
-            ResolveEquipment(input.TakeWeaponSwap(), now);
+            ReadSwitch(now);
+            ResolveEquipment(ActiveSlot, now);
             if (!input.Gameplay)
             {
                 CancelActions();
@@ -213,20 +245,33 @@ namespace Dustline
         ItemStack FindActiveItem()
         {
             if (ActiveIsBound || !ReferenceEquals(session.ActiveFieldBag, activeBag)) return null;
-            var item = activeBag.Equipped(EquipmentSlot.Weapon);
+            var item = activeBag?.Equipped(ActiveSlot);
             return item != null && item.InstanceId == activeId && item.ItemId == activeItemId ? item : null;
+        }
+
+        internal int ReserveFor(ItemStack item)
+        {
+            if (item == null) return 0;
+            if (item.InstanceId == activeId && item.Slot == ActiveSlot) return Reserve;
+            var bag = session.ActiveFieldBag;
+            var definition = session.Catalog.Find(item.ItemId)?.Weapon;
+            return CountPocketAmmo(bag, ReloadType(bag, definition, item));
         }
 
         string SelectReloadType()
         {
             if (Magazine == null || activeBag == null) return null;
-            if (Magazine.Reloading) return reloadAmmo;
-            var item = FindActiveItem();
-            string prior = WeaponRules.LoadedType(Definition, item);
-            if (WeaponRules.CanLoad(Definition, item, session.Catalog.Find(prior), out _)
-                && (Magazine.Rounds > 0 || CountPocketAmmo(activeBag, prior) > 0)) return prior;
-            foreach (var stack in activeBag.Items)
-                if (stack.Slot == EquipmentSlot.None && WeaponRules.CanLoad(Definition, item, session.Catalog.Find(stack.ItemId), out _)) return stack.ItemId;
+            return Magazine.Reloading ? reloadAmmo : ReloadType(activeBag, Definition, FindActiveItem());
+        }
+
+        string ReloadType(GridInventory bag, WeaponDefinition definition, ItemStack item)
+        {
+            if (bag == null || definition == null || definition.Melee || item == null) return null;
+            string prior = WeaponRules.LoadedType(definition, item);
+            if (WeaponRules.CanLoad(definition, item, session.Catalog.Find(prior), out _)
+                && (item.LoadedAmmo > 0 || CountPocketAmmo(bag, prior) > 0)) return prior;
+            foreach (var stack in bag.Items)
+                if (stack.Slot == EquipmentSlot.None && WeaponRules.CanLoad(definition, item, session.Catalog.Find(stack.ItemId), out _)) return stack.ItemId;
             return null;
         }
 

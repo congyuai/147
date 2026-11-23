@@ -1,0 +1,319 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using NUnit.Framework;
+using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.Rendering;
+using UnityEngine.TestTools;
+using UnityEngine.UI;
+using Object = UnityEngine.Object;
+
+namespace Dustline.Tests
+{
+    public sealed class FieldHudTests
+    {
+        const BindingFlags Instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        const string SafePath = "Dustline UI/Safe area";
+        const string VitalsPath = "HUD/Left HUD anchor/Vitals";
+        const string DetailPath = "Pages/Body condition";
+        GameObject host;
+        GameSession session;
+        ProfileStore store;
+        byte[] savedProfile;
+        int previousLimit, previousSync;
+        RenderPipelineAsset previousPipeline;
+
+        [SetUp]
+        public void RememberDisplay()
+        {
+            previousLimit = Application.targetFrameRate;
+            previousSync = QualitySettings.vSyncCount;
+            previousPipeline = QualitySettings.renderPipeline;
+        }
+
+        [UnityTearDown]
+        public IEnumerator TearDown()
+        {
+            if (host != null) { host.SetActive(false); Object.Destroy(host); }
+            if (store != null) File.Delete(store.Path);
+            yield return null;
+            QualitySettings.renderPipeline = previousPipeline;
+            QualitySettings.vSyncCount = previousSync;
+            Application.targetFrameRate = previousLimit;
+        }
+
+        [UnityTest]
+        public IEnumerator BodyHudColorsEachRegionAndOpensCenteredDetail()
+        {
+            yield return OpenPractice();
+            var vitals = Node(Safe, VitalsPath);
+            var figure = Node(vitals, "Body diagram");
+            var body = session.Player.Health.Body;
+            float[] fractions = { 1f, .85f, .65f, .4f, .12f, .1f, 0f };
+            for (int i = 0; i < fractions.Length; i++)
+            {
+                var part = (BodyPart)i;
+                body.Damage(part, body.Maximum(part) * (1f - fractions[i]), false);
+            }
+            RefreshHud();
+            Assert.That(LabelAt(vitals, "Stamina value"), Does.StartWith("体力"));
+            Assert.That(vitals.Cast<Transform>().Count(node => node.name == "Bar track"), Is.EqualTo(1));
+            Assert.That(vitals.GetComponentsInChildren<Text>().Any(text => text.text.StartsWith("总健康") || text.name.StartsWith("Region health / ")), Is.False);
+            var sidearm = Slot(Node(Safe, "Weapon bar/Weapon slots"), EquipmentSlot.Sidearm);
+            Assert.That(sidearm.GetComponent<Button>().interactable, Is.False);
+            Assert.That(LabelAt(sidearm, "Weapon ammunition"), Is.Empty);
+            Assert.That(Node(vitals, "Injury summary/Injury / Destroyed").gameObject.activeInHierarchy, Is.True);
+            AssertBodyMesh(figure.GetComponent<Graphic>());
+
+            Vector2 head = RectTransformUtility.WorldToScreenPoint(null,
+                figure.TransformPoint(new Vector2(figure.rect.center.x, figure.rect.yMax - .13f * figure.rect.height)));
+            ClickAt(figure.gameObject, head);
+            var detail = Node(Safe, DetailPath);
+            var map = Node(detail, "Condition map");
+            var large = Node(map, "Body detail diagram");
+            Assert.That(ScreenPoint(large).x, Is.EqualTo(ScreenPoint(detail).x).Within(1f));
+            Assert.That(large.rect.height, Is.GreaterThan(2f * figure.rect.height));
+            Assert.That(LabelAt(map, "Total health"), Is.EqualTo("总健康  " + Values(body.Total, body.TotalMaximum)));
+            Assert.That(LabelAt(detail, "Treatment options/Treatment target"), Does.Contain("头部"));
+            for (int i = 0; i < BodyCondition.Count; i++)
+            {
+                var part = (BodyPart)i;
+                Assert.That(LabelAt(map, "Region / " + part + "/Region health / " + part), Is.EqualTo(Values(body.Current(part), body.Maximum(part))));
+            }
+            Click(Node(detail, "‹ 返回"));
+            Assert.That(session.UI.BlocksGameplay, Is.False);
+            Assert.That(figure.gameObject.activeInHierarchy, Is.True);
+        }
+
+        [UnityTest]
+        public IEnumerator InjuryBadgeCountsRegionsAndQueuesOnlyMatchingTreatment()
+        {
+            yield return OpenPractice();
+            var player = session.Player;
+            var body = player.Health.Body;
+            foreach (var leg in new[] { BodyPart.LeftLeg, BodyPart.RightLeg }) body.Damage(leg, .5f * body.Maximum(leg));
+            RefreshHud();
+            var summary = Node(Safe, VitalsPath + "/Injury summary");
+            var fracture = Node(summary, "Injury / Fracture");
+            Assert.That(LabelAt(fracture, "Injury count"), Is.EqualTo("2"));
+            Click(fracture);
+            var detail = Node(Safe, DetailPath);
+            Assert.That(LabelAt(detail, "Treatment options/Treatment target"), Is.EqualTo("治疗目标 / 左腿 · 骨折"));
+            var right = Node(detail, "Condition map/Region / RightLeg/Injury / Fracture");
+            Assert.That(Node(right, "Injury glyph").GetComponent<Graphic>().GetType(), Is.EqualTo(Node(fracture, "Injury glyph").GetComponent<Graphic>().GetType()));
+            Click(right);
+            Assert.That(LabelAt(detail, "Treatment options/Treatment target"), Is.EqualTo("治疗目标 / 右腿 · 骨折"));
+            var options = Node(detail, "Treatment options/Available treatments");
+            Assert.That(Node(options, "Treatment / bandage").gameObject.activeSelf, Is.False);
+            var splint = Node(options, "Treatment / splint/开始");
+            Assert.That(splint.GetComponent<Button>().interactable, Is.True);
+            int stock = session.ActiveFieldBag.RemainingUses("splint");
+            Click(splint);
+            Assert.That(session.Input.Gameplay, Is.True);
+            Assert.That(session.ActiveFieldBag.RemainingUses("splint"), Is.EqualTo(stock), "Opening or selecting in the UI must not consume an item.");
+            Invoke(session.Input, "Update");
+            Invoke(player, "Tick", Time.time, .01f);
+            Assert.That(player.IsTreating, Is.True);
+            Assert.That(player.TreatmentPart, Is.EqualTo(BodyPart.RightLeg));
+            Invoke(player, "TickTreatment", 3f);
+            Assert.That(player.IsTreating, Is.False);
+            Assert.That(session.ActiveFieldBag.RemainingUses("splint"), Is.EqualTo(stock - 1));
+            Assert.That(body.Injuries(BodyPart.RightLeg) & Injury.Fracture, Is.EqualTo(Injury.None));
+            Assert.That(body.Injuries(BodyPart.LeftLeg) & Injury.Fracture, Is.EqualTo(Injury.Fracture));
+            RefreshHud();
+            Assert.That(fracture.gameObject.activeInHierarchy, Is.True);
+            Assert.That(LabelAt(fracture, "Injury count"), Is.Empty);
+
+            Click(fracture);
+            detail = Node(Safe, DetailPath);
+            Assert.That(Node(detail, "Condition map/Region / RightLeg/Injury / Fracture").gameObject.activeSelf, Is.False);
+            Assert.That(LabelAt(detail, "Treatment options/Treatment target"), Does.Contain("左腿"));
+            CollectionAssert.AreEqual(savedProfile, File.ReadAllBytes(store.Path));
+        }
+
+        [UnityTest]
+        public IEnumerator WeaponBarSelectsAllEquippedSlotsAboveLookAndHidesOnPages()
+        {
+            yield return OpenPractice(true);
+            var weapon = session.Player.Weapon;
+            var bag = session.ActiveFieldBag;
+            var strip = Node(Safe, "Weapon bar/Weapon slots");
+            var look = Node(Safe, "Touch controls/Look pad");
+            var legacy = Node(Safe, "Touch controls/SwitchWeapon");
+            var slots = new[] { EquipmentSlot.Weapon, EquipmentSlot.PrimaryTwo, EquipmentSlot.Sidearm, EquipmentSlot.Melee };
+            var models = new List<RawImage>();
+            Assert.That(strip.GetComponentsInChildren<Button>().Length, Is.EqualTo(4));
+            Assert.That(legacy.gameObject.activeInHierarchy, Is.True);
+            foreach (var slot in slots)
+            {
+                var node = Slot(strip, slot);
+                var item = bag.Equipped(slot);
+                Assert.That(node.GetComponent<Button>().interactable, Is.True);
+                Assert.That(Node(node, "Active slot").gameObject.activeSelf, Is.EqualTo(slot == EquipmentSlot.Weapon));
+                if (item == null)
+                {
+                    Assert.That(slot, Is.EqualTo(EquipmentSlot.Melee));
+                    Assert.That(LabelAt(node, "Weapon ammunition"), Is.EqualTo("绑定"));
+                    models.Add(Node(node, "Item model / " + session.BoundBlade.Form).GetComponent<RawImage>());
+                    continue;
+                }
+                var ammunition = session.Catalog.Find(item.ItemId).Weapon.AmmoId;
+                Assert.That(LabelAt(node, "Weapon ammunition"), Is.EqualTo(item.LoadedAmmo + " / " + bag.Count(ammunition)));
+                models.Add(Node(node, "Item model / " + item.ItemId).GetComponent<RawImage>());
+            }
+            Assert.That(models.All(model => model != null && !model.raycastTarget), Is.True);
+            if (SystemInfo.graphicsDeviceType != GraphicsDeviceType.Null && GraphicsSettings.currentRenderPipeline != null)
+            {
+                for (int frame = 0; frame < 60 && models.Any(model => model.texture == null); frame++) yield return null;
+                Assert.That(models.All(model => model.texture is RenderTexture target && target.IsCreated()), Is.True);
+            }
+
+            foreach (var slot in new[] { EquipmentSlot.Sidearm, EquipmentSlot.PrimaryTwo, EquipmentSlot.Melee, EquipmentSlot.Weapon })
+            {
+                var node = Slot(strip, slot);
+                var point = ScreenPoint(node);
+                var hits = Hits(point);
+                Assert.That(hits.Any(hit => hit.gameObject == look.gameObject), Is.True, "Test point must overlap the transparent Look pad: " + slot);
+                ClickAt(node.gameObject, point);
+                Assert.That(weapon.ActiveSlot, Is.EqualTo(slot));
+                Assert.That(Node(node, "Active slot").gameObject.activeSelf, Is.True);
+            }
+            Assert.That(bag.Equipped(EquipmentSlot.Melee), Is.Null);
+            Assert.That(bag.TryAdd("baton", 1, out var error), Is.True, error);
+            Assert.That(bag.TryEquip(bag.Items.Single(item => item.ItemId == "baton").InstanceId, EquipmentSlot.Melee, out error), Is.True, error);
+            RefreshHud();
+            var melee = Slot(strip, EquipmentSlot.Melee);
+            Assert.That(Node(melee, "Item model / baton").GetComponent<RawImage>(), Is.Not.Null);
+            Click(melee);
+            Assert.That(weapon.ActiveIsBound, Is.False);
+
+            var sidearm = Slot(strip, EquipmentSlot.Sidearm);
+            var pistol = bag.Equipped(EquipmentSlot.Sidearm);
+            pistol.LoadedAmmo = -1;
+            Assert.That(bag.Consume("ammo_copper", 1), Is.True);
+            RefreshHud();
+            Assert.That(LabelAt(sidearm, "Weapon ammunition"), Is.EqualTo("0 / " + bag.Count("ammo_copper")));
+
+            var legacyPosition = legacy.position;
+            legacy.position = sidearm.TransformPoint(sidearm.rect.center);
+            RefreshHud();
+            Assert.That(legacy.gameObject.activeSelf, Is.False);
+            legacy.position = legacyPosition;
+            RefreshHud();
+            Assert.That(legacy.gameObject.activeSelf, Is.True);
+
+            session.UI.BackOrSettings();
+            Assert.That(strip.gameObject.activeInHierarchy, Is.False);
+            Assert.That(Hits(ScreenPoint(sidearm)).Any(hit => hit.gameObject == sidearm.gameObject), Is.False);
+            sidearm.GetComponent<Button>().onClick.Invoke();
+            Assert.That(weapon.ActiveSlot, Is.EqualTo(EquipmentSlot.Melee));
+            yield return null;
+            Click(Node(Safe, "Pages/Game settings/‹ 返回"));
+            Assert.That(strip.gameObject.activeInHierarchy, Is.True);
+            Assert.That(session.Input.Gameplay, Is.True);
+            CollectionAssert.AreEqual(savedProfile, File.ReadAllBytes(store.Path));
+        }
+
+        IEnumerator OpenPractice(bool allFirearms = false)
+        {
+            if (Screen.width < Screen.height || Screen.height < 1) Assert.Ignore("Requires a landscape Game view.");
+            var catalog = Resources.Load<ItemCatalog>("Dustline/Items");
+            Assert.That(catalog, Is.Not.Null, "Run Dustline > Prepare Project first.");
+            var loadout = new GridInventory(8, 7, 70f, catalog);
+            Equip("rifle", EquipmentSlot.Weapon);
+            if (allFirearms)
+            {
+                Equip("dust_marksman", EquipmentSlot.PrimaryTwo);
+                Equip("dust_pistol", EquipmentSlot.Sidearm);
+            }
+            store = new ProfileStore(Path.Combine(Application.temporaryCachePath, "dustline-field-hud-" + Guid.NewGuid().ToString("N") + ".json"));
+            store.Save(new ProfileData { Version = ProfileData.CurrentVersion, Loadout = loadout.Snapshot() });
+            host = new GameObject("Field HUD test session");
+            host.SetActive(false);
+            session = host.AddComponent<GameSession>();
+            typeof(GameSession).GetField("store", Instance).SetValue(session, store);
+            host.SetActive(true);
+            Assert.That(session.Phase, Is.EqualTo(SessionPhase.Menu), session.Error);
+            savedProfile = File.ReadAllBytes(store.Path);
+            session.Input.ForceTouch = true;
+            session.StartPractice();
+            for (int frame = 0; frame < 45 && session.Phase == SessionPhase.PracticeLoading; frame++) yield return null;
+            Assert.That(session.Phase, Is.EqualTo(SessionPhase.Practice), session.Error);
+            Invoke(session, "OnApplicationFocus", true);
+            Assert.That(session.Input.Gameplay, Is.True);
+
+            void Equip(string id, EquipmentSlot slot)
+            {
+                Assert.That(loadout.TryAdd(id, 1, out var error), Is.True, error);
+                Assert.That(loadout.TryEquip(loadout.Items.Single(item => item.ItemId == id).InstanceId, slot, out error), Is.True, error);
+            }
+        }
+
+        static void AssertBodyMesh(Graphic graphic)
+        {
+            Assert.That(graphic.GetComponent<CanvasRenderer>(), Is.Not.Null);
+            var shapes = (Vector2[][])graphic.GetType().GetField("Shape", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+            Color32[] fills = { new Color32(115, 164, 137, 255), new Color32(237, 219, 142, 255), new Color32(231, 151, 73, 255),
+                new Color32(218, 77, 72, 255), new Color32(126, 39, 49, 255), new Color32(126, 39, 49, 255), new Color32(8, 10, 11, 255) };
+            using (var mesh = new VertexHelper())
+            {
+                graphic.GetType().GetMethod("OnPopulateMesh", Instance, null, new[] { typeof(VertexHelper) }, null).Invoke(graphic, new object[] { mesh });
+                var vertex = default(UIVertex);
+                int offset = 0;
+                for (int i = 0; i < BodyCondition.Count; i++)
+                {
+                    mesh.PopulateUIVertex(ref vertex, offset);
+                    var rim = i == (int)BodyPart.RightLeg ? new Color32(239, 240, 229, 255) : new Color32(52, 73, 79, 255);
+                    Assert.That(vertex.color, Is.EqualTo(rim), (BodyPart)i + " outline");
+                    mesh.PopulateUIVertex(ref vertex, offset + shapes[i].Length);
+                    Assert.That(vertex.color, Is.EqualTo(fills[i]), (BodyPart)i + " fill");
+                    offset += 2 * shapes[i].Length;
+                }
+            }
+        }
+
+        RectTransform Safe => Node(session.UI.transform, SafePath);
+        void RefreshHud() => Invoke(session.UI, "UpdateHud", true);
+        static RectTransform Slot(Transform root, EquipmentSlot slot) => Node(root, "Weapon slot / " + slot);
+        static string LabelAt(Transform root, string path) => Node(root, path).GetComponent<Text>().text;
+        static string Values(float hp, float max) => hp.ToString("0.#", CultureInfo.InvariantCulture) + " / " + max.ToString("0.#", CultureInfo.InvariantCulture);
+        static object Invoke(object owner, string name, params object[] values) => owner.GetType().GetMethod(name, Instance).Invoke(owner, values);
+        static Vector2 ScreenPoint(RectTransform rect) => RectTransformUtility.WorldToScreenPoint(null, rect.TransformPoint(rect.rect.center));
+        static RectTransform Node(Transform root, string path)
+        {
+            // Unity treats '/' in a literal object name as a path separator in Transform.Find.
+            var node = root;
+            foreach (var name in path.Replace(" / ", "\u001f").Split('/'))
+            {
+                string child = name.Replace("\u001f", " / ");
+                node = node.Cast<Transform>().LastOrDefault(candidate => candidate.name == child);
+                Assert.That(node, Is.Not.Null, path);
+            }
+            return (RectTransform)node;
+        }
+
+        static List<RaycastResult> Hits(Vector2 position)
+        {
+            Canvas.ForceUpdateCanvases();
+            var hits = new List<RaycastResult>();
+            EventSystem.current.RaycastAll(new PointerEventData(EventSystem.current) { button = PointerEventData.InputButton.Left, position = position }, hits);
+            return hits;
+        }
+
+        static void Click(RectTransform rect) => ClickAt(rect.gameObject, ScreenPoint(rect));
+        static void ClickAt(GameObject expected, Vector2 position)
+        {
+            var hits = Hits(position);
+            Assert.That(hits.Count, Is.GreaterThan(0), expected.name);
+            var handler = ExecuteEvents.GetEventHandler<IPointerClickHandler>(hits[0].gameObject);
+            Assert.That(handler, Is.SameAs(expected));
+            var data = new PointerEventData(EventSystem.current) { button = PointerEventData.InputButton.Left, position = position, pointerId = -1 };
+            ExecuteEvents.Execute(handler, data, ExecuteEvents.pointerClickHandler);
+        }
+    }
+}

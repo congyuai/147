@@ -126,7 +126,7 @@ namespace Dustline.Tests
                 var input = owner.AddComponent<PlayerInputReader>();
                 var catalog = Resources.Load<ItemCatalog>("Dustline/Items");
                 Assert.That(catalog, Is.Not.Null, "Run Dustline > Prepare Project first.");
-                var loadout = new GridInventory(6, 6, 30, catalog);
+                var loadout = GridInventory.Carried(catalog);
                 Assert.That(loadout.TryAdd("bandage", 2, out _), Is.True);
                 Assign("Phase", SessionPhase.Raid);
                 Assign("Loadout", loadout);

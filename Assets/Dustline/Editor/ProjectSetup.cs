@@ -17,8 +17,8 @@ namespace Dustline.Editor
         const string PipelinePath = "Assets/Dustline/Settings/MobilePipeline.asset";
         const string RendererPath = "Assets/Dustline/Settings/MobileRenderer.asset";
         const string RenderingRoot = Root + "/Rendering";
-        const string Version = "0.4.2";
-        const int AndroidVersionCode = 9;
+        const string Version = "0.5.0";
+        const int AndroidVersionCode = 10;
         const int RaidRendererLayers = FirstPersonView.Mask | (1 << 29) | (1 << 30) | (1 << 2) | 1;
         static readonly string[] LitVariantAssets = { "LitBase", "LitMetal", "LitEmission", "LitMetalEmission" };
         static readonly Dictionary<string, string> ItemNames = new Dictionary<string, string> {
@@ -44,8 +44,9 @@ namespace Dustline.Editor
                 || (renderer.opaqueLayerMask.value & RaidRendererLayers) != RaidRendererLayers
                 || (renderer.transparentLayerMask.value & RaidRendererLayers) != RaidRendererLayers
                 || !PortTextureSetup.IsPrepared()
-                || catalog.Find("pack_6") == null || catalog.Find("dust_lmg")?.Weapon == null
-                || catalog.Find("rig_watch") == null || catalog.Items.Exists(item => (item.Kind == ItemKind.Rig || item.Kind == ItemKind.Pack) && item.Storage.WeightLimit <= 0f)
+                || catalog.Find("pack_6") == null || catalog.Find("pack_compact")?.Storage.Capacity != 28 || catalog.Find("dust_lmg")?.Weapon == null
+                || catalog.Find("rig_watch") == null || catalog.Items.Exists(item => (item.Kind == ItemKind.Rig || item.Kind == ItemKind.Pack) && item.Storage.WeightLimit <= 0f
+                    || item.Kind == ItemKind.Rig && (item.Storage.Pockets == null || item.Storage.Pockets.Length == 0))
                 || catalog.Find("surgery") == null || catalog.Find("part_sight_prism") == null
                 || !LitVariantsPrepared()
                 || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/Loot.asset") == null

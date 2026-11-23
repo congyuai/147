@@ -42,7 +42,7 @@ namespace Dustline.Tests
         }
 
         [TestCase(ItemKind.Rig, "rig_5 rig_4 rig_watch rig_3 rig_2 rig_1")]
-        [TestCase(ItemKind.Pack, "pack_6 pack_5 pack_patrol pack_4 pack_3 pack_2 pack_1")]
+        [TestCase(ItemKind.Pack, "pack_6 pack_5 pack_patrol pack_4 pack_3 pack_compact pack_2 pack_1")]
         [TestCase(ItemKind.Armor, "vest_6 vest_5 vest_flex vest_4 vest_3 armor vest_2 vest_1")]
         [TestCase(ItemKind.Helmet, "helmet_6 helmet_5 helmet_4 helmet_scout helmet_3 helmet_2 helmet_1")]
         public void GearShopListsOnlyTheRequestedKindInTierAndPriceOrder(ItemKind kind, string expected)
@@ -97,10 +97,11 @@ namespace Dustline.Tests
         public void RotatedObjectsAndDividersAreValidatedBeforeMovingContents()
         {
             var bag = GridInventory.Carried(catalog);
-            var rig = Add(bag, "rig_4");
-            var pack = Add(bag, "pack_6");
-            Assert.That(bag.TryEquip(rig, EquipmentSlot.Rig, out _), Is.True);
-            Assert.That(bag.TryEquip(pack, EquipmentSlot.Pack, out _), Is.True);
+            bag.Restore(new System.Collections.Generic.List<ItemStack>
+            {
+                new ItemStack { InstanceId = "equipped-rig", ItemId = "rig_4", Slot = EquipmentSlot.Rig },
+                new ItemStack { InstanceId = "equipped-pack", ItemId = "pack_6", Slot = EquipmentSlot.Pack }
+            });
             Assert.That(bag.Width, Is.EqualTo(catalog.Find("pack_6").Storage.Columns));
             Assert.That(bag.MaxWeight, Is.GreaterThan(30));
             var item = Add(bag, "part_stock");
@@ -118,8 +119,11 @@ namespace Dustline.Tests
         public void FailedBackpackRemovalPreservesAllContentsAndNotifiesNobody()
         {
             var bag = GridInventory.Carried(catalog);
-            var pack = Add(bag, "pack_6");
-            Assert.That(bag.TryEquip(pack, EquipmentSlot.Pack, out _), Is.True);
+            const string pack = "equipped-pack";
+            bag.Restore(new System.Collections.Generic.List<ItemStack>
+            {
+                new ItemStack { InstanceId = pack, ItemId = "pack_6", Slot = EquipmentSlot.Pack }
+            });
             Assert.That(bag.TryAdd("ammo_copper", bag.Width * bag.Height * catalog.Find("ammo_copper").MaxStack, out _) ||
                 bag.TryAdd("tourniquet", bag.Width * bag.Height * catalog.Find("tourniquet").MaxStack, out _), Is.True);
             var before = bag.Items.Select(item => (item.InstanceId, item.Area, item.X, item.Y, item.Rotated, item.Quantity)).ToArray();

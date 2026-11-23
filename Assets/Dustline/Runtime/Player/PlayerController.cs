@@ -134,7 +134,7 @@ namespace Dustline
         {
             if (!IsTreating) return;
             var stack = treatmentBag.Find(treatmentInstance);
-            if (!session.Input.Gameplay || session.Input.SwitchWeaponPressed || !Health.Alive
+            if (!session.Input.Gameplay || session.Input.WeaponSelectionPending || !Health.Alive
                 || treatmentBag != session.ActiveFieldBag || stack == null || stack.Quantity <= 0 || stack.ItemId != treatmentItem.Id
                 || stack.Slot != EquipmentSlot.None || (Health.Body != null ? !Health.Body.CanTreat(treatmentPart, treatmentItem.Treatment)
                     : Health.Current >= Health.Maximum))
@@ -178,7 +178,7 @@ namespace Dustline
                 transform.Rotate(0, input.Look.x, 0);
                 if (input.CrouchPressed) ToggleCrouch();
                 if (input.PronePressed) ToggleProne();
-                if (input.HealPressed && !input.SwitchWeaponPressed && !input.InteractPressed) session.TryUseMedicine(input.HealInstance, input.HealPart);
+                if (input.HealPressed && !input.WeaponSelectionPending && !input.InteractPressed) session.TryUseMedicine(input.HealInstance, input.HealPart);
             }
             Weapon.SyncHandForMovement(now);
             if (Stamina <= .01f && !sprintLocked)

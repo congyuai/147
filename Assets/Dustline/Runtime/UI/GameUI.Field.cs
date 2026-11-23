@@ -7,7 +7,7 @@ namespace Dustline
     {
         RectTransform reticleAnchor;
         TouchControl lookControl;
-        Image reticle, lifeBar, staminaBar, progressBar, fireGlyph, interactGlyph, sprintRing;
+        Image reticle, staminaBar, progressBar, fireGlyph, interactGlyph, sprintRing;
         GameObject aimButton, reloadButton, switchButton, interactButton;
         readonly DamageCue[] damageCues = new DamageCue[4];
         int damageCursor;
@@ -19,61 +19,59 @@ namespace Dustline
             internal float Born, Strength;
         }
         GameObject hintCard;
-        Text healthReadout, staminaReadout, ammoReadout, statusReadout, prompt;
+        Text staminaReadout, statusReadout, prompt, weaponMode;
         BodyFigure bodyHud;
-        readonly Text[] partHealth = new Text[BodyCondition.Count], partWound = new Text[BodyCondition.Count];
-        readonly float[] shownHp = new float[BodyCondition.Count], shownMax = new float[BodyCondition.Count];
-        readonly Injury[] shownInjury = new Injury[BodyCondition.Count];
-        BodyCondition shownBody;
-        float shownTotal = -1, shownTotalMax = -1;
+        RectTransform weaponBar, weaponStrip;
+        readonly Button[] injuryBadges = new Button[DisplayedInjuries.Length];
+        readonly Text[] injuryCounts = new Text[DisplayedInjuries.Length];
+        readonly RectTransform[] injuryGlyphs = new RectTransform[DisplayedInjuries.Length];
+        readonly int[] shownInjuryCounts = new int[DisplayedInjuries.Length];
         float hudAt, hitUntil;
+
+        static readonly (EquipmentSlot Slot, string Caption)[] FieldWeapons =
+        {
+            (EquipmentSlot.Weapon, "主武器 1"), (EquipmentSlot.PrimaryTwo, "主武器 2"), (EquipmentSlot.Sidearm, "副武器"), (EquipmentSlot.Melee, "近战")
+        };
+        const float WeaponCellWidth = 80, WeaponCellGap = 5, WeaponBarHeight = 76;
+        const float WeaponBarWidth = 4 * WeaponCellWidth + 3 * WeaponCellGap;
+        const float WeaponModelWidth = WeaponCellWidth - 8, WeaponModelHeight = 33;
+        readonly WeaponSlotView[] weaponSlots = new WeaponSlotView[FieldWeapons.Length];
+
+        sealed class WeaponSlotView
+        {
+            internal Button Button;
+            internal Image Highlight;
+            internal RawImage Model;
+            internal Text Empty, Ammo;
+            internal string ModelId;
+            internal int Look;
+        }
 
         void BuildHud()
         {
             var upperLeft = Anchor("Left HUD anchor", hud, 0, 1);
-            var vitals = HudCard(upperLeft, "Vitals", 13, 12, 322, 233);
-            const float x = 125, y = 39, w = 72, h = 149;
-            var sheet = Button(vitals, "", x - 5, y - 1, w + 10, h + 2, OpenBody);
+            var vitals = HudCard(upperLeft, "Vitals", 13, 12, 139, 172);
+            var sheet = Button(vitals, "", 2, 0, 137, 137, () => { if (!BlocksGameplay) ShowHealth(); }, false, Color.clear);
             sheet.name = "Open body condition";
-            sheet.targetGraphic.color = Color.clear;
             sheet.transition = Selectable.Transition.None;
-            healthReadout = Label(vitals, "", 19, 10, 2, 230, 27, TextAnchor.MiddleLeft);
-            var open = Button(vitals, "治疗 ›", 235, 2, 77, 27, OpenBody, false, new Color32(31, 54, 59, 242));
-            open.GetComponentInChildren<Text>().color = Aqua;
-            lifeBar = Bar(vitals, 10, 31, 302, 4, new Color32(221, 115, 82, 255));
-            var bodyHudObject = At("Body diagram", vitals, x, y, w, h).gameObject;
-            bodyHudObject.AddComponent<CanvasRenderer>();
-            bodyHud = bodyHudObject.AddComponent<BodyFigure>();
-            bodyHud.Initialize(new Color32(43, 94, 90, 255), new Color32(120, 187, 177, 255));
-            Row(BodyPart.Head, 210, 37, false);
-            Row(BodyPart.Chest, 9, 37, true);
-            Row(BodyPart.Abdomen, 9, 77, true);
-            Row(BodyPart.LeftArm, 9, 117, true);
-            Row(BodyPart.RightArm, 210, 117, false);
-            Row(BodyPart.LeftLeg, 9, 157, true);
-            Row(BodyPart.RightLeg, 210, 157, false);
-            Fill(At("Stamina divider", vitals, 10, 196, 302, 1), Border);
-            staminaReadout = Label(vitals, "", 17, 10, 197, 176, 28, TextAnchor.MiddleLeft, Muted);
-            staminaBar = Bar(vitals, 185, 209, 127, 6, Aqua);
-            var ammo = HudCard(upperLeft, "Ammunition status", 13, 251, 322, 49);
-            ammoReadout = Label(ammo, "", 17, 10, 2, 302, 44, TextAnchor.MiddleLeft, Amber);
-
-            void OpenBody() { if (!BlocksGameplay) ShowHealth(); }
-
-            void Row(BodyPart part, float left, float top, bool onLeft)
+            bodyHud = CreateBodyFigure(vitals, "Body diagram", 38, 4, 63, 131);
+            bodyHud.Initialize(part => { if (!BlocksGameplay) ShowHealth(part); });
+            var summary = At("Injury summary", vitals, 90, 102, DisplayedInjuries.Length * 38, 30);
+            for (int i = 0; i < DisplayedInjuries.Length; i++)
             {
-                var pin = BodyFigure.Pin(part, x, y, w, h);
-                var end = new Vector2(onLeft ? left + 104 : left - 3, top + 12);
-                var bend = new Vector2(onLeft ? x - 6 : x + w + 6, top + 12);
-                Stroke(vitals, "Body leader / " + part, end, bend, 1f, Border);
-                Stroke(vitals, "Body leader / " + part, bend, pin, 1f, Border);
-                int index = (int)part;
-                partHealth[index] = Label(vitals, "", 15, left, top, 110, 23, TextAnchor.MiddleLeft);
-                partHealth[index].name = "Region health / " + part;
-                partWound[index] = Label(vitals, "", 13, left, top + 21, 110, 16, TextAnchor.MiddleLeft, Amber);
-                partWound[index].verticalOverflow = VerticalWrapMode.Overflow;
-                partWound[index].name = "Region injury / " + part;
+                var injury = DisplayedInjuries[i];
+                var badge = InjuryButton(summary, injury, 0, 0, 34, 30, () => SelectInjuryFromHud(injury));
+                injuryBadges[i] = badge;
+                injuryGlyphs[i] = (RectTransform)badge.transform.GetChild(0);
+                var count = Label(badge.transform, "", 14, 20, 7, 13, 19, TextAnchor.MiddleCenter, Pale);
+                count.name = "Injury count";
+                injuryCounts[i] = count;
+                badge.gameObject.SetActive(false);
             }
+            Fill(At("Stamina divider", vitals, 8, 138, 123, 1), Border);
+            staminaReadout = Label(vitals, "", 14, 8, 140, 123, 20, TextAnchor.MiddleLeft, Muted);
+            staminaReadout.name = "Stamina value";
+            staminaBar = Bar(vitals, 8, 164, 123, 4, Aqua);
 
             var upperRight = Anchor("Right HUD anchor", hud, 1, 1);
             miniMap = CreateMap(upperRight, -197, 18, 179, true, false);
@@ -92,11 +90,103 @@ namespace Dustline
             }
 
             var bottom = Anchor("Interaction anchor", hud, 0.5f, 0);
-            var interaction = HudCard(bottom, "Interaction status", -234, -315, 468, 67);
+            var interaction = HudCard(bottom, "Interaction status", -234, -259, 468, 67);
             prompt = Label(interaction, "", 21, 12, 7, 444, 45, TextAnchor.MiddleCenter);
             progressBar = Bar(interaction, 14, 53, 440, 5, Aqua);
             hintCard = interaction.gameObject;
             hintCard.SetActive(false);
+        }
+
+        void BuildWeaponBar()
+        {
+            weaponBar = Stretch("Weapon bar", safe);
+            weaponStrip = Anchor("Weapon slots", weaponBar, .5f, 0);
+            weaponStrip.pivot = new Vector2(.5f, 0);
+            weaponStrip.anchoredPosition = new Vector2(0, 10);
+            weaponStrip.sizeDelta = new Vector2(WeaponBarWidth, WeaponBarHeight);
+            weaponMode = Label(weaponStrip, "", 13, 0, -22, WeaponBarWidth, 20, TextAnchor.MiddleCenter, Pale);
+            weaponMode.name = "Weapon mode";
+            weaponMode.gameObject.AddComponent<Outline>().effectColor = Ink;
+            for (int i = 0; i < FieldWeapons.Length; i++)
+            {
+                var entry = FieldWeapons[i];
+                var button = Button(weaponStrip, "", i * (WeaponCellWidth + WeaponCellGap), 0, WeaponCellWidth, WeaponBarHeight,
+                    () => SelectFieldWeapon(entry.Slot));
+                button.name = "Weapon slot / " + entry.Slot;
+                Label(button.transform, entry.Caption, 13, 3, 3, WeaponCellWidth - 6, 18, TextAnchor.MiddleCenter, Pale);
+                var highlight = Fill(At("Active slot", button.transform, 0, 0, WeaponCellWidth, 2), Amber);
+                var model = ItemIcon(button.transform, "Item model", 1, 4, 22, WeaponModelWidth, WeaponModelHeight, false);
+                SetActive(model.gameObject, false);
+                var empty = Label(button.transform, "空槽", 15, 3, 22, WeaponCellWidth - 6, WeaponModelHeight, TextAnchor.MiddleCenter, Muted);
+                var ammo = Label(button.transform, "", 15, 3, 55, WeaponCellWidth - 6, 18, TextAnchor.MiddleCenter);
+                ammo.name = "Weapon ammunition";
+                weaponSlots[i] = new WeaponSlotView { Button = button, Highlight = highlight, Model = model, Empty = empty, Ammo = ammo };
+            }
+        }
+
+        void SelectFieldWeapon(EquipmentSlot slot)
+        {
+            if (!BlocksGameplay && session.Player?.Weapon.SelectSlot(slot) == true) UpdateHud(true);
+        }
+
+        void UpdateWeaponBar(WeaponController weapon)
+        {
+            var bag = session.ActiveFieldBag;
+            var catalog = session.Catalog;
+            int selectable = 0;
+            string activeName = "";
+            for (int i = 0; i < weaponSlots.Length; i++)
+            {
+                var slot = FieldWeapons[i].Slot;
+                var view = weaponSlots[i];
+                var stack = bag.Equipped(slot);
+                var definition = catalog.Find(stack?.ItemId);
+                var blade = slot == EquipmentSlot.Melee && stack == null ? session.BoundBlade : null;
+                bool available = definition?.Weapon != null || blade != null;
+                bool active = available && weapon.ActiveSlot == slot;
+                if (available) selectable++;
+                if (active) activeName = definition?.DisplayName ?? session.BoundBladeName;
+                view.Button.interactable = available;
+                view.Button.targetGraphic.color = active ? new Color32(82, 64, 37, 247)
+                    : available ? new Color32(24, 37, 42, 235) : new Color32(15, 24, 28, 196);
+                SetActive(view.Highlight.gameObject, active);
+                SetActive(view.Empty.gameObject, !available);
+                SetActive(view.Model.gameObject, available);
+                string modelId = available ? definition?.Id ?? blade.Form.ToString() : null;
+                int look = available ? WeaponRules.Look(stack, catalog) : 0;
+                if (view.ModelId != modelId || view.Look != look)
+                {
+                    view.ModelId = modelId;
+                    view.Look = look;
+                    if (!available) itemIcons.Unbind(view.Model);
+                    else
+                    {
+                        float aspect = ItemIconCache.Aspect(definition);
+                        float size = Mathf.Min(WeaponModelWidth / aspect, WeaponModelHeight);
+                        view.Model.rectTransform.sizeDelta = new Vector2(size * aspect, size);
+                        view.Model.name = "Item model / " + modelId;
+                        itemIcons.Bind(view.Model, definition, stack, catalog, blade != null ? blade.Form : default);
+                    }
+                }
+                view.Ammo.text = !available ? "" : definition?.Weapon != null && !definition.Weapon.Melee
+                    ? (active && weapon.Magazine != null ? weapon.Magazine.Rounds : Mathf.Max(0, stack.LoadedAmmo)) + " / " + weapon.ReserveFor(stack)
+                    : blade != null ? "绑定" : "近战";
+                view.Ammo.color = active ? Amber : Pale;
+            }
+            weaponMode.text = weapon.Magazine == null ? activeName : activeName + " · "
+                + (weapon.Magazine.Reloading ? "正在换弹" : weapon.Automatic ? "自动" : "单发")
+                + " · " + (catalog.Find(weapon.ReadyAmmoType)?.DisplayName ?? "无兼容备弹");
+            float fit = session.Input.TouchMode ? Mathf.Clamp((safe.rect.width * .29f - 86f) / WeaponBarWidth, .55f, 1f) : 1f;
+            weaponStrip.localScale = Vector3.one * fit;
+            if (session.Input.TouchMode)
+            {
+                var legacy = (RectTransform)switchButton.transform;
+                Vector2 legacyOrigin = safe.InverseTransformPoint(legacy.TransformPoint(legacy.rect.min));
+                Vector2 barOrigin = safe.InverseTransformPoint(weaponStrip.TransformPoint(weaponStrip.rect.min));
+                var barBounds = new Rect(barOrigin, new Vector2(WeaponBarWidth, WeaponBarHeight + 22f) * fit);
+                bool overlap = new Rect(legacyOrigin, legacy.rect.size).Overlaps(barBounds);
+                SetActive(switchButton, selectable > 1 && !overlap);
+            }
         }
 
         RectTransform HudCard(Transform parent, string title, float x, float y, float w, float h)
@@ -133,7 +223,6 @@ namespace Dustline
                 bool firearm = weapon.Magazine != null;
                 SetActive(aimButton, firearm);
                 SetActive(reloadButton, firearm);
-                SetActive(switchButton, session.ActiveFieldBag.Equipped(EquipmentSlot.Weapon) != null);
                 SetActive(interactButton, session.Phase == SessionPhase.Raid);
                 var interactionIcon = icons[player.LookingAtDoor ? RaidIcon.InteractDoor : RaidIcon.Search];
                 if (interactGlyph.sprite != interactionIcon) interactGlyph.sprite = interactionIcon;
@@ -153,19 +242,17 @@ namespace Dustline
             hudAt = Time.unscaledTime + 0.09f;
             UpdateMedicineButton(player);
 
-            UpdateBodyHud(player.Health, force);
+            UpdateBodyHud(player.Health.Body);
+            UpdateWeaponBar(weapon);
             staminaReadout.text = "体力  " + Mathf.CeilToInt(player.Stamina) + " / 100" + (player.SprintExhausted ? " 步行" : "");
             SetBar(staminaBar, player.Stamina * 0.01f);
-            ammoReadout.text = weapon.IsMelee ? (weapon.ActiveIsBound ? session.BoundBladeName + " / 随身刀" : "检修短棍 / 近战")
-                : weapon.Magazine == null ? "未装备主武器" : weapon.Magazine.Reloading ? "正在换弹"
-                : weapon.Magazine.Rounds + " / " + weapon.Reserve + (weapon.Automatic ? "  自动" : "  单发")
-                    + "\n" + (session.Catalog.Find(weapon.ReadyAmmoType)?.DisplayName ?? "无兼容备弹");
 
             if (session.Phase == SessionPhase.Practice)
             {
                 var range = session.Practice;
                 statusReadout.text = "离线靶场 / " + Mathf.RoundToInt(sampledFps) + " 帧\n开火 " + range.Shots + " / 命中 " + range.Hits + "\n击倒靶板 " + range.Plates;
-                SetFieldPrompt(player.IsTreating ? TreatmentPrompt(player) : null, player.IsTreating, player.TreatmentProgress);
+                string hint = session.Input.TouchMode ? "点地图或背包打开靶场控制" : "Tab 或 M 打开靶场控制";
+                SetFieldPrompt(player.IsTreating ? TreatmentPrompt(player) : hint, player.IsTreating, player.TreatmentProgress);
                 return;
             }
 
@@ -211,52 +298,41 @@ namespace Dustline
             SetFieldPrompt(prompt.text, inZone != null || player.IsTreating || player.SearchingLoot != null, progress);
         }
 
-        void UpdateBodyHud(Health health, bool force)
+        void UpdateBodyHud(BodyCondition body)
         {
-            var body = health.Body;
-            bool refresh = force || body != shownBody;
-            shownBody = body;
-            float total = body?.Total ?? health.Current, max = body?.TotalMaximum ?? health.Maximum;
-            if (refresh || total != shownTotal || max != shownTotalMax)
+            bodyHud.SetCondition(body);
+            int column = 0;
+            for (int i = 0; i < DisplayedInjuries.Length; i++)
             {
-                healthReadout.text = "总健康  " + VitalsValue(total, max);
-                shownTotal = total; shownTotalMax = max;
-                SetBar(lifeBar, max > 0f ? total / max : 0f);
+                var injury = DisplayedInjuries[i];
+                int count = 0;
+                for (int j = 0; j < BodyCondition.Count; j++)
+                    if ((VisibleInjuries(body, (BodyPart)j) & injury) != 0) count++;
+                var badge = injuryBadges[i];
+                SetActive(badge.gameObject, count > 0);
+                if (count > 0) ((RectTransform)badge.transform).anchoredPosition = new Vector2(38 * column++, 0);
+                if (shownInjuryCounts[i] == count) continue;
+                shownInjuryCounts[i] = count;
+                injuryCounts[i].text = count > 1 ? count.ToString() : "";
+                injuryGlyphs[i].anchoredPosition = count > 1 ? new Vector2(-5, 0) : Vector2.zero;
             }
+        }
+
+        void SelectInjuryFromHud(Injury injury)
+        {
+            if (BlocksGameplay) return;
+            var body = session.Player?.Health.Body;
             for (int i = 0; i < BodyCondition.Count; i++)
             {
                 var part = (BodyPart)i;
-                float hp = body?.Current(part) ?? 0f, cap = body?.Maximum(part) ?? 0f;
-                var flags = body?.Injuries(part) ?? Injury.None;
-                if (!refresh && shownHp[i] == hp && shownMax[i] == cap && shownInjury[i] == flags) continue;
-                shownHp[i] = hp; shownMax[i] = cap; shownInjury[i] = flags;
-                partHealth[i].text = BodyCondition.Name(part) + " " + (body == null ? "— / —" : VitalsValue(hp, cap));
-                string wound = FieldWound(flags);
-                partWound[i].text = wound;
-                bool broken = (flags & Injury.Destroyed) != 0;
-                bool critical = broken || (flags & Injury.HeavyBleed) != 0;
-                bool injured = body != null && (hp < cap - .001f || flags != Injury.None);
-                bodyHud.SetTone(part, broken ? new Color32(104, 35, 36, 255) : critical ? new Color32(199, 75, 61, 255)
-                    : injured ? new Color32(178, 116, 47, 255) : new Color32(43, 94, 90, 255));
-                partHealth[i].color = critical ? new Color32(255, 148, 129, 255) : injured ? new Color32(255, 207, 136, 255) : Pale;
-                partWound[i].color = critical ? new Color32(255, 148, 129, 255) : Amber;
+                if ((VisibleInjuries(body, part) & injury) == 0) continue;
+                ShowHealth(part, firstInjury: injury);
+                break;
             }
         }
 
         static string VitalsValue(float current, float max) => current.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)
             + " / " + max.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
-
-        static string FieldWound(Injury flags)
-        {
-            bool destroyed = (flags & Injury.Destroyed) != 0;
-            bool fractured = (flags & Injury.Fracture) != 0;
-            string bleed = (flags & Injury.HeavyBleed) != 0 ? "重度出血" : (flags & Injury.LightBleed) != 0 ? "轻度出血" : "";
-            if (destroyed && fractured && bleed.Length > 0) return (bleed == "重度出血" ? "重血" : "轻血") + " 骨折 损毁";
-            string text = destroyed ? "损毁" : "";
-            if (bleed.Length > 0) text += (text.Length > 0 ? " " : "") + bleed;
-            if (fractured) text += (text.Length > 0 ? " " : "") + "骨折";
-            return text;
-        }
 
         static string TreatmentPrompt(PlayerController player) => player.TreatmentItem.DisplayName + " / " + BodyCondition.Name(player.TreatmentPart);
 
@@ -326,7 +402,7 @@ namespace Dustline
             AddTouchSlot("Inventory", "背包", RaidIcon.Bag, 0.795f, 0.066f, 66f);
             AddTouchSlot("LeanLeft", "向左探头", RaidIcon.LeanLeft, 0.181f, 0.362f, 66f);
             AddTouchSlot("LeanRight", "向右探头", RaidIcon.LeanRight, 0.256f, 0.362f, 66f);
-            AddTouchSlot("SwitchWeapon", "切换主武器和随身刀", RaidIcon.Switch, 0.811f, 0.458f, 72f);
+            AddTouchSlot("SwitchWeapon", "轮换武器", RaidIcon.Switch, 0.811f, 0.458f, 72f);
             AddTouchSlot("Settings", "设置", RaidIcon.Gear, 0.944f, 0.545f, 65f);
             AddTouchSlot("Map", "大地图", RaidIcon.Map, 0.944f, 0.652f, 67f);
             AddTouchSlot("Health", "分部位健康", RaidIcon.Health, 0.077f, 0.514f, 68f);

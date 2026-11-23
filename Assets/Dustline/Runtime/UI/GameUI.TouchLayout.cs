@@ -137,8 +137,9 @@ namespace Dustline
 
         void ShowTouchLayout(bool field)
         {
+            if (field ? !session.InField : session.Phase != SessionPhase.Menu) return;
             var panel = Display(ScreenPage.TouchLayout, "Touch layout");
-            Header(panel, "自定义键位", "拖动图标到合适位置，再调整大小和透明度");
+            Header(panel, "自定义键位", "拖动图标调整位置、大小和透明度 · 返回不会保存更改");
             float ratio = safe.rect.width / Mathf.Max(1f, safe.rect.height);
             float width = Mathf.Min(860f, 442f * Mathf.Clamp(ratio, 1.2f, 3.4f));
             float height = Mathf.Min(442f, width / Mathf.Clamp(ratio, 1.2f, 3.4f));
@@ -161,7 +162,6 @@ namespace Dustline
                 SelectLayoutSlot(layoutSelection);
             });
             SelectLayoutSlot(touchSlots[0]);
-            Button(panel, "取消", 26, 615, 132, 49, () => ShowSettings(field, true));
             Button(panel, "保存并返回", 1014, 615, 198, 49, () =>
             {
                 var values = new LayoutEntry[touchSlots.Count];
@@ -169,7 +169,7 @@ namespace Dustline
                 PlayerPrefs.SetString(TouchLayoutKey, JsonUtility.ToJson(new LayoutSettings { Entries = values }));
                 PlayerPrefs.Save();
                 ApplyTouchLayout();
-                ShowSettings(field, true);
+                BackOrSettings();
             }, true);
         }
 

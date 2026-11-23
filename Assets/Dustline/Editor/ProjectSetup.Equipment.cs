@@ -72,6 +72,8 @@ namespace Dustline.Editor
             watch.Storage = new StorageSpec { Columns = 4, Rows = 3, CarryBonus = 4f, WeightLimit = 11f };
             var patrol = Gear("pack_patrol", "巡线背包 · 4 级", ItemKind.Pack, 4, 2, 3, 1.4f, 172);
             patrol.Storage = new StorageSpec { Columns = 5, Rows = 7, CarryBonus = 15, WeightLimit = 34f };
+            var compact = Gear("pack_compact", "轻行背包 · 2 级", ItemKind.Pack, 2, 2, 3, 1.1f, 110);
+            compact.Storage = new StorageSpec { Columns = 7, Rows = 4, CarryBonus = 7f, WeightLimit = 26f };
             var metro = Gear("vest_flex", "轻纤防弹衣 · 4 级", ItemKind.Armor, 4, 2, 3, 3.2f, 290);
             metro.Coverage = BodyCoverage.Chest; metro.Durability = 88; metro.DamageReduction = .60f;
 
@@ -82,6 +84,22 @@ namespace Dustline.Editor
             Med("splint", "夹板", MedicineForm.Splint, TreatmentKind.Fracture, 2, 0, 2.45f);
             Med("pain_tabs", "止痛药", MedicineForm.Tablets, TreatmentKind.Pain, 3, 45, 1.4f);
             Med("surgery", "手术包", MedicineForm.Surgery, TreatmentKind.Surgery, 2, 0, 5.8f);
+            foreach (var item in catalog.Items)
+            {
+                if (item.Kind != ItemKind.Rig) continue;
+                var spec = item.Storage;
+                var pockets = new System.Collections.Generic.List<CargoPocket>();
+                int left = spec.Rows > 1 ? (spec.Split > 0 ? spec.Split : 1) : 0;
+                for (int x = 0; x < left; x++)
+                    for (int y = 0; y < spec.Rows; y += 2)
+                        pockets.Add(new CargoPocket(x, y, 1, System.Math.Min(2, spec.Rows - y)));
+                for (int y = 0; y < spec.Rows; y++)
+                    for (int x = left; x < spec.Columns; x += 2)
+                        pockets.Add(new CargoPocket(x, y, System.Math.Min(2, spec.Columns - x), 1));
+                spec.Pockets = pockets.ToArray();
+                item.Storage = spec;
+                EditorUtility.SetDirty(item);
+            }
             catalog.RebuildIndex();
 
             ItemDefinition Need(string id, string title, ItemKind kind, int w, int h, int stack, float weight, int value, Color tint)

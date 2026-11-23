@@ -18,10 +18,52 @@ namespace Dustline
     public enum PartSlot { Sight, Grip, Stock, Muzzle, Magazine }
 
     [System.Serializable]
+    public struct CargoPocket
+    {
+        public int X, Y, Width, Height;
+
+        public CargoPocket(int x, int y, int width, int height)
+        {
+            X = x; Y = y; Width = width; Height = height;
+        }
+
+        public bool Contains(int x, int y, int width, int height) => x >= X && y >= Y
+            && x <= X + Width - width && y <= Y + Height - height;
+    }
+
+    [System.Serializable]
     public struct StorageSpec
     {
         public int Columns, Rows, Split;
         public float CarryBonus, WeightLimit;
+        public CargoPocket[] Pockets;
+
+        public int Capacity
+        {
+            get
+            {
+                if (Pockets == null || Pockets.Length == 0) return Columns * Rows;
+                int count = 0;
+                foreach (var pocket in Pockets) count += pocket.Width * pocket.Height;
+                return count;
+            }
+        }
+
+        public int GroupAt(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= Columns || y >= Rows) return -1;
+            if (Pockets == null || Pockets.Length == 0) return Split > 0 && x >= Split ? 1 : 0;
+            for (int i = 0; i < Pockets.Length; i++) if (Pockets[i].Contains(x, y, 1, 1)) return i;
+            return -1;
+        }
+
+        internal bool Fits(int x, int y, int w, int h)
+        {
+            if (x < 0 || y < 0 || x > Columns - w || y > Rows - h) return false;
+            if (Pockets == null || Pockets.Length == 0) return Split == 0 || x >= Split || x + w <= Split;
+            foreach (var pocket in Pockets) if (pocket.Contains(x, y, w, h)) return true;
+            return false;
+        }
     }
 
     [System.Serializable]
@@ -37,7 +79,15 @@ namespace Dustline
     {
         None,
         Weapon,
-        Armor, Helmet, Rig, Pack
+        Armor, Helmet, Rig, Pack,
+        PrimaryTwo, Sidearm, Melee
+    }
+
+    internal static class LoadoutSlots
+    {
+        internal static readonly EquipmentSlot[] Hands = { EquipmentSlot.Weapon, EquipmentSlot.PrimaryTwo, EquipmentSlot.Sidearm, EquipmentSlot.Melee };
+        internal static bool IsHand(EquipmentSlot slot) => slot == EquipmentSlot.Weapon || slot == EquipmentSlot.PrimaryTwo
+            || slot == EquipmentSlot.Sidearm || slot == EquipmentSlot.Melee;
     }
 
     [CreateAssetMenu(menuName = "Dustline/Item Definition")]
@@ -80,7 +130,8 @@ namespace Dustline
 
         public EquipmentSlot Equipment => Kind switch
         {
-            ItemKind.Weapon => EquipmentSlot.Weapon,
+            ItemKind.Weapon => Weapon != null && Weapon.Melee ? EquipmentSlot.Melee
+                : Weapon != null && Weapon.Form == WeaponForm.Pistol ? EquipmentSlot.Sidearm : EquipmentSlot.Weapon,
             ItemKind.Armor => EquipmentSlot.Armor,
             ItemKind.Helmet => EquipmentSlot.Helmet,
             ItemKind.Rig => EquipmentSlot.Rig,

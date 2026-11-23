@@ -45,6 +45,7 @@ namespace Dustline.Tests
                 File.Delete(store.Path);
                 File.Delete(store.LegacyBackupPath);
                 File.Delete(store.UpgradeBackupPath);
+                File.Delete(store.LoadoutUpgradeBackupPath);
             }
             yield return null;
             QualitySettings.renderPipeline = previousPipeline;
@@ -275,7 +276,7 @@ namespace Dustline.Tests
         public IEnumerator LegacySaveMigratesInPlaceAndKeepsSelectedAndPurchasedUpgrades()
         {
             CreateSession(true);
-            Assert.That(session.Profile.Version, Is.EqualTo(2));
+            Assert.That(session.Profile.Version, Is.EqualTo(ProfileData.CurrentVersion));
             Assert.That(session.Profile.Credits, Is.EqualTo(777));
             Assert.That(session.Profile.Raids, Is.EqualTo(4));
             Assert.That(session.BoundBladeId, Is.EqualTo(BladeCatalog.ShortBladeId));
@@ -285,13 +286,46 @@ namespace Dustline.Tests
             Assert.That(rifle.Mods.Grip, Is.EqualTo(1));
             Assert.That(rifle.Mods.OwnedGrip, Is.EqualTo(2));
             Assert.That(rifle.Mods.Sight, Is.EqualTo(1));
-            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.UpgradeBackupPath));
+            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.LoadoutUpgradeBackupPath));
             Assert.That(session.Stash.Count("medkit"), Is.EqualTo(1));
             Assert.That(Invoke(session, "SelectWeaponPart", session.Loadout, rifle.InstanceId, WeaponModSlot.Grip, 2), Is.EqualTo(true));
             Assert.That(session.Profile.Credits, Is.EqualTo(777));
             Assert.That(store.Load().Loadout.Find(x => x.InstanceId == rifle.InstanceId).Mods.Grip, Is.EqualTo(2));
-            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.UpgradeBackupPath));
+            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.LoadoutUpgradeBackupPath));
             yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator MigratedSuppliesStayHomeDuringDeploymentAndSurviveAnUnsuccessfulRaid()
+        {
+            CreateSession(legacy: true);
+            var medicine = new ItemStack { InstanceId = "home-only-medkit", ItemId = "medkit", Area = CargoArea.Legacy, X = 2, Y = 2, UsesSpent = 1 };
+            var prepared = session.Loadout.Snapshot();
+            prepared.Add(medicine);
+            session.Loadout.Restore(prepared);
+            session.PersistSafeState();
+            var supplies = session.Loadout.Find(medicine.InstanceId);
+            session.StartRaid();
+            for (int i = 0; i < 60 && session.Phase == SessionPhase.Loading; i++) yield return null;
+            Assert.That(session.Phase, Is.EqualTo(SessionPhase.Raid), session.Error);
+            Assert.That(session.ActiveFieldBag.Find(medicine.InstanceId), Is.Null);
+            var home = store.Load();
+            Assert.That(home.RaidInProgress, Is.True);
+            Assert.That(home.Loadout.TrueForAll(item => item.Area == CargoArea.Legacy && item.Slot == EquipmentSlot.None), Is.True);
+            var stored = home.Loadout.Find(item => item.InstanceId == medicine.InstanceId);
+            Assert.That(stored, Is.Not.Null);
+            Assert.That(stored.UsesSpent, Is.EqualTo(supplies.UsesSpent));
+
+            session.EndRaid(false, "验收隔离档");
+            Assert.That(session.Phase, Is.EqualTo(SessionPhase.Results), session.Error);
+            Assert.That(session.Loadout.Equipped(EquipmentSlot.Weapon), Is.Null);
+            home = store.Load();
+            Assert.That(home.RaidInProgress, Is.False);
+            var recovered = home.Loadout.Find(item => item.InstanceId == medicine.InstanceId);
+            Assert.That(recovered, Is.Not.Null);
+            Assert.That((recovered.Area, recovered.X, recovered.Y, recovered.UsesSpent),
+                Is.EqualTo((CargoArea.Legacy, medicine.X, medicine.Y, medicine.UsesSpent)));
+            session.ReturnToMenu();
         }
 
         [UnityTest]
@@ -332,6 +366,7 @@ namespace Dustline.Tests
             Assert.That(session.Player, Is.SameAs(player));
             Assert.That(player.Weapon.Magazine.Rounds, Is.EqualTo(3));
             CollectionAssert.AreEqual(deployed, File.ReadAllBytes(store.Path));
+            yield return null;
             session.UI.BackOrSettings();
             Click("退出本局");
             Click("确认退出");
@@ -345,7 +380,7 @@ namespace Dustline.Tests
             Assert.That(after.BoundBladeId, Is.EqualTo(BladeCatalog.ShortBladeId));
             Assert.That(after.Extractions, Is.EqualTo(2));
             Assert.That(after.Raids, Is.EqualTo(5));
-            Click("返回大厅");
+            Click("‹ 返回");
             Assert.That(session.Phase, Is.EqualTo(SessionPhase.Menu));
             Assert.That(session.Player, Is.Null);
 
@@ -407,8 +442,10 @@ namespace Dustline.Tests
                 rifle.Parts.Magazine = new PartLink { ItemId = "part_mag_a", InstanceId = "raid-magazine" };
             }
             Assert.That(loadout.TryAdd("ammo", 18, out _), Is.True);
-            store.Save(new ProfileData { Version = legacy ? 1 : 2, Credits = 777, Raids = 4, Extractions = 2, BoundBladeId = BladeCatalog.ShortBladeId,
-                Loadout = loadout.Snapshot(), Stash = stash.Snapshot() });
+            var carried = loadout.Snapshot();
+            if (!legacy) carried.Find(item => item.ItemId == "ammo").Area = CargoArea.Pockets;
+            store.Save(new ProfileData { Version = legacy ? 1 : ProfileData.CurrentVersion, Credits = 777, Raids = 4, Extractions = 2, BoundBladeId = BladeCatalog.ShortBladeId,
+                Loadout = carried, Stash = stash.Snapshot() });
             originalBytes = File.ReadAllBytes(store.Path);
             host = new GameObject("Isolated practice test session");
             host.SetActive(false);
