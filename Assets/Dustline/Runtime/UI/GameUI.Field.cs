@@ -41,7 +41,9 @@ namespace Dustline
             var open = Button(vitals, "治疗 ›", 235, 2, 77, 27, OpenBody, false, new Color32(31, 54, 59, 242));
             open.GetComponentInChildren<Text>().color = Aqua;
             lifeBar = Bar(vitals, 10, 31, 302, 4, new Color32(221, 115, 82, 255));
-            bodyHud = At("Body diagram", vitals, x, y, w, h).gameObject.AddComponent<BodyFigure>();
+            var bodyHudObject = At("Body diagram", vitals, x, y, w, h).gameObject;
+            bodyHudObject.AddComponent<CanvasRenderer>();
+            bodyHud = bodyHudObject.AddComponent<BodyFigure>();
             bodyHud.Initialize(new Color32(43, 94, 90, 255), new Color32(120, 187, 177, 255));
             Row(BodyPart.Head, 210, 37, false);
             Row(BodyPart.Chest, 9, 37, true);

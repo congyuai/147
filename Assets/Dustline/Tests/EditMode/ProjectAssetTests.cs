@@ -120,11 +120,21 @@ namespace Dustline.Tests
         [Test]
         public void BuildVersionAdvancesWithoutChangingSaveIdentity()
         {
-            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.4.1"));
-            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(8));
+            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.4.2"));
+            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(9));
             Assert.That(PlayerSettings.companyName, Is.EqualTo("Dustline"));
             Assert.That(PlayerSettings.productName, Is.EqualTo("Dustline Extraction"));
             Assert.That(PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android), Is.EqualTo("com.dustline.extraction"));
+        }
+
+        [TestCase("com.unity.render-pipelines.core")]
+        [TestCase("com.unity.render-pipelines.universal")]
+        [TestCase("com.unity.shadergraph")]
+        public void EditorLoadsExpectedGraphicsPackage(string name)
+        {
+            var package = System.Array.Find(UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages(), item => item.name == name);
+            Assert.That(package, Is.Not.Null, name);
+            Assert.That(package.version, Is.EqualTo("14.0.12"), name);
         }
 
         [TestCase("rifle", "AR-20突击步枪")]

@@ -167,7 +167,9 @@ namespace Dustline
             Label(root, "负重 " + carried.Weight.ToString("0.0") + " / " + carried.MaxWeight.ToString("0.#") + " 千克",
                 17, 177, 3, width - 190, 31, TextAnchor.MiddleRight, Muted);
             float bodyX = width * .5f - 52, outer = Mathf.Min(246f, Mathf.Floor((width - 134) * .5f));
-            var figure = At("Equipment silhouette", root, bodyX, 38, 104, 183).gameObject.AddComponent<BodyFigure>();
+            var figureObject = At("Equipment silhouette", root, bodyX, 38, 104, 183).gameObject;
+            figureObject.AddComponent<CanvasRenderer>();
+            var figure = figureObject.AddComponent<BodyFigure>();
             figure.Initialize(Plate, new Color32(75, 106, 109, 255));
             float r = width - outer - 12;
             Draw(EquipmentSlot.Helmet, 12, 42, outer, 60, BodyPart.Head, true);
@@ -267,6 +269,7 @@ namespace Dustline
         {
             int columns = bag.Columns(area), rows = bag.Rows(area);
             var board = At("Item grid", root, left, top, columns * cell, rows * cell);
+            board.gameObject.AddComponent<CanvasRenderer>();
             var drops = board.gameObject.AddComponent<InventoryBoard>();
             drops.Bag = bag;
             drops.Area = area;
@@ -335,6 +338,7 @@ namespace Dustline
                 Label(box.transform, "空槽", 14, 7, slot == EquipmentSlot.Weapon ? 71 : 26, textArea, 22, TextAnchor.MiddleLeft, Muted);
                 var empty = At("Empty equipment outline", box.transform, slot == EquipmentSlot.Weapon ? w * .27f : w - 59,
                     slot == EquipmentSlot.Weapon ? 29 : 7, slot == EquipmentSlot.Weapon ? w * .57f : 53, slot == EquipmentSlot.Weapon ? 54 : h - 14);
+                empty.gameObject.AddComponent<CanvasRenderer>();
                 empty.gameObject.AddComponent<GearOutline>().Initialize(slot, new Color32(114, 148, 150, 255));
                 return;
             }
@@ -749,6 +753,7 @@ namespace Dustline
             rect.localRotation = Quaternion.Euler(0, 0, turn ? -90f : 0f);
             float fit = Mathf.Min((turn ? h : w) / aspect, turn ? w : h);
             rect.sizeDelta = new Vector2(aspect * fit, fit);
+            rect.gameObject.AddComponent<CanvasRenderer>();
             var image = rect.gameObject.AddComponent<CachedItemImage>();
             image.raycastTarget = false;
             return image;

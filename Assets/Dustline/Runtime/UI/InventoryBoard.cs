@@ -46,7 +46,7 @@ namespace Dustline
         {
             if (footprint == null)
             {
-                var overlay = new GameObject("Drop footprint", typeof(RectTransform));
+                var overlay = new GameObject("Drop footprint", typeof(RectTransform), typeof(CanvasRenderer));
                 var rect = (RectTransform)overlay.transform;
                 rect.SetParent(transform, false);
                 rect.anchorMin = Vector2.zero; rect.anchorMax = Vector2.one;

@@ -63,6 +63,7 @@ namespace Dustline.Tests
             Assert.That(Active(contents, "Item details"), Is.False);
 
             var grid = Node(storage, "Item grid").GetComponent<InventoryBoard>();
+            Assert.That(grid.GetComponent<CanvasRenderer>(), Is.Not.Null);
             float cell = ((RectTransform)grid.transform).rect.width / 12f;
             Assert.That(((RectTransform)grid.transform).rect.height, Is.EqualTo(10 * cell).Within(.02));
             Assert.That(((RectTransform)grid.transform.parent.parent).rect.width, Is.GreaterThanOrEqualTo(12 * cell));
@@ -92,6 +93,7 @@ namespace Dustline.Tests
             drag.position = destination;
             ExecuteEvents.Execute(grab.gameObject, drag, ExecuteEvents.dragHandler);
             var footprint = Node(grid.transform, "Drop footprint").GetComponent<Graphic>();
+            Assert.That(footprint.GetComponent<CanvasRenderer>(), Is.Not.Null);
             Assert.That((int)Field(footprint, "right") - (int)Field(footprint, "left"), Is.EqualTo(4));
             Assert.That((int)Field(footprint, "bottom") - (int)Field(footprint, "top"), Is.EqualTo(2));
             Click(page, "旋转物品 90°");
@@ -122,6 +124,10 @@ namespace Dustline.Tests
             yield return null;
             var page = Panel("Gunsmith");
             var surface = Node(page, "Workshop model viewport");
+            var highlight = surface.Find("Selected model part");
+            Assert.That(highlight, Is.Not.Null);
+            Assert.That(highlight.GetComponent<CanvasRenderer>(), Is.Not.Null);
+            Assert.That(highlight.gameObject.activeSelf, Is.False);
             var marker = Node(surface, "Part hotspot / Magazine");
             var art = Node(surface, "Rotatable weapon").GetComponent<RawImage>();
             Assert.That(art.texture is RenderTexture target && target.IsCreated(), Is.True);

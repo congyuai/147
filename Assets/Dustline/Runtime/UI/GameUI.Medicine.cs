@@ -31,6 +31,7 @@ namespace Dustline
             var picture = Stretch("Selected medicine model", root);
             picture.anchorMin = new Vector2(.17f, .17f);
             picture.anchorMax = new Vector2(.83f, .83f);
+            picture.gameObject.AddComponent<CanvasRenderer>();
             medicineModel = picture.gameObject.AddComponent<CachedItemImage>();
             medicineModel.color = Color.clear;
             medicineModel.raycastTarget = false;
@@ -145,6 +146,7 @@ namespace Dustline
             Vector2 center = p - safe.rect.center;
             Vector2 bounds = Vector2.Max(Vector2.zero, safe.rect.size * .5f - Vector2.one * (half * scale));
             medicineHub.anchoredPosition = new Vector2(Mathf.Clamp(center.x, -bounds.x, bounds.x), Mathf.Clamp(center.y, -bounds.y, bounds.y));
+            medicineHub.gameObject.AddComponent<CanvasRenderer>();
             medicineRing = medicineHub.gameObject.AddComponent<MedicineWheelRing>();
             medicineRing.raycastTarget = false;
             medicineRing.Count = wheelItems.Count;

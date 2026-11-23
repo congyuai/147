@@ -139,6 +139,7 @@ namespace Dustline
                 gunsmithImage.color = Color.clear;
                 gunsmithImage.raycastTarget = false;
                 partFrame = At("Selected model part", surface, 0, 0, 0, 0);
+                partFrame.gameObject.AddComponent<CanvasRenderer>();
                 partFrame.gameObject.AddComponent<PartFrame>();
                 partFrame.gameObject.SetActive(false);
                 if (gunsmithStage == null) gunsmithStage = new ItemPreviewStage(transform, 1);
