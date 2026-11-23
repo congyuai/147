@@ -19,6 +19,8 @@ namespace Dustline
         RectTransform safe, page, panelRoot, hud, touch, toastAnchor;
         Canvas uiCanvas;
         OperatorPreview operatorPreview;
+        Action reflowWidePage;
+        bool widePage;
         Text toast, fpsReadout;
         float toastUntil, fpsSeconds, sampledFps;
         int fpsFrames;
@@ -311,7 +313,7 @@ namespace Dustline
                 27, 30, 184, 1080, 44, color: Aqua);
             Button(body, "重置标靶和计数", 30, 285, 293, 61, () => { session.Practice.ResetPlates(); EnterField(); });
             Button(body, "补充练习装备", 349, 285, 274, 61, () => { EnterField(); session.RefillPractice(); });
-            Button(body, "模拟受伤", 651, 285, 220, 61, () => { session.PracticeHealthSample(); ShowHealth(); });
+            Button(body, "模拟受伤", 651, 285, 220, 61, () => { session.PracticeHealthSample(); EnterField(); });
             Button(body, "重伤演练", 896, 285, 220, 61, () => { session.PracticeSevereSample(); ShowHealth(); });
             Button(panel, "返回大厅", 26, 615, 162, 49, session.LeavePractice);
             Button(panel, "继续练习", 1014, 615, 198, 49, EnterField, true);
@@ -367,6 +369,8 @@ namespace Dustline
             healthRefresh = null;
             Clear(page);
             panelRoot = null;
+            reflowWidePage = null;
+            widePage = false;
             fpsReadout = null;
             fullMap = null;
             layoutSelection = null;
@@ -380,16 +384,37 @@ namespace Dustline
             session.SyncControls();
         }
 
-        RectTransform Display(ScreenPage next, string title)
+        RectTransform Display(ScreenPage next, string title, bool wide = false)
         {
             Switch(next);
             Fill(Stretch("Page scrim", page), new Color32(6, 10, 13, 221), true);
             panelRoot = Anchor(title, page, 0.5f, 0.5f);
             panelRoot.sizeDelta = new Vector2(1240, 680);
+            widePage = wide;
             Fill(panelRoot, Surface, true);
             Canvas.ForceUpdateCanvases();
             FitPanel();
             return panelRoot;
+        }
+
+        void WideHeader(RectTransform root, string title, string subtitle, bool showCredits)
+        {
+            float w = root.rect.width;
+            Fill(At("Compact header", root, 0, 0, w, 50), Ink);
+            Fill(At("Header highlight", root, 0, 0, w, 2), Amber);
+            var heading = Label(root, title, 26, 16, 4, Mathf.Min(w * .38f, 430), 43, TextAnchor.MiddleLeft);
+            heading.resizeTextForBestFit = true;
+            heading.resizeTextMinSize = 16;
+            heading.resizeTextMaxSize = 26;
+            Label(root, subtitle, 15, w * .39f, 6, w * .37f, 37, TextAnchor.MiddleLeft, Muted);
+            if (!showCredits) return;
+            creditsReadout = Label(root, "", 19, w - 235, 4, 218, 43, TextAnchor.MiddleRight, Aqua);
+            UpdateCredits();
+        }
+
+        void UpdateCredits()
+        {
+            if (creditsReadout != null && session.Profile != null) creditsReadout.text = session.Profile.Credits + " 信用点";
         }
 
         void Header(RectTransform root, string title, string subtitle)
@@ -406,8 +431,20 @@ namespace Dustline
         void FitPanel()
         {
             if (panelRoot == null) return;
-            float scale = Mathf.Min(1, Mathf.Min(safe.rect.width / 1260f, safe.rect.height / 700f));
-            panelRoot.localScale = Vector3.one * Mathf.Max(0.01f, scale);
+            if (!widePage)
+            {
+                float compact = Mathf.Min(1f, Mathf.Min(safe.rect.width / 1260f, safe.rect.height / 700f));
+                panelRoot.localScale = Vector3.one * Mathf.Max(.01f, compact);
+                return;
+            }
+            float availableWidth = Mathf.Max(1f, safe.rect.width - 20f);
+            float availableHeight = Mathf.Max(1f, safe.rect.height - 20f);
+            float width = Mathf.Clamp(Mathf.Floor(680f * availableWidth / availableHeight), 1040f, 2048f);
+            bool resized = Mathf.Abs(panelRoot.sizeDelta.x - width) >= 1f;
+            if (resized) panelRoot.sizeDelta = new Vector2(width, 680);
+            float scale = Mathf.Min(1f, Mathf.Min(availableWidth / width, availableHeight / 680f));
+            panelRoot.localScale = Vector3.one * Mathf.Max(.01f, scale);
+            if (resized) reflowWidePage?.Invoke();
         }
 
         void UpdateSafeArea()
@@ -416,7 +453,8 @@ namespace Dustline
             lastScreen = new Vector2Int(Screen.width, Screen.height);
             if (Screen.width < 1 || Screen.height < 1) return;
             if (medicineHeld) CloseMedicineWheel(true);
-            CancelInventoryDrag();
+            CancelInventoryInput();
+            if (workshopGesture != null) workshopGesture.ResetPointers();
             safe.anchorMin = new Vector2(lastSafe.xMin / Screen.width, lastSafe.yMin / Screen.height);
             safe.anchorMax = new Vector2(lastSafe.xMax / Screen.width, lastSafe.yMax / Screen.height);
             Canvas.ForceUpdateCanvases();
@@ -474,13 +512,13 @@ namespace Dustline
 
         void LateUpdate()
         {
-            ScrollDragEdge();
+            UpdateInventoryDrag();
             itemIcons?.Step();
             if (current == ScreenPage.Gunsmith) RenderGunsmithPreview();
         }
 
-        void OnApplicationFocus(bool focused) { if (!focused) CancelInventoryDrag(); }
-        void OnApplicationPause(bool paused) { if (paused) CancelInventoryDrag(); }
+        void OnApplicationFocus(bool focused) { if (!focused) CancelInventoryInput(); }
+        void OnApplicationPause(bool paused) { if (paused) CancelInventoryInput(); }
 
         static RectTransform Anchor(string title, Transform parent, float x, float y)
         {

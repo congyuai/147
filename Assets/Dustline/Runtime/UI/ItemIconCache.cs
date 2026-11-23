@@ -30,6 +30,8 @@ namespace Dustline
             internal ItemStack Stack;
             internal ItemCatalog Catalog;
             internal WeaponForm Blade;
+            internal PartSlot LegacySlot;
+            internal int LegacyLevel;
             internal readonly List<RawImage> Views = new List<RawImage>();
             internal RenderTexture Texture;
             internal int Access;
@@ -37,6 +39,8 @@ namespace Dustline
         }
 
         internal ItemIconCache(Transform owner) => this.owner = owner;
+
+        internal static float Aspect(ItemDefinition item) => Mathf.Clamp(item == null ? 2f : item.Width / (float)item.Height, .25f, 5f);
 
         internal void Bind(RawImage image, ItemDefinition item, ItemStack stack, ItemCatalog catalog, WeaponForm blade = WeaponForm.Tangdao)
         {
@@ -46,8 +50,28 @@ namespace Dustline
                 entry = new Entry { Key = key, Item = item, Stack = stack?.Clone(), Catalog = catalog, Blade = blade };
                 entries.Add(key, entry);
             }
+            BindView(image, entry);
+        }
+
+        internal void BindLegacy(RawImage image, PartSlot slot, int level)
+        {
+            var key = ("@factory:" + slot, level);
+            if (!entries.TryGetValue(key, out var entry))
+            {
+                entry = new Entry { Key = key, LegacySlot = slot, LegacyLevel = level };
+                entries.Add(key, entry);
+            }
+            BindView(image, entry);
+        }
+
+        void BindView(RawImage image, Entry entry)
+        {
             entry.Access = ++access;
-            if (bindings.TryGetValue(image, out var old) && old != entry) old.Views.Remove(image);
+            if (bindings.TryGetValue(image, out var old))
+            {
+                if (old != entry) old.Views.Remove(image);
+            }
+            if (image is CachedItemImage cached) cached.VisibilityChanged = () => OnVisibilityChanged(image);
             bindings[image] = entry;
             if (!entry.Views.Contains(image)) entry.Views.Add(image);
             bool ready = entry.Texture != null && entry.Texture.IsCreated();
@@ -56,12 +80,18 @@ namespace Dustline
             if (!ready) Queue(entry);
         }
 
+        void OnVisibilityChanged(RawImage image)
+        {
+            if (Visible(image) && bindings.TryGetValue(image, out var entry) && (entry.Texture == null || !entry.Texture.IsCreated())) Queue(entry);
+        }
+
         internal void Unbind(RawImage image)
         {
             if (bindings.TryGetValue(image, out var entry))
             {
                 entry.Views.Remove(image);
                 bindings.Remove(image);
+                if (image is CachedItemImage cached) cached.VisibilityChanged = null;
             }
             image.texture = null;
             image.color = Color.clear;
@@ -121,9 +151,9 @@ namespace Dustline
             compose ??= new Material(shader) { hideFlags = HideFlags.DontSave };
             sharedArt ??= Ar20Mesh.Acquire();
             stage ??= new ItemPreviewStage(owner, 0);
-            float aspect = Mathf.Clamp(entry.Item == null ? 2f : entry.Item.Width / (float)entry.Item.Height, .25f, 4f);
-            int w = Mathf.Max(48, Mathf.RoundToInt(192f * Mathf.Min(1f, aspect)));
-            int h = Mathf.Max(48, Mathf.RoundToInt(192f * Mathf.Min(1f, 1f / aspect)));
+            float aspect = entry.LegacyLevel > 0 ? 1f : Aspect(entry.Item);
+            int w = Mathf.Max(40, Mathf.RoundToInt(200f * Mathf.Min(1f, aspect)));
+            int h = Mathf.Max(40, Mathf.RoundToInt(200f * Mathf.Min(1f, 1f / aspect)));
             if (black == null || black.width != w || black.height != h)
             {
                 Release(black); Release(white);
@@ -131,7 +161,8 @@ namespace Dustline
             }
             try
             {
-                stage.Set(entry.Item, entry.Stack, entry.Catalog, entry.Blade);
+                if (entry.LegacyLevel > 0) stage.SetLegacyPart(entry.LegacySlot, entry.LegacyLevel);
+                else stage.Set(entry.Item, entry.Stack, entry.Catalog, entry.Blade);
                 if (!stage.Render(black, Color.black) || !stage.Render(white, Color.white)) { ReportUnavailable(); return; }
                 if (entry.Texture == null) entry.Texture = Texture(w, h, 0);
                 if (!entry.Texture.IsCreated() && !entry.Texture.Create()) return;
@@ -166,6 +197,7 @@ namespace Dustline
 
         public void Dispose()
         {
+            foreach (var view in bindings.Keys) if (view is CachedItemImage cached && cached != null) cached.VisibilityChanged = null;
             foreach (var entry in entries.Values) Release(entry.Texture);
             entries.Clear();
             bindings.Clear();
@@ -174,6 +206,24 @@ namespace Dustline
             Release(black); Release(white);
             if (compose != null) Object.Destroy(compose);
             sharedArt?.Release();
+        }
+    }
+
+    internal sealed class CachedItemImage : RawImage
+    {
+        internal Action VisibilityChanged;
+
+        protected override void OnEnable()
+        {
+            base.OnEnable();
+            VisibilityChanged?.Invoke();
+        }
+
+        public override void Cull(Rect clipRect, bool validRect)
+        {
+            bool wasCulled = canvasRenderer.cull;
+            base.Cull(clipRect, validRect);
+            if (wasCulled && !canvasRenderer.cull) VisibilityChanged?.Invoke();
         }
     }
 }

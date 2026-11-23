@@ -198,6 +198,43 @@ namespace Dustline
             SetPropVisible(magazineProp, !IsMelee);
         }
 
+        internal Bounds PreviewPartBounds(PartSlot slot, out Transform space)
+        {
+            MeshFilter piece = slot == PartSlot.Magazine ? magazineMesh : accessories[(int)slot];
+            if (piece != null && piece.gameObject.activeSelf && piece.sharedMesh != null)
+            {
+                space = piece.transform;
+                return piece.sharedMesh.bounds;
+            }
+            space = transform;
+            float tail = filter.sharedMesh.bounds.min.z;
+            return slot switch
+            {
+                PartSlot.Sight => new Bounds(new Vector3(0, Ar20Mesh.SightHeight(sightLevel) - .015f, -.13f), new Vector3(.064f, .057f, .068f)),
+                PartSlot.Grip => new Bounds(new Vector3(0, -.106f, -.118f), new Vector3(.068f, .149f, .091f)),
+                PartSlot.Stock => new Bounds(new Vector3(0, .005f, (tail - .24f) * .5f), new Vector3(.083f, .156f, -.24f - tail)),
+                PartSlot.Muzzle => new Bounds(new Vector3(0, Muzzle.localPosition.y, Muzzle.localPosition.z - .03f), new Vector3(.052f, .052f, .074f)),
+                _ => default
+            };
+        }
+
+        internal void SetPreviewFocus(PartSlot? slot)
+        {
+            Focus(magazineMesh, slot == PartSlot.Magazine);
+            for (int i = 0; i < accessories.Length; i++) Focus(accessories[i], slot == (PartSlot)i);
+
+            void Focus(MeshFilter mesh, bool active)
+            {
+                if (mesh == null || !mesh.gameObject.activeSelf) return;
+                var renderer = mesh.GetComponent<MeshRenderer>();
+                if (!active) { renderer.SetPropertyBlock(null); return; }
+                var block = new MaterialPropertyBlock();
+                block.SetColor("_BaseColor", new Color(.86f, 1.21f, 1.11f));
+                block.SetFloat("_Smoothness", .82f);
+                renderer.SetPropertyBlock(block);
+            }
+        }
+
         void SetAccessory(PartSlot slot, int style, Vector3 position)
         {
             var part = accessories[(int)slot];

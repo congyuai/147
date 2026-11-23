@@ -31,7 +31,7 @@ namespace Dustline
             var picture = Stretch("Selected medicine model", root);
             picture.anchorMin = new Vector2(.17f, .17f);
             picture.anchorMax = new Vector2(.83f, .83f);
-            medicineModel = picture.gameObject.AddComponent<RawImage>();
+            medicineModel = picture.gameObject.AddComponent<CachedItemImage>();
             medicineModel.color = Color.clear;
             medicineModel.raycastTarget = false;
             medicineCount = Label(root, "", 15, 0, 0, 25, 20, TextAnchor.MiddleCenter, Pale);
@@ -64,7 +64,7 @@ namespace Dustline
             {
                 shownMedicine = definition.Id;
                 var rect = medicineModel.rectTransform;
-                float aspect = Mathf.Clamp(definition.Width / (float)definition.Height, .25f, 4f);
+                float aspect = ItemIconCache.Aspect(definition);
                 float width = .66f * Mathf.Min(1f, aspect), height = .66f * Mathf.Min(1f, 1f / aspect);
                 rect.anchorMin = new Vector2(.5f - width * .5f, .5f - height * .5f);
                 rect.anchorMax = new Vector2(.5f + width * .5f, .5f + height * .5f);

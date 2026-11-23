@@ -120,8 +120,8 @@ namespace Dustline.Tests
         [Test]
         public void BuildVersionAdvancesWithoutChangingSaveIdentity()
         {
-            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.4.0"));
-            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(7));
+            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.4.1"));
+            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(8));
             Assert.That(PlayerSettings.companyName, Is.EqualTo("Dustline"));
             Assert.That(PlayerSettings.productName, Is.EqualTo("Dustline Extraction"));
             Assert.That(PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android), Is.EqualTo("com.dustline.extraction"));

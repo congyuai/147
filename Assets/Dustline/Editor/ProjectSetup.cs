@@ -17,8 +17,8 @@ namespace Dustline.Editor
         const string PipelinePath = "Assets/Dustline/Settings/MobilePipeline.asset";
         const string RendererPath = "Assets/Dustline/Settings/MobileRenderer.asset";
         const string RenderingRoot = Root + "/Rendering";
-        const string Version = "0.4.0";
-        const int AndroidVersionCode = 7;
+        const string Version = "0.4.1";
+        const int AndroidVersionCode = 8;
         const int RaidRendererLayers = FirstPersonView.Mask | (1 << 29) | (1 << 30) | (1 << 2) | 1;
         static readonly string[] LitVariantAssets = { "LitBase", "LitMetal", "LitEmission", "LitMetalEmission" };
         static readonly Dictionary<string, string> ItemNames = new Dictionary<string, string> {

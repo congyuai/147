@@ -17,7 +17,8 @@ namespace Dustline
 
         public GridInventory(int width, int height, float maxWeight, ItemCatalog catalog) : this(width, height, maxWeight, catalog, null) { }
 
-        internal GridInventory(int width, int height, float maxWeight, ItemCatalog catalog, Predicate<ItemDefinition> accepts, bool adaptive = false)
+        internal GridInventory(int width, int height, float maxWeight, ItemCatalog catalog, Predicate<ItemDefinition> accepts, bool adaptive = false,
+            bool rebuildCatalog = true)
         {
             if (width < 1)
                 throw new ArgumentOutOfRangeException(nameof(width));
@@ -28,7 +29,7 @@ namespace Dustline
             if (catalog == null)
                 throw new ArgumentNullException(nameof(catalog));
 
-            catalog.RebuildIndex();
+            if (rebuildCatalog) catalog.RebuildIndex();
             baseWidth = width;
             baseHeight = height;
             baseWeight = maxWeight;
@@ -82,6 +83,7 @@ namespace Dustline
         public ItemCatalog Catalog { get; }
         public IReadOnlyList<ItemStack> Items => view;
         public event Action Changed;
+        internal int Revision { get; private set; }
 
         public bool TryAdd(string itemId, int quantity, out string error)
         {
@@ -429,7 +431,7 @@ namespace Dustline
 
         internal GridInventory Draft()
         {
-            var draft = new GridInventory(baseWidth, baseHeight, baseWeight, Catalog, accepts, adaptive);
+            var draft = new GridInventory(baseWidth, baseHeight, baseWeight, Catalog, accepts, adaptive, rebuildCatalog: false);
             draft.items.AddRange(Snapshot());
             return draft;
         }
@@ -595,6 +597,7 @@ namespace Dustline
 
         public void Touch()
         {
+            unchecked { Revision++; }
             Changed?.Invoke();
         }
 

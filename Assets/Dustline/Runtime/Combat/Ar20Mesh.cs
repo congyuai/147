@@ -343,6 +343,9 @@ namespace Dustline
             b.Window(Finish.Anodized, Finish.Coating, rear - 0.009f, front, y, width, height, holeWidth, holeHeight);
             b.Box(Finish.Graphite, width + 0.002f, y, (rear + front) * 0.5f, 0.012f, 0.019f, 0.033f);
             float dotZ = front - 0.009f;
+            // Coat the rim without covering the game's sight picture.
+            b.Box(Finish.Optic, 0f, y - holeHeight + .0035f, dotZ, holeWidth * 1.38f, .005f, .0024f);
+            b.Box(Finish.Optic, -holeWidth + .003f, y - .007f, dotZ, .004f, holeHeight * .91f, .0024f);
             b.Box(Finish.Recess, 0, y - holeHeight * 0.5f, dotZ, 0.002f, holeHeight + 0.002f, 0.003f);
             b.Box(Finish.OpticDot, 0, y, dotZ, 0.0032f, 0.0032f, 0.005f);
             if (aftermarket)

@@ -20,17 +20,58 @@ namespace Dustline
         }
         GameObject hintCard;
         Text healthReadout, staminaReadout, ammoReadout, statusReadout, prompt;
+        BodyFigure bodyHud;
+        readonly Text[] partHealth = new Text[BodyCondition.Count], partWound = new Text[BodyCondition.Count];
+        readonly float[] shownHp = new float[BodyCondition.Count], shownMax = new float[BodyCondition.Count];
+        readonly Injury[] shownInjury = new Injury[BodyCondition.Count];
+        BodyCondition shownBody;
+        float shownTotal = -1, shownTotalMax = -1;
         float hudAt, hitUntil;
 
         void BuildHud()
         {
             var upperLeft = Anchor("Left HUD anchor", hud, 0, 1);
-            var vitals = HudCard(upperLeft, "Vitals", 21, 20, 276, 136);
-            healthReadout = Label(vitals, "", 20, 13, 7, 268, 29);
-            lifeBar = Bar(vitals, 13, 38, 250, 6, new Color32(201, 104, 76, 255));
-            staminaReadout = Label(vitals, "", 17, 13, 47, 268, 25, color: Muted);
-            staminaBar = Bar(vitals, 13, 73, 250, 5, Aqua);
-            ammoReadout = Label(vitals, "", 20, 13, 87, 250, 44, color: Amber);
+            var vitals = HudCard(upperLeft, "Vitals", 13, 12, 322, 233);
+            const float x = 125, y = 39, w = 72, h = 149;
+            var sheet = Button(vitals, "", x - 5, y - 1, w + 10, h + 2, OpenBody);
+            sheet.name = "Open body condition";
+            sheet.targetGraphic.color = Color.clear;
+            sheet.transition = Selectable.Transition.None;
+            healthReadout = Label(vitals, "", 19, 10, 2, 230, 27, TextAnchor.MiddleLeft);
+            var open = Button(vitals, "治疗 ›", 235, 2, 77, 27, OpenBody, false, new Color32(31, 54, 59, 242));
+            open.GetComponentInChildren<Text>().color = Aqua;
+            lifeBar = Bar(vitals, 10, 31, 302, 4, new Color32(221, 115, 82, 255));
+            bodyHud = At("Body diagram", vitals, x, y, w, h).gameObject.AddComponent<BodyFigure>();
+            bodyHud.Initialize(new Color32(43, 94, 90, 255), new Color32(120, 187, 177, 255));
+            Row(BodyPart.Head, 210, 37, false);
+            Row(BodyPart.Chest, 9, 37, true);
+            Row(BodyPart.Abdomen, 9, 77, true);
+            Row(BodyPart.LeftArm, 9, 117, true);
+            Row(BodyPart.RightArm, 210, 117, false);
+            Row(BodyPart.LeftLeg, 9, 157, true);
+            Row(BodyPart.RightLeg, 210, 157, false);
+            Fill(At("Stamina divider", vitals, 10, 196, 302, 1), Border);
+            staminaReadout = Label(vitals, "", 17, 10, 197, 176, 28, TextAnchor.MiddleLeft, Muted);
+            staminaBar = Bar(vitals, 185, 209, 127, 6, Aqua);
+            var ammo = HudCard(upperLeft, "Ammunition status", 13, 251, 322, 49);
+            ammoReadout = Label(ammo, "", 17, 10, 2, 302, 44, TextAnchor.MiddleLeft, Amber);
+
+            void OpenBody() { if (!BlocksGameplay) ShowHealth(); }
+
+            void Row(BodyPart part, float left, float top, bool onLeft)
+            {
+                var pin = BodyFigure.Pin(part, x, y, w, h);
+                var end = new Vector2(onLeft ? left + 104 : left - 3, top + 12);
+                var bend = new Vector2(onLeft ? x - 6 : x + w + 6, top + 12);
+                Stroke(vitals, "Body leader / " + part, end, bend, 1f, Border);
+                Stroke(vitals, "Body leader / " + part, bend, pin, 1f, Border);
+                int index = (int)part;
+                partHealth[index] = Label(vitals, "", 15, left, top, 110, 23, TextAnchor.MiddleLeft);
+                partHealth[index].name = "Region health / " + part;
+                partWound[index] = Label(vitals, "", 13, left, top + 21, 110, 16, TextAnchor.MiddleLeft, Amber);
+                partWound[index].verticalOverflow = VerticalWrapMode.Overflow;
+                partWound[index].name = "Region injury / " + part;
+            }
 
             var upperRight = Anchor("Right HUD anchor", hud, 1, 1);
             miniMap = CreateMap(upperRight, -197, 18, 179, true, false);
@@ -110,9 +151,8 @@ namespace Dustline
             hudAt = Time.unscaledTime + 0.09f;
             UpdateMedicineButton(player);
 
-            healthReadout.text = "生命  " + Mathf.CeilToInt(player.Health.Current);
-            staminaReadout.text = "体力  " + Mathf.CeilToInt(player.Stamina) + (player.SprintExhausted ? "  /  步行" : "");
-            SetBar(lifeBar, player.Health.Current / (player.Health.Body?.TotalMaximum ?? player.Health.Maximum));
+            UpdateBodyHud(player.Health, force);
+            staminaReadout.text = "体力  " + Mathf.CeilToInt(player.Stamina) + " / 100" + (player.SprintExhausted ? " 步行" : "");
             SetBar(staminaBar, player.Stamina * 0.01f);
             ammoReadout.text = weapon.IsMelee ? (weapon.ActiveIsBound ? session.BoundBladeName + " / 随身刀" : "检修短棍 / 近战")
                 : weapon.Magazine == null ? "未装备主武器" : weapon.Magazine.Reloading ? "正在换弹"
@@ -167,6 +207,53 @@ namespace Dustline
             }
             else prompt.text = player.InteractionHint;
             SetFieldPrompt(prompt.text, inZone != null || player.IsTreating || player.SearchingLoot != null, progress);
+        }
+
+        void UpdateBodyHud(Health health, bool force)
+        {
+            var body = health.Body;
+            bool refresh = force || body != shownBody;
+            shownBody = body;
+            float total = body?.Total ?? health.Current, max = body?.TotalMaximum ?? health.Maximum;
+            if (refresh || total != shownTotal || max != shownTotalMax)
+            {
+                healthReadout.text = "总健康  " + VitalsValue(total, max);
+                shownTotal = total; shownTotalMax = max;
+                SetBar(lifeBar, max > 0f ? total / max : 0f);
+            }
+            for (int i = 0; i < BodyCondition.Count; i++)
+            {
+                var part = (BodyPart)i;
+                float hp = body?.Current(part) ?? 0f, cap = body?.Maximum(part) ?? 0f;
+                var flags = body?.Injuries(part) ?? Injury.None;
+                if (!refresh && shownHp[i] == hp && shownMax[i] == cap && shownInjury[i] == flags) continue;
+                shownHp[i] = hp; shownMax[i] = cap; shownInjury[i] = flags;
+                partHealth[i].text = BodyCondition.Name(part) + " " + (body == null ? "— / —" : VitalsValue(hp, cap));
+                string wound = FieldWound(flags);
+                partWound[i].text = wound;
+                bool broken = (flags & Injury.Destroyed) != 0;
+                bool critical = broken || (flags & Injury.HeavyBleed) != 0;
+                bool injured = body != null && (hp < cap - .001f || flags != Injury.None);
+                bodyHud.SetTone(part, broken ? new Color32(104, 35, 36, 255) : critical ? new Color32(199, 75, 61, 255)
+                    : injured ? new Color32(178, 116, 47, 255) : new Color32(43, 94, 90, 255));
+                partHealth[i].color = critical ? new Color32(255, 148, 129, 255) : injured ? new Color32(255, 207, 136, 255) : Pale;
+                partWound[i].color = critical ? new Color32(255, 148, 129, 255) : Amber;
+            }
+        }
+
+        static string VitalsValue(float current, float max) => current.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)
+            + " / " + max.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+        static string FieldWound(Injury flags)
+        {
+            bool destroyed = (flags & Injury.Destroyed) != 0;
+            bool fractured = (flags & Injury.Fracture) != 0;
+            string bleed = (flags & Injury.HeavyBleed) != 0 ? "重度出血" : (flags & Injury.LightBleed) != 0 ? "轻度出血" : "";
+            if (destroyed && fractured && bleed.Length > 0) return (bleed == "重度出血" ? "重血" : "轻血") + " 骨折 损毁";
+            string text = destroyed ? "损毁" : "";
+            if (bleed.Length > 0) text += (text.Length > 0 ? " " : "") + bleed;
+            if (fractured) text += (text.Length > 0 ? " " : "") + "骨折";
+            return text;
         }
 
         static string TreatmentPrompt(PlayerController player) => player.TreatmentItem.DisplayName + " / " + BodyCondition.Name(player.TreatmentPart);

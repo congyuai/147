@@ -11,6 +11,21 @@ namespace Dustline
 
         private Dictionary<string, ItemDefinition> index;
 
+        public List<ItemDefinition> Stock(ItemKind kind)
+        {
+            var stock = Items.FindAll(item => item.Kind == kind);
+            stock.Sort((a, b) =>
+            {
+                int order = System.Math.Max(0, b.Tier).CompareTo(System.Math.Max(0, a.Tier));
+                if (order == 0) order = a.Value.CompareTo(b.Value);
+                return order != 0 ? order : string.CompareOrdinal(a.Id, b.Id);
+            });
+            return stock;
+        }
+
+        public List<ItemDefinition> CompatibleParts(ItemDefinition weapon, PartSlot slot)
+            => Stock(ItemKind.Part).FindAll(item => WeaponRules.CanMount(weapon, slot, item, out _));
+
         public ItemDefinition Find(string id)
         {
             if (string.IsNullOrWhiteSpace(id))

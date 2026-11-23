@@ -40,8 +40,11 @@ namespace Dustline.Tests
                 Assert.That(first.texture, Is.Not.Null);
                 Assert.That(second.texture, Is.SameAs(first.texture));
                 Assert.That(selected.texture, Is.Not.Null.And.Not.SameAs(first.texture));
-                Color32[] vanilla = Pixels((RenderTexture)first.texture);
+                var stockTexture = (RenderTexture)first.texture;
+                Color32[] vanilla = Pixels(stockTexture);
                 Color32[] fitted = Pixels((RenderTexture)selected.texture);
+                Assert.That(SilhouetteWidth(vanilla, stockTexture.width), Is.InRange(.85f, .95f),
+                    "The stock AR-20 must fit muzzle to stock within the long edge of its tile.");
                 Assert.That(fitted[0].a, Is.LessThan(10), "The unused corners must be transparent.");
                 int opaque = 0, changed = 0;
                 for (int i = 0; i < fitted.Length; i++)
@@ -70,6 +73,19 @@ namespace Dustline.Tests
                 return icon;
             }
             void Bind(RawImage image, ItemStack stack) => kind.GetMethod("Bind", Members).Invoke(cache, new object[] { image, def, stack, catalog, WeaponForm.Tangdao });
+        }
+
+        static float SilhouetteWidth(Color32[] pixels, int width)
+        {
+            int left = width, right = -1;
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                if (pixels[i].a < 192) continue;
+                int x = i % width;
+                if (x < left) left = x;
+                if (x > right) right = x;
+            }
+            return right < left ? 0f : (right - left + 1) / (float)width;
         }
 
         static Color32[] Pixels(RenderTexture texture)

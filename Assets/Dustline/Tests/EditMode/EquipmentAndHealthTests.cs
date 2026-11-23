@@ -41,6 +41,58 @@ namespace Dustline.Tests
             Assert.That(WeaponRules.CanLoad(rifle, build, alternate, out _), Is.True);
         }
 
+        [TestCase(ItemKind.Rig, "rig_5 rig_4 rig_watch rig_3 rig_2 rig_1")]
+        [TestCase(ItemKind.Pack, "pack_6 pack_5 pack_patrol pack_4 pack_3 pack_2 pack_1")]
+        [TestCase(ItemKind.Armor, "vest_6 vest_5 vest_flex vest_4 vest_3 armor vest_2 vest_1")]
+        [TestCase(ItemKind.Helmet, "helmet_6 helmet_5 helmet_4 helmet_scout helmet_3 helmet_2 helmet_1")]
+        public void GearShopListsOnlyTheRequestedKindInTierAndPriceOrder(ItemKind kind, string expected)
+        {
+            var stock = catalog.Stock(kind);
+            Assert.That(stock.All(item => item.Kind == kind), Is.True);
+            CollectionAssert.AreEqual(expected.Split(' '), stock.Select(item => item.Id).ToArray());
+        }
+
+        [Test]
+        public void ShopSortIsGlobalAndRanksUnratedAfterEveryRatedItem()
+        {
+            var source = ScriptableObject.CreateInstance<ItemCatalog>();
+            try
+            {
+                foreach (var entry in new[] { ("cheap", 0, 1), ("white", 1, 200), ("red-b", 6, 100), ("red-a", 6, 100), ("red-expensive", 6, 300) })
+                {
+                    var item = ScriptableObject.CreateInstance<ItemDefinition>();
+                    item.Id = entry.Item1;
+                    item.Tier = entry.Item2;
+                    item.Value = entry.Item3;
+                    item.Kind = ItemKind.Valuable;
+                    source.Items.Add(item);
+                }
+                var sorted = source.Stock(ItemKind.Valuable).Select(item => item.Id).ToArray();
+                CollectionAssert.AreEqual(new[] { "red-a", "red-b", "red-expensive", "white", "cheap" }, sorted);
+                Assert.That(source.Items[0].Id, Is.EqualTo("cheap"));
+            }
+            finally
+            {
+                foreach (var item in source.Items) Object.DestroyImmediate(item);
+                Object.DestroyImmediate(source);
+            }
+        }
+
+        [Test]
+        public void AmberMagazineComesFromTheFullCatalogWithNoLoosePart()
+        {
+            var rifle = catalog.Find("rifle");
+            var stock = catalog.CompatibleParts(rifle, PartSlot.Magazine);
+            CollectionAssert.AreEqual(new[] { "part_mag_a" }, stock.Select(item => item.Id).ToArray());
+            var ordinary = new ItemStack { ItemId = rifle.Id };
+            var proposed = ordinary.Clone();
+            proposed.Parts.Magazine = new PartLink { ItemId = stock[0].Id };
+            Assert.That(ordinary.Parts.Magazine.Empty, Is.True);
+            Assert.That(WeaponRules.Capacity(rifle.Weapon, ordinary, catalog), Is.EqualTo(20));
+            Assert.That(WeaponRules.Capacity(rifle.Weapon, proposed, catalog), Is.EqualTo(30));
+            Assert.That(WeaponRules.Look(proposed, catalog), Is.Not.EqualTo(WeaponRules.Look(ordinary, catalog)));
+        }
+
         [Test]
         public void RotatedObjectsAndDividersAreValidatedBeforeMovingContents()
         {

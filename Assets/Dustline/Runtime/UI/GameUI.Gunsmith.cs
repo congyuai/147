@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
@@ -8,7 +9,18 @@ namespace Dustline
     {
         ItemPreviewStage gunsmithStage;
         RenderTexture gunsmithTexture;
+        RawImage gunsmithImage;
+        Button workshopConfirm;
+        Text workshopRenderMessage;
+        WorkshopGesture workshopGesture;
+        Action projectWorkshopPins;
         bool gunsmithDirty;
+        static readonly Vector2[] PinOffsets =
+        {
+            new Vector2(0, -49), new Vector2(67, 36), new Vector2(52, -39), new Vector2(-49, -39), new Vector2(-57, 42),
+            new Vector2(0, 53), new Vector2(82, -56), new Vector2(-82, -56), new Vector2(82, 56), new Vector2(-82, 56),
+            new Vector2(110, 0), new Vector2(-110, 0)
+        };
 
         readonly struct InventoryChoice
         {
@@ -18,226 +30,506 @@ namespace Dustline
             internal ItemStack Item => Bag?.Find(Id);
         }
 
+        sealed class WorkshopOption
+        {
+            internal ItemDefinition Part;
+            internal int Level, Cost, Count;
+            internal bool Installed;
+            internal string Name;
+        }
+
+        sealed class WorkshopPin
+        {
+            internal RectTransform Dot, Card, Line;
+            internal Image Face;
+            internal Text Caption;
+            internal Rect Hit, Region;
+            internal Vector2 Target;
+            internal bool Visible;
+        }
+
+        readonly struct WorkshopMetric
+        {
+            internal readonly string Name, Value, Unit;
+            internal readonly bool Changed;
+            internal WorkshopMetric(string name, float before, float after, string unit)
+            {
+                Name = name; Unit = unit;
+                string a = Format(before), b = Format(after);
+                Changed = Mathf.Abs(before - after) > .0005f && a != b;
+                Value = Changed ? a + " → " + b : b;
+            }
+
+            static string Format(float value) => value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            internal string Readout => Name + " " + Value + (Unit.Length == 0 ? "" : " " + Unit);
+        }
+
         static string PartName(PartSlot slot) => slot switch
         {
             PartSlot.Sight => "瞄具", PartSlot.Grip => "握把", PartSlot.Stock => "枪托",
             PartSlot.Muzzle => "枪口件", PartSlot.Magazine => "弹匣", _ => "配件"
         };
 
+        static string FactoryName(PartSlot slot, int level)
+        {
+            if (level == 0) return "原装" + PartName(slot);
+            return (slot, level) switch
+            {
+                (PartSlot.Sight, 1) => "原厂导光瞄具", (PartSlot.Sight, _) => "原厂远望瞄具",
+                (PartSlot.Grip, 1) => "原厂纹理握把", (PartSlot.Grip, _) => "原厂包覆握把",
+                (PartSlot.Stock, 1) => "原厂轻架枪托", _ => "原厂稳肩枪托"
+            };
+        }
+
         void ShowGunsmith(GridInventory selectedBag = null, string selectedId = null)
         {
             if (session.Phase != SessionPhase.Menu) return;
-            var panel = Display(ScreenPage.Gunsmith, "Gunsmith");
-            Header(panel, "枪械改装", "拖动枪模旋转 · 配件跟随本件武器 · 选件先预览、确认后安装");
-            Button(panel, "返回仓库", 26, 615, 155, 49, ShowStash);
-            Button(panel, "前往商店", 191, 615, 155, 49, () => ShowShop(2));
-            Button(panel, "返回大厅", 1022, 615, 190, 49, ShowMenu, true);
+            var panel = Display(ScreenPage.Gunsmith, "Gunsmith", wide: true);
             var guns = new List<InventoryChoice>();
             AddGuns(session.Loadout); AddGuns(session.Stash);
-            if (guns.Count == 0)
-            {
-                Label(panel, "还没有可改装的枪械", 28, 26, 170, 1020, 47);
-                Label(panel, "可在补给商店购买，或从港区带回。", 20, 26, 227, 1030, 64, color: Muted);
-                return;
-            }
-            int index = guns.FindIndex(choice => choice.Bag == selectedBag && choice.Id == selectedId);
-            if (index < 0) index = 0;
-            PartSlot slot = PartSlot.Sight;
-            var parts = new List<InventoryChoice>();
-            int option = -1, optionPage = 0;
-            string previewGun = null;
-            bool showStock = false;
-            int legacyLevel = -1;
-            var left = At("Weapon preview", panel, 26, 132, 478, 462);
-            var choices = At("Fittings", panel, 516, 132, 354, 462);
-            var stats = At("Weapon comparisons", panel, 882, 132, 330, 462);
-            Fill(left, Ink); Fill(choices, Ink); Fill(stats, Ink);
-            var gunLabel = Label(left, "", 22, 94, 10, 365, 51);
-            var art = At("Rotatable weapon", left, 12, 69, 454, 298).gameObject.AddComponent<RawImage>();
-            gunsmithStage = new ItemPreviewStage(transform, 1);
-            gunsmithTexture = ItemIconCache.Texture(544, 352, 24);
-            art.texture = gunsmithTexture;
-            art.color = Color.clear;
-            var rotate = art.gameObject.AddComponent<InventoryDrag>();
-            int owner = int.MinValue;
-            rotate.Begin = e => { if (owner == int.MinValue) owner = e.pointerId; };
-            rotate.Move = e =>
-            {
-                if (owner != e.pointerId) return;
-                gunsmithStage.Rotate(e.delta / Mathf.Max(.2f, uiCanvas.scaleFactor));
-                gunsmithDirty = true;
-            };
-            rotate.End = e => { if (owner == e.pointerId) owner = int.MinValue; };
-            Label(left, "拖动旋转枪模", 16, 16, 374, 446, 30, TextAnchor.MiddleCenter, Muted);
-            var pageLabel = Label(left, "", 16, 141, 414, 195, 35, TextAnchor.MiddleCenter, Muted);
-            var iconRoot = At("Build thumbnail", left, 12, 12, 75, 50);
-            var compare = At("Comparison values", stats, 0, 0, 330, 462);
-            Button(left, "上一把", 12, 413, 119, 38, () => ChangeGun(-1)).interactable = guns.Count > 1;
-            Button(left, "下一把", 347, 413, 119, 38, () => ChangeGun(1)).interactable = guns.Count > 1;
-            Refresh();
+            int index = Mathf.Max(0, guns.FindIndex(choice => choice.Bag == selectedBag && choice.Id == selectedId));
+            PartSlot? activeSlot = null;
+            WorkshopOption preview = null;
+            bool expanded = false;
+            float cardScroll = 0f;
+            string renderedId = null;
+            RectTransform surface = null, tray = null, statsPanel = null, partFrame = null, confirmation = null;
+            Text title = null, total = null, note = null, previewHeader = null;
+            Button cancel = null, statsButton = null;
+            var pins = new WorkshopPin[(int)PartSlot.Magazine + 1];
+            reflowWidePage = Build;
+            Build();
 
             void AddGuns(GridInventory bag)
             {
-                foreach (var it in bag.Items)
+                var equipped = bag.Equipped(EquipmentSlot.Weapon);
+                if (equipped != null) Add(equipped);
+                foreach (var item in bag.Items) if (item != equipped) Add(item);
+
+                void Add(ItemStack item)
                 {
-                    var weapon = session.Catalog.Find(it.ItemId)?.Weapon;
-                    if (weapon != null && !weapon.Melee) guns.Add(new InventoryChoice(bag, it.InstanceId));
+                    var weapon = session.Catalog.Find(item.ItemId)?.Weapon;
+                    if (weapon != null && !weapon.Melee) guns.Add(new InventoryChoice(bag, item.InstanceId));
                 }
             }
+
+            void Build()
+            {
+                if (statsPanel != null && !statsPanel.gameObject.activeSelf) Destroy(statsPanel.gameObject);
+                Clear(panel);
+                float width = panel.rect.width;
+                WideHeader(panel, "枪械改装", "单指旋转 · 双指缩放 · 点枪模选槽", true);
+                Fill(At("Workshop footer", panel, 0, 630, width, 50), Ink);
+                Button(panel, "返回仓库", 12, 634, 127, 41, ShowStash);
+                Button(panel, "配件商店", 148, 634, 127, 41, () => ShowShop(ItemKind.Part));
+                if (guns.Count == 0)
+                {
+                    Label(panel, "还没有可改装的枪械", 26, 13, 205, width - 26, 58, TextAnchor.MiddleCenter);
+                    Label(panel, "可在补给商店购买，或从港区带回。", 19, 13, 270, width - 26, 43, TextAnchor.MiddleCenter, Muted);
+                    return;
+                }
+
+                float viewWidth = width - 24f;
+                const float viewHeight = 423f;
+                surface = At("Workshop model viewport", panel, 12, 57, viewWidth, viewHeight);
+                Fill(surface, new Color32(31, 46, 53, 255), true);
+                surface.gameObject.AddComponent<RectMask2D>();
+                var art = Stretch("Rotatable weapon", surface);
+                gunsmithImage = art.gameObject.AddComponent<RawImage>();
+                gunsmithImage.color = Color.clear;
+                gunsmithImage.raycastTarget = false;
+                partFrame = At("Selected model part", surface, 0, 0, 0, 0);
+                partFrame.gameObject.AddComponent<PartFrame>();
+                partFrame.gameObject.SetActive(false);
+                if (gunsmithStage == null) gunsmithStage = new ItemPreviewStage(transform, 1);
+                int textureWidth = Mathf.RoundToInt(Mathf.Min(1600f, viewWidth));
+                int textureHeight = Mathf.RoundToInt(textureWidth * viewHeight / viewWidth);
+                if (gunsmithTexture == null || gunsmithTexture.width != textureWidth || gunsmithTexture.height != textureHeight)
+                {
+                    ItemIconCache.Release(gunsmithTexture);
+                    gunsmithTexture = ItemIconCache.Texture(textureWidth, textureHeight, 24);
+                }
+                gunsmithImage.texture = gunsmithTexture;
+                workshopGesture = surface.gameObject.AddComponent<WorkshopGesture>();
+                workshopGesture.Rotate = delta => { gunsmithStage.Rotate(delta); gunsmithDirty = true; };
+                workshopGesture.Zoom = scale => { gunsmithStage.Zoom(scale); gunsmithDirty = true; };
+                workshopGesture.Tap = PickPin;
+                for (int n = 0; n < pins.Length; n++) pins[n] = CreatePin((PartSlot)n);
+                foreach (var pin in pins) pin.Card.SetAsLastSibling();
+                projectWorkshopPins = ProjectPins;
+                workshopRenderMessage = Label(surface, "", 22, 12, 167, viewWidth - 24f, 50, TextAnchor.MiddleCenter, Muted);
+                Fill(At("Model frame top", surface, 0, 0, viewWidth, 2), Border);
+                Fill(At("Model frame bottom", surface, 0, viewHeight - 2, viewWidth, 2), Border);
+                title = Label(surface, "", 25, 14, 7, viewWidth * .38f - 16, 38, TextAnchor.MiddleLeft);
+                title.resizeTextForBestFit = true;
+                title.resizeTextMinSize = 17;
+                title.resizeTextMaxSize = 25;
+                total = Label(surface, "", 16, 15, 50, 208, 26, TextAnchor.MiddleLeft, Muted);
+                previewHeader = Label(surface, "", 16, viewWidth * .39f, 9, viewWidth * .61f - 234, 33, TextAnchor.MiddleCenter, Aqua);
+                Button(surface, "上一把", viewWidth - 225, 11, 103, 37, () => ChangeGun(-1)).interactable = guns.Count > 1;
+                Button(surface, "下一把", viewWidth - 114, 11, 103, 37, () => ChangeGun(1)).interactable = guns.Count > 1;
+                Button(surface, "重置视角", viewWidth - 114, viewHeight - 47, 103, 36, () => { gunsmithStage.ResetView(); gunsmithDirty = true; });
+
+                float compareWidth = width - 156f;
+                note = Label(panel, "", 21, 14, 481, compareWidth - 10, 41, TextAnchor.MiddleLeft, Aqua);
+                note.name = "Workshop comparison";
+                note.resizeTextForBestFit = true;
+                note.resizeTextMinSize = 15;
+                note.resizeTextMaxSize = 21;
+                statsButton = Button(panel, "完整参数", width - 130, 483, 118, 36, () => { expanded = !expanded; DrawMetrics(); });
+                tray = At("Workshop candidates", panel, 12, 525, viewWidth, 100);
+                Fill(tray, Ink);
+                statsPanel = At("Workshop parameters", panel, width - 343, 111, 320, 340);
+                cancel = Button(panel, "取消预览", width - 351, 634, 130, 41, () => { preview = null; Refresh(); });
+                confirmation = At("Installation confirmation", panel, width - 209, 634, 197, 41);
+                Refresh();
+            }
+
+            WorkshopPin CreatePin(PartSlot slot)
+            {
+                var line = At("Part leader / " + slot, surface, 0, 0, 0, 1.4f);
+                Fill(line, Aqua);
+                var dot = Anchor("Part hotspot / " + slot, surface, 0, 1);
+                dot.sizeDelta = new Vector2(32, 32);
+                var ring = Fill(dot, Aqua);
+                ring.sprite = icons[RaidIcon.ControlRing];
+                var centre = Anchor("Hotspot pin", dot, .5f, .5f);
+                centre.sizeDelta = new Vector2(5, 5);
+                Fill(centre, Pale);
+                var card = At("Part caption / " + slot, surface, 0, 0, 69, 29);
+                Fill(card, new Color32(17, 29, 35, 244));
+                var caption = Label(card, PartName(slot), 15, 1, 0, 67, 29, TextAnchor.MiddleCenter, Pale);
+                SetActive(dot.gameObject, false);
+                SetActive(card.gameObject, false);
+                SetActive(line.gameObject, false);
+                return new WorkshopPin { Dot = dot, Card = card, Line = line, Face = ring, Caption = caption };
+            }
+
+            void ProjectPins()
+            {
+                var gun = guns[index].Item;
+                var definition = session.Catalog.Find(gun?.ItemId)?.Weapon;
+                float w = surface.rect.width, h = surface.rect.height;
+                bool frameVisible = false;
+                for (int n = 0; n < pins.Length; n++)
+                {
+                    var slot = (PartSlot)n;
+                    var marker = pins[n];
+                    Vector2 uv = default;
+                    Rect region = default;
+                    bool visible = WeaponRules.Socket(definition, slot) != null && gunsmithStage.Project(slot, out uv, out region);
+                    marker.Visible = visible;
+                    SetActive(marker.Dot.gameObject, visible);
+                    SetActive(marker.Card.gameObject, visible);
+                    SetActive(marker.Line.gameObject, visible);
+                    if (!visible) continue;
+                    bool selected = slot == activeSlot;
+                    var target = new Vector2(uv.x * w, (1 - uv.y) * h);
+                    marker.Target = target;
+                    marker.Region = new Rect(region.xMin * w, (1f - region.yMax) * h, region.width * w, region.height * h);
+                    if (selected)
+                    {
+                        const float margin = 6f;
+                        partFrame.anchoredPosition = new Vector2(marker.Region.xMin - margin, -marker.Region.yMin + margin);
+                        partFrame.sizeDelta = marker.Region.size + Vector2.one * (2 * margin);
+                        frameVisible = true;
+                    }
+                    marker.Dot.anchoredPosition = new Vector2(target.x, -target.y);
+                    marker.Dot.sizeDelta = Vector2.one * (selected ? 46 : 32);
+                    marker.Face.color = selected ? Amber : Aqua;
+                    marker.Caption.color = selected ? Amber : Pale;
+                }
+                for (int n = 0; n < pins.Length; n++)
+                {
+                    var marker = pins[n];
+                    if (!marker.Visible) continue;
+                    var target = marker.Target;
+                    var center = CaptionPosition(n, w, h);
+                    marker.Hit = new Rect(center.x - 34.5f, center.y - 14.5f, 69, 29);
+                    marker.Card.anchoredPosition = new Vector2(marker.Hit.x, -marker.Hit.y);
+                    var d = center - target;
+                    marker.Line.anchoredPosition = new Vector2(target.x, -target.y);
+                    marker.Line.localRotation = Quaternion.Euler(0, 0, -Mathf.Atan2(d.y, d.x) * Mathf.Rad2Deg);
+                    marker.Line.sizeDelta = new Vector2(Mathf.Max(0, d.magnitude - 24), 1.4f);
+                    marker.Line.GetComponent<Image>().color = (PartSlot)n == activeSlot ? Amber : Aqua;
+                }
+                SetActive(partFrame.gameObject, frameVisible);
+            }
+
+            Vector2 CaptionPosition(int index, float width, float height)
+            {
+                Vector2 wanted = pins[index].Target + PinOffsets[index];
+                Vector2 best = wanted;
+                float score = float.PositiveInfinity;
+                for (int i = -1; i < PinOffsets.Length; i++)
+                {
+                    Vector2 at = i < 0 ? wanted : pins[index].Target + PinOffsets[i];
+                    at.x = Mathf.Clamp(at.x, 40f, width - 40f);
+                    at.y = Mathf.Clamp(at.y, 85f, height - 63f);
+                    var box = new Rect(at.x - 38f, at.y - 18f, 76f, 36f);
+                    float cost = (at - wanted).sqrMagnitude;
+                    for (int n = 0; n < pins.Length; n++)
+                    {
+                        if (!pins[n].Visible) continue;
+                        Vector2 t = pins[n].Target;
+                        if (box.Overlaps(new Rect(t.x - 24, t.y - 24, 48, 48))) cost += 220000f;
+                        if (n < index && box.Overlaps(pins[n].Hit)) cost += 220000f;
+                    }
+                    if (cost < score) { score = cost; best = at; }
+                }
+                return best;
+            }
+
+            void PickPin(Vector2 local)
+            {
+                if (!surface.rect.Contains(local)) return;
+                var point = new Vector2(local.x, -local.y);
+                for (int n = pins.Length - 1; n >= 0; n--)
+                    if (pins[n].Visible && pins[n].Hit.Contains(point)) { ChooseSlot((PartSlot)n); return; }
+                PartSlot? closest = null;
+                float nearest = float.PositiveInfinity;
+                for (int n = 0; n < pins.Length; n++)
+                {
+                    var marker = pins[n];
+                    if (!marker.Visible) continue;
+                    float distance = (marker.Target - point).sqrMagnitude;
+                    if (distance <= 22f * 22f && distance < nearest) { closest = (PartSlot)n; nearest = distance; }
+                }
+                if (closest.HasValue) { ChooseSlot(closest.Value); return; }
+                for (int n = 0; n < pins.Length; n++)
+                {
+                    var marker = pins[n];
+                    if (!marker.Visible) continue;
+                    float distance = (marker.Target - point).sqrMagnitude;
+                    if (marker.Region.Contains(point) && distance < nearest) { closest = (PartSlot)n; nearest = distance; }
+                }
+                if (closest.HasValue) ChooseSlot(closest.Value);
+            }
+
+            void ChooseSlot(PartSlot slot)
+            {
+                if (activeSlot == slot) return;
+                activeSlot = slot;
+                preview = null;
+                cardScroll = 0;
+                Refresh();
+            }
+
             void ChangeGun(int step)
             {
                 index = (index + step + guns.Count) % guns.Count;
-                slot = PartSlot.Sight;
-                option = legacyLevel = -1;
-                optionPage = 0;
-                showStock = false;
+                activeSlot = null;
+                preview = null;
+                cardScroll = 0;
                 Refresh();
             }
-            void ChooseSlot(PartSlot value)
-            {
-                slot = value;
-                option = legacyLevel = -1;
-                optionPage = 0;
-                showStock = false;
-                Refresh();
-            }
+
             void Refresh()
             {
-                var choice = guns[index];
-                var item = choice.Item;
-                if (item == null) { ShowGunsmith(); return; }
-                var def = session.Catalog.Find(item.ItemId);
-                if (creditsReadout != null) creditsReadout.text = session.Profile.Credits + " 信用点";
-                gunLabel.text = def.DisplayName;
-                pageLabel.text = (index + 1) + " / " + guns.Count + (item.Slot == EquipmentSlot.Weapon ? " · 已装备" : "");
-                Clear(iconRoot);
-                DrawItemIcon(iconRoot, def, item, 0, 0, 75, 50);
-                Clear(choices);
-                for (int i = 0; i <= (int)PartSlot.Magazine; i++)
-                {
-                    PartSlot value = (PartSlot)i;
-                    var button = Button(choices, PartName(value), 9 + i * 68, 8, 65, 36, () => ChooseSlot(value), value == slot);
-                    button.interactable = WeaponRules.Socket(def.Weapon, value) != null;
-                }
-                var link = item.Parts.Get(slot);
-                var fitted = session.Catalog.Find(link.ItemId);
-                var legacy = (WeaponModSlot)slot;
-                bool levels = (int)slot <= (int)PartSlot.Stock && WeaponTuning.SupportsUpgrades(def.Weapon) && item.ItemId == WeaponDefinition.RifleId;
-                int owned = levels ? WeaponTuning.Owned(item.Mods, legacy) : 0;
-                int installed = levels ? WeaponTuning.Level(item.Mods, legacy) : 0;
-                Label(choices, "已装 · " + (fitted != null ? fitted.DisplayName : installed > 0 ? "原厂改装 " + installed : "原装"),
-                    17, 13, 54, 328, 30, color: Aqua);
-                parts.Clear(); AddLooseParts(session.Loadout); AddLooseParts(session.Stash);
-                if (option >= parts.Count) option = -1;
-                const int perPage = 3;
-                int pages = Mathf.Max(1, (parts.Count + perPage - 1) / perPage);
-                optionPage = Mathf.Clamp(optionPage, 0, pages - 1);
-                var candidate = option >= 0 ? parts[option] : default;
-                var part = session.Catalog.Find(candidate.Item?.ItemId);
-                var proposed = item.Clone();
-                if (showStock) proposed.Parts.Set(slot, default);
-                else if (part != null) proposed.Parts.Set(slot, new PartLink { ItemId = part.Id, InstanceId = candidate.Id });
-                else if (legacyLevel >= 0 && levels && WeaponTuning.TrySelect(item.Mods, legacy, legacyLevel, out var mods, out _)) proposed.Mods = mods;
-                gunsmithStage.Set(def, proposed, session.Catalog, keepAngle: previewGun == choice.Id);
-                previewGun = choice.Id;
+                var gun = guns[index].Item;
+                if (gun == null) { ShowGunsmith(); return; }
+                var def = session.Catalog.Find(gun.ItemId);
+                title.text = def.DisplayName;
+                total.text = (index + 1) + " / " + guns.Count + (gun.Slot == EquipmentSlot.Weapon ? "  · 已装备" : "  · 未装备");
+                previewHeader.text = preview != null ? "预览 · " + preview.Name : "当前装配";
+                var next = Proposed(gun, def);
+                gunsmithStage.Set(def, next, session.Catalog, keepAngle: renderedId == gun.InstanceId);
+                gunsmithStage.Focus(activeSlot);
+                renderedId = gun.InstanceId;
                 gunsmithDirty = true;
-                art.color = Color.white;
-                Label(choices, showStock ? "正在预览拆下" : parts.Count == 0 ? "暂无可安装的兼容配件" : "兼容配件 · " + parts.Count + " 件", 16, 13, 91, 223, 29, color: Muted);
-                if (pages > 1)
-                {
-                    Button(choices, "‹", 237, 86, 44, 32, () => { option = -1; optionPage--; Refresh(); }).interactable = optionPage > 0;
-                    Button(choices, "›", 294, 86, 44, 32, () => { option = -1; optionPage++; Refresh(); }).interactable = optionPage + 1 < pages;
-                }
-                for (int row = 0; row < perPage && optionPage * perPage + row < parts.Count; row++)
-                {
-                    int pick = optionPage * perPage + row;
-                    var listing = parts[pick];
-                    var loose = session.Catalog.Find(listing.Item.ItemId);
-                    var cell = Button(choices, "", 12, 122 + row * 40, 329, 38, () =>
-                    {
-                        option = pick; legacyLevel = -1; showStock = false; Refresh();
-                    }, option == pick);
-                    DrawItemIcon(cell.transform, loose, listing.Item, 3, 2, 49, 34);
-                    var tone = option == pick ? Ink : Pale;
-                    Label(cell.transform, loose.DisplayName, 16, 54, 2, 203, 34, TextAnchor.MiddleLeft, tone);
-                    Label(cell.transform, listing.Bag == session.Stash ? "仓库" : "随身", 13, 259, 2, 60, 34, TextAnchor.MiddleRight, tone);
-                }
-                Button(choices, "安装所选", 12, 245, 153, 42, () => Fit(candidate.Bag, candidate.Id), true).interactable = part != null && !showStock;
-                Button(choices, showStock ? "确认拆下" : "预览拆下", 184, 245, 157, 42, () =>
-                {
-                    if (showStock) Fit(session.Stash, null);
-                    else { showStock = true; option = legacyLevel = -1; Refresh(); }
-                }).interactable = fitted != null;
-                if (levels)
-                {
-                    Label(choices, "原厂改装 / 已购到 " + owned + " 级", 16, 13, 307, 328, 30, color: Amber);
-                    for (int lv = 0; lv <= WeaponTuning.MaxUpgradeLevel; lv++)
-                    {
-                        int level = lv;
-                        bool allowed = WeaponTuning.TrySelect(item.Mods, legacy, level, out _, out int cost);
-                        string text = level == installed ? level + " · 使用中" : !allowed ? level + " · 待解锁" : cost == 0 ? level + " · 已购" : level + " · " + cost;
-                        Button(choices, text, 12 + lv * 112, 341, 107, 38, () =>
-                        {
-                            showStock = false; option = -1; legacyLevel = level; Refresh();
-                        }, legacyLevel == level).interactable = allowed && fitted == null && installed != level;
-                    }
-                    if (legacyLevel >= 0)
-                        Button(choices, "应用原厂改装", 12, 391, 329, 38, () =>
-                        {
-                            if (session.SelectWeaponPart(choice.Bag, choice.Id, legacy, legacyLevel)) { legacyLevel = -1; Refresh(); }
-                        }, true);
-                    else if (fitted != null) Label(choices, "拆下新配件后可切回已购的原厂改装。", 15, 13, 389, 326, 52, color: Muted);
-                }
-                else Label(choices, "仅显示兼容接口及适用型号的配件。", 16, 13, 307, 328, 50, color: Muted);
-                Compare(def.Weapon, item, proposed);
+                UpdateCredits();
+                DrawOptions(gun, def);
+                DrawMetrics();
+                DrawConfirmation();
+            }
 
-                void Fit(GridInventory source, string id)
+            void DrawConfirmation()
+            {
+                Clear(confirmation);
+                var option = preview;
+                var slot = activeSlot;
+                var choice = guns[index];
+                var button = Button(confirmation, "确认安装", 0, 0, 197, 41, null, true);
+                button.interactable = false;
+                cancel.interactable = option != null;
+                workshopConfirm = option != null ? button : null;
+                if (option == null || !slot.HasValue) return;
+                if (option.Cost > 0) button.GetComponentInChildren<Text>().text = "确认安装 · " + option.Cost;
+                button.onClick.AddListener(() =>
                 {
-                    if (session.TryFitPart(choice.Bag, choice.Id, slot, source, id, out var error))
-                    { option = legacyLevel = -1; showStock = false; Refresh(); }
-                    else Notify(error ?? "未能更改配件。");
+                    // An earlier touch must not confirm a different or not-yet-rendered quote.
+                    if (button != workshopConfirm || !button.IsActive() || !button.IsInteractable()) return;
+                    Apply(choice, slot.Value, option);
+                });
+            }
+
+            ItemStack Proposed(ItemStack gun, ItemDefinition def)
+            {
+                if (preview == null || !activeSlot.HasValue) return gun;
+                var next = gun.Clone();
+                var slot = activeSlot.Value;
+                next.Parts.Set(slot, preview.Part != null ? new PartLink { ItemId = preview.Part.Id } : default);
+                if (preview.Part == null && UsesFactory(def, slot))
+                    WeaponTuning.TrySelect(gun.Mods, (WeaponModSlot)slot, preview.Level, out next.Mods, out _);
+                return next;
+            }
+
+            void DrawOptions(ItemStack gun, ItemDefinition def)
+            {
+                Clear(tray);
+                float width = tray.rect.width;
+                if (!activeSlot.HasValue)
+                {
+                    Label(tray, "点枪上的标记，查看兼容配件。试装不会扣费或改动当前装备。", 21, 12, 7, width - 24, 84,
+                        TextAnchor.MiddleCenter, Muted);
+                    return;
                 }
-                void AddLooseParts(GridInventory bag)
+                var slot = activeSlot.Value;
+                var installed = gun.Parts.Get(slot);
+                bool factory = UsesFactory(def, slot);
+                var options = new List<WorkshopOption>();
+                foreach (var item in session.Catalog.CompatibleParts(def, slot))
                 {
-                    foreach (var stack in bag.Items)
-                        if (WeaponRules.CanMount(def, slot, session.Catalog.Find(stack.ItemId), out _))
-                            parts.Add(new InventoryChoice(bag, stack.InstanceId));
+                    int count = session.Stash.Count(item.Id) + session.Loadout.Count(item.Id);
+                    options.Add(new WorkshopOption { Part = item, Cost = count == 0 ? item.Value : 0, Count = count,
+                        Installed = installed.ItemId == item.Id, Name = item.DisplayName });
+                }
+                for (int level = 0; level <= (factory ? WeaponTuning.MaxUpgradeLevel : 0); level++)
+                {
+                    int cost = 0;
+                    if (factory && !WeaponTuning.TrySelect(gun.Mods, (WeaponModSlot)slot, level, out _, out cost)) continue;
+                    options.Add(new WorkshopOption { Level = level, Cost = cost, Name = FactoryName(slot, level),
+                        Installed = installed.Empty && (!factory || level == WeaponTuning.Level(gun.Mods, (WeaponModSlot)slot)) });
+                }
+                const float stride = 226f;
+                var content = HorizontalStrip(tray, "Compatible catalog / " + slot, 0, 1, width, 98,
+                    options.Count * stride - 8f, cardScroll, value => cardScroll = value);
+                for (int i = 0; i < options.Count; i++)
+                {
+                    var option = options[i];
+                    bool selected = preview != null && preview.Part == option.Part && preview.Level == option.Level;
+                    var card = Button(content, "", i * stride, 0, stride - 8f, 91, () => { preview = option.Installed ? null : option; Refresh(); },
+                        false, selected ? Color.Lerp(Plate, Aqua, .31f) : Plate);
+                    card.name = "Candidate / " + (option.Part != null ? option.Part.Id : "factory-" + option.Level);
+                    Fill(At("Candidate rule", card.transform, 0, 0, 218, 2), selected ? Amber : option.Installed ? Aqua : Border);
+                    if (option.Part != null) DrawItemIcon(card.transform, option.Part, null, 6, 11, 76, 75);
+                    else if (option.Level > 0)
+                    {
+                        var icon = ItemIcon(card.transform, "Factory model / " + option.Level, 1f, 6, 11, 76, 75, false);
+                        itemIcons.BindLegacy(icon, slot, option.Level);
+                    }
+                    else
+                    {
+                        var original = gun.Clone();
+                        original.Parts.Set(slot, default);
+                        if (factory) WeaponTuning.TrySelect(gun.Mods, (WeaponModSlot)slot, 0, out original.Mods, out _);
+                        DrawItemIcon(card.transform, def, original, 6, 11, 76, 75);
+                    }
+                    var name = Label(card.transform, option.Name, 17, 87, 9, 125, 48, TextAnchor.MiddleLeft);
+                    name.resizeTextForBestFit = true;
+                    name.resizeTextMinSize = 13;
+                    name.resizeTextMaxSize = 17;
+                    string text = option.Installed ? "已安装" : option.Count > 0 ? "持有 × " + option.Count + " 件"
+                        : option.Part != null ? "商店售价 " + option.Cost : option.Cost > 0 ? "原厂售价 " + option.Cost
+                        : option.Level > 0 ? "已购原厂" : "原装 · 无需购买";
+                    Label(card.transform, text, 14, 87, 58, 125, 30, TextAnchor.MiddleLeft, option.Installed ? Aqua : Muted);
                 }
             }
-            void Compare(WeaponDefinition def, ItemStack current, ItemStack proposed)
-            {
-                Clear(compare);
-                Label(compare, "当前 → 装拆预览", 23, 13, 11, 302, 41, color: Amber);
-                var now = WeaponTuning.Evaluate(def, current, session.Catalog);
-                var after = WeaponTuning.Evaluate(def, proposed, session.Catalog);
-                Stat("弹匣容量", WeaponRules.Capacity(def, current, session.Catalog), WeaponRules.Capacity(def, proposed, session.Catalog), "发", false, 65);
-                Stat("换弹耗时", now.ReloadSeconds, after.ReloadSeconds, "秒", true, 113);
-                Stat("后坐幅度", now.Recoil, after.Recoil, "", true, 161);
-                Stat("腰射散布", now.HipSpread * 1000, after.HipSpread * 1000, "‰", true, 209);
-                Stat("开镜散布", now.AimSpread * 1000, after.AimSpread * 1000, "‰", true, 257);
-                Stat("开镜耗时", now.AimSeconds, after.AimSeconds, "秒", true, 305);
-                Stat("开镜视角", now.AimFov, after.AimFov, "°", null, 353);
-                Label(compare, "弹药 · " + AmmoName(def.AmmoFamily), 16, 13, 413, 301, 34, color: Muted);
 
-                void Stat(string name, float a, float b, string unit, bool? lower, int y)
+            void DrawMetrics()
+            {
+                var gun = guns[index].Item;
+                var def = session.Catalog.Find(gun.ItemId);
+                var after = Proposed(gun, def);
+                var metrics = Metrics(def.Weapon, gun, after);
+                string headline = "";
+                int changes = 0;
+                foreach (var row in metrics)
                 {
-                    Label(compare, name, 16, 13, y, 99, 29, color: Muted);
-                    Color color = Mathf.Abs(b - a) < .001f || !lower.HasValue ? Pale : ((b < a) == lower.Value ? Aqua : MapDanger);
-                    Label(compare, a.ToString("0.##") + " → " + b.ToString("0.##") + " " + unit, 16, 114, y, 201, 29, TextAnchor.UpperRight, color);
-                    Fill(At("Comparison rule", compare, 13, y + 32, 303, 1), Border);
+                    if (!row.Changed) continue;
+                    if (changes < 3) headline += (changes == 0 ? "" : "   ·   ") + row.Readout;
+                    changes++;
                 }
+                note.text = preview == null ? metrics[0].Readout + "   ·   " + (activeSlot.HasValue ? "选择" + PartName(activeSlot.Value) : "当前配置")
+                    : changes == 0 ? "仅外观变化 · 参数不变" : headline;
+                note.color = preview == null ? Pale : Aqua;
+                statsButton.GetComponentInChildren<Text>().text = expanded ? "收起参数" : "完整参数";
+                SetActive(statsPanel.gameObject, expanded);
+                if (!expanded) return;
+                Clear(statsPanel);
+                var backing = At("Parameter backdrop", statsPanel, 0, 0, 320, 340);
+                Fill(backing, new Color32(12, 22, 29, 249), true);
+                Fill(At("Parameter accent", statsPanel, 0, 0, 320, 2), Aqua);
+                Label(statsPanel, preview != null ? "当前 → 预览" : "当前参数", 19, 12, 3, 298, 31, TextAnchor.MiddleLeft);
+                int rowIndex = 0;
+                foreach (var row in metrics)
+                {
+                    Label(statsPanel, row.Readout, 16, 12, 33 + rowIndex * 25, 296, 24, TextAnchor.MiddleLeft, row.Changed ? Aqua : Muted);
+                    rowIndex++;
+                }
+                Label(statsPanel, "弹药 · " + AmmoName(def.Weapon.AmmoFamily), 14, 12, 309, 296, 25, TextAnchor.MiddleLeft, Muted);
+            }
+
+            WorkshopMetric[] Metrics(WeaponDefinition def, ItemStack old, ItemStack next)
+            {
+                var a = WeaponTuning.Evaluate(def, old, session.Catalog);
+                var b = WeaponTuning.Evaluate(def, next, session.Catalog);
+                return new[]
+                {
+                    new WorkshopMetric("容量", WeaponRules.Capacity(def, old, session.Catalog), WeaponRules.Capacity(def, next, session.Catalog), "发"),
+                    new WorkshopMetric("换弹耗时", a.ReloadSeconds, b.ReloadSeconds, "秒"),
+                    new WorkshopMetric("后坐幅度", a.Recoil, b.Recoil, ""),
+                    new WorkshopMetric("腰射散布", a.HipSpread * 1000f, b.HipSpread * 1000f, "‰"),
+                    new WorkshopMetric("开镜散布", a.AimSpread * 1000f, b.AimSpread * 1000f, "‰"),
+                    new WorkshopMetric("开镜耗时", a.AimSeconds, b.AimSeconds, "秒"),
+                    new WorkshopMetric("开镜视角", a.AimFov, b.AimFov, "°"),
+                    new WorkshopMetric("游戏伤害", a.Damage, b.Damage, ""),
+                    new WorkshopMetric("开火间隔", a.FireInterval, b.FireInterval, "秒"),
+                    new WorkshopMetric("有效距离", a.Range, b.Range, "米"),
+                    new WorkshopMetric("移动系数", def.MoveFactor, def.MoveFactor, "")
+                };
+            }
+
+            void Apply(InventoryChoice choice, PartSlot slot, WorkshopOption option)
+            {
+                string error;
+                bool ok = option.Part != null
+                    ? session.TryFitCatalogPart(choice.Bag, choice.Id, slot, option.Part.Id, option.Cost, out error)
+                    : session.TryFitWorkshopOriginal(choice.Bag, choice.Id, slot, option.Level, option.Cost, out error);
+                if (current != ScreenPage.Gunsmith) return;
+                if (ok) { Notify("配件配置已保存。"); preview = null; Refresh(); }
+                else Notify(error ?? "未能更改配件。");
             }
         }
+
+        static bool UsesFactory(ItemDefinition definition, PartSlot slot) => definition.Id == WeaponDefinition.RifleId
+            && (int)slot <= (int)PartSlot.Stock && WeaponTuning.SupportsUpgrades(definition.Weapon);
 
         void RenderGunsmithPreview()
         {
             if (gunsmithTexture == null || (!gunsmithDirty && gunsmithTexture.IsCreated())) return;
-            if (gunsmithStage.Render(gunsmithTexture, new Color32(17, 27, 33, 255))) gunsmithDirty = false;
+            if (!gunsmithStage.Render(gunsmithTexture, new Color32(31, 46, 53, 255)))
+            {
+                gunsmithImage.color = Color.clear;
+                if (workshopConfirm != null) workshopConfirm.interactable = false;
+                if (workshopRenderMessage.text.Length == 0) workshopRenderMessage.text = "模型预览不可用";
+                return;
+            }
+            gunsmithDirty = false;
+            if (workshopRenderMessage.text.Length > 0) workshopRenderMessage.text = "";
+            gunsmithImage.color = Color.white;
+            projectWorkshopPins?.Invoke();
+            if (workshopConfirm != null) workshopConfirm.interactable = true;
         }
 
         void DisposeGunsmithPreview()
         {
             gunsmithDirty = false;
+            projectWorkshopPins = null;
+            gunsmithImage = null;
+            workshopConfirm = null;
+            workshopRenderMessage = null;
+            workshopGesture = null;
             gunsmithStage?.Dispose();
             gunsmithStage = null;
             ItemIconCache.Release(gunsmithTexture);

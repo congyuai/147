@@ -117,37 +117,127 @@ namespace Dustline
             return EditInventory(guns, parts, (GridInventory gunBag, GridInventory partBag, out string why) =>
             {
                 var gun = gunBag.Find(gunId);
-                var weapon = Catalog.Find(gun?.ItemId);
-                if (weapon?.Weapon == null || weapon.Weapon.Melee || WeaponRules.Socket(weapon.Weapon, slot) == null)
-                { why = "当前没有可改装的枪械。"; return false; }
+                if (!CheckSocket(gun, slot, out var weapon, out why)) return false;
                 var incoming = partBag.Find(partId);
-                if (partId != null && (incoming == null || !WeaponRules.CanMount(weapon, slot, Catalog.Find(incoming.ItemId), out _)))
+                if (partId != null)
                 {
-                    if (incoming == null) why = "未找到配件。";
-                    else WeaponRules.CanMount(weapon, slot, Catalog.Find(incoming.ItemId), out why);
-                    return false;
+                    if (incoming == null || incoming.Slot != EquipmentSlot.None) { why = "未找到配件。"; return false; }
+                    if (!WeaponRules.CanMount(weapon, slot, Catalog.Find(incoming.ItemId), out why)) return false;
+                    if (!partBag.Remove(incoming.InstanceId)) { why = "未能取出配件。"; return false; }
                 }
-                var previous = gun.Parts.Get(slot);
-                if (partId == null && previous.Empty) { why = "此配件槽已是原装。"; return false; }
-                if (incoming != null && !partBag.Remove(incoming.InstanceId)) { why = "未能取出配件。"; return false; }
-                gun.Parts.Set(slot, incoming != null ? new PartLink { InstanceId = incoming.InstanceId, ItemId = incoming.ItemId } : default);
-                if (!previous.Empty && !partBag.TryInsert(new ItemStack { InstanceId = previous.InstanceId, ItemId = previous.ItemId }, out why)) return false;
-                int capacity = WeaponRules.Capacity(weapon.Weapon, gun, Catalog);
-                if (gun.LoadedAmmo > capacity)
-                {
-                    int excess = gun.LoadedAmmo - capacity;
-                    if (!partBag.TryAdd(WeaponRules.LoadedType(weapon.Weapon, gun), excess, out why)) return false;
-                    gun.LoadedAmmo = capacity;
-                }
-                try
-                {
-                    gunBag.Restore(gunBag.Snapshot());
-                    if (!ReferenceEquals(gunBag, partBag)) partBag.Restore(partBag.Snapshot());
-                }
-                catch (InvalidDataException e) { why = e.Message; return false; }
-                why = null;
-                return true;
+                else if (gun.Parts.Get(slot).Empty) { why = "此配件槽已是原装。"; return false; }
+                return StageFit(gunBag, gun, weapon, slot, incoming, partBag, out why);
             }, out error);
+        }
+
+        internal bool TryFitCatalogPart(GridInventory guns, string gunId, PartSlot slot, string partId, int quoted, out string error)
+        {
+            error = "请在整备时改装。";
+            if (Phase != SessionPhase.Menu || (guns != Stash && guns != Loadout)) return false;
+            var gun = guns.Find(gunId);
+            if (!CheckSocket(gun, slot, out var weapon, out error)) return false;
+            var part = Catalog.Find(partId);
+            if (!WeaponRules.CanMount(weapon, slot, part, out error)) return false;
+            if (gun.Parts.Get(slot).ItemId == partId) { error = "已安装此配件。"; return false; }
+            var other = guns == Stash ? Loadout : Stash;
+            bool owned = guns.Count(partId) > 0 || other.Count(partId) > 0;
+            int cost = owned ? 0 : part.Value;
+            if (cost != quoted) { error = "持有量或报价已变，请重新预览。"; return false; }
+            if (cost > Profile.Credits) { error = "信用点不足。"; return false; }
+            if (!owned)
+                return Stage(Stash, null, out var boughtStash, out var boughtCarried, out error)
+                    && SaveMenuInventory(boughtStash, boughtCarried, Profile.Credits - cost);
+
+            error = "未找到可用配件。";
+            foreach (var (bag, item) in AvailableParts())
+                if (Stage(bag, item.InstanceId, out var stash, out var carried, out error))
+                    return SaveMenuInventory(stash, carried, Profile.Credits);
+            return false;
+
+            IEnumerable<(GridInventory bag, ItemStack item)> AvailableParts()
+            {
+                if (gun.Slot == EquipmentSlot.None)
+                {
+                    // Taking the part from the gun's own pocket does not increase that pocket's load.
+                    foreach (var item in guns.Items)
+                        if (Loose(item) && item.Area == gun.Area) yield return (guns, item);
+                }
+                foreach (var item in guns.Items)
+                    if (Loose(item) && (gun.Slot != EquipmentSlot.None || item.Area != gun.Area)) yield return (guns, item);
+                foreach (var item in other.Items)
+                    if (Loose(item)) yield return (other, item);
+            }
+
+            bool Loose(ItemStack item) => item.Slot == EquipmentSlot.None && item.ItemId == partId;
+
+            bool Stage(GridInventory stock, string instance, out GridInventory nextStash, out GridInventory nextCarried, out string why)
+            {
+                nextStash = Stash.Draft();
+                nextCarried = Loadout.Draft();
+                var gunBag = guns == Stash ? nextStash : nextCarried;
+                ItemStack incoming;
+                if (instance == null) incoming = new ItemStack { ItemId = partId, InstanceId = Guid.NewGuid().ToString("N") };
+                else
+                {
+                    var partBag = stock == Stash ? nextStash : nextCarried;
+                    incoming = partBag.Find(instance);
+                    if (!partBag.Remove(instance)) { why = "未能取出配件。"; return false; }
+                }
+                return StageFit(gunBag, gunBag.Find(gunId), weapon, slot, incoming, nextStash, out why);
+            }
+        }
+
+        internal bool TryFitWorkshopOriginal(GridInventory guns, string gunId, PartSlot slot, int level, int quoted, out string error)
+        {
+            error = "请在整备时改装。";
+            if (Phase != SessionPhase.Menu || (guns != Stash && guns != Loadout)) return false;
+            var gun = guns.Find(gunId);
+            if (!CheckSocket(gun, slot, out var weapon, out error)) return false;
+            bool legacy = weapon.Id == WeaponDefinition.RifleId && (int)slot <= (int)PartSlot.Stock;
+            WeaponMods mods = gun.Mods;
+            int cost = 0;
+            if ((level != 0 || legacy) && (!legacy || !WeaponTuning.TrySelect(gun.Mods, (WeaponModSlot)slot, level, out mods, out cost)))
+            { error = "请先解锁前一级原厂改装。"; return false; }
+            if (gun.Parts.Get(slot).Empty && (!legacy || level == WeaponTuning.Level(gun.Mods, (WeaponModSlot)slot)))
+            { error = "已是此配置。"; return false; }
+            if (cost != quoted) { error = "改装报价已变，请重新预览。"; return false; }
+            if (cost > Profile.Credits) { error = "信用点不足。"; return false; }
+            var stash = Stash.Draft();
+            var carried = guns == Stash ? Loadout : Loadout.Draft();
+            var gunBag = guns == Stash ? stash : carried;
+            var staged = gunBag.Find(gunId);
+            staged.Mods = mods;
+            if (!StageFit(gunBag, staged, weapon, slot, null, stash, out error)) return false;
+            return SaveMenuInventory(stash, carried, Profile.Credits - cost);
+        }
+
+        bool CheckSocket(ItemStack gun, PartSlot slot, out ItemDefinition weapon, out string error)
+        {
+            weapon = Catalog.Find(gun?.ItemId);
+            error = WeaponRules.Socket(weapon?.Weapon, slot) == null ? "该枪型没有这个配件槽。" : null;
+            return error == null;
+        }
+
+        bool StageFit(GridInventory gunBag, ItemStack gun, ItemDefinition weapon, PartSlot slot, ItemStack incoming, GridInventory returns, out string error)
+        {
+            var previous = gun.Parts.Get(slot);
+            gun.Parts.Set(slot, incoming != null ? new PartLink { InstanceId = incoming.InstanceId, ItemId = incoming.ItemId } : default);
+            if (!previous.Empty && !returns.TryInsert(new ItemStack { InstanceId = previous.InstanceId, ItemId = previous.ItemId }, out error)) return false;
+            int capacity = WeaponRules.Capacity(weapon.Weapon, gun, Catalog);
+            if (gun.LoadedAmmo > capacity)
+            {
+                int excess = gun.LoadedAmmo - capacity;
+                gun.LoadedAmmo = capacity;
+                if (!returns.TryAdd(WeaponRules.LoadedType(weapon.Weapon, gun), excess, out error)) return false;
+            }
+            try
+            {
+                gunBag.Restore(gunBag.Snapshot());
+                if (!ReferenceEquals(gunBag, returns)) returns.Restore(returns.Snapshot());
+            }
+            catch (InvalidDataException e) { error = e.Message; return false; }
+            error = null;
+            return true;
         }
     }
 }
