@@ -100,7 +100,7 @@ namespace Dustline.Tests
                 }
                 if (kind == LootKind.MedicalCase)
                 {
-                    Assert.That(seen, Is.EquivalentTo(new[] { "medkit", "bandage", "trauma_case" }));
+                    Assert.That(seen, Is.EquivalentTo(new[] { "medkit", "bandage", "trauma_case", "tourniquet", "splint", "pain_tabs", "surgery" }));
                     Assert.That(bag.TryAdd("ammo", 1, out _), Is.False);
                     var source = new GridInventory(2, 2, 20, catalog);
                     Assert.That(source.TryAdd("ammo", 1, out var error), Is.True, error);
@@ -137,6 +137,7 @@ namespace Dustline.Tests
                 var loot = box.AddComponent<LootContainer>();
                 loot.Initialize("靶场测试医疗箱", catalog, kind: LootKind.MedicalCase);
                 Assert.That(loot.Inventory.TryAdd("medkit", 1, out _), Is.True);
+                Assert.That(loot.Inventory.TryMove(loot.Inventory.Items[0].InstanceId, 0, 0, true, out _), Is.True);
                 loot.Reveal();
                 typeof(GameUI).GetMethod("ShowFieldInventory", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(ui, new object[] { loot });
 
@@ -152,9 +153,23 @@ namespace Dustline.Tests
                 Assert.That(named, Is.True);
                 Assert.That(weightLabels, Is.EqualTo(1));
                 var glyphs = new HashSet<string>();
-                foreach (var image in panel.GetComponentsInChildren<Image>())
-                    if (image.gameObject.name == "Item symbol" && image.sprite != null) glyphs.Add(image.sprite.name);
-                Assert.That(glyphs, Is.EquivalentTo(new[] { "PouchItem", "BandageItem" }));
+                RawImage rotated = null;
+                foreach (var image in panel.GetComponentsInChildren<RawImage>())
+                {
+                    if (image.gameObject.name.StartsWith("Item model / ", System.StringComparison.Ordinal)) glyphs.Add(image.gameObject.name);
+                    if (image.gameObject.name == "Item model / medkit") rotated = image;
+                }
+                Assert.That(glyphs, Is.EquivalentTo(new[] { "Item model / medkit", "Item model / bandage" }));
+                Assert.That(rotated, Is.Not.Null);
+                var icon = rotated.rectTransform;
+                var tile = (RectTransform)icon.parent;
+                Assert.That(tile.rect.width, Is.GreaterThan(tile.rect.height));
+                Assert.That(Quaternion.Angle(icon.localRotation, Quaternion.Euler(0, 0, -90f)), Is.LessThan(.01f));
+                Assert.That(icon.rect.width / icon.rect.height, Is.EqualTo(.5f).Within(.001f));
+                Assert.That(icon.rect.width, Is.LessThan(tile.rect.height));
+                Assert.That(icon.rect.height, Is.LessThan(tile.rect.width));
+                Assert.That(icon.anchoredPosition.x, Is.EqualTo(tile.rect.width * .5f).Within(.001f));
+                Assert.That(icon.anchoredPosition.y, Is.EqualTo(-tile.rect.height * .5f).Within(.001f));
 
                 void Assign(string name, object value) => typeof(GameSession).GetProperty(name).GetSetMethod(true).Invoke(session, new[] { value });
             }
@@ -171,8 +186,8 @@ namespace Dustline.Tests
         {
             LootKind.MedicalCase => item == ItemKind.Medicine,
             LootKind.SupplyCrate => item == ItemKind.Weapon || item == ItemKind.Ammo,
-            LootKind.StorageLocker => item == ItemKind.Armor || item == ItemKind.Valuable,
-            LootKind.Toolbox or LootKind.EquipmentCase => item == ItemKind.Valuable,
+            LootKind.StorageLocker => item == ItemKind.Armor || item == ItemKind.Helmet || item == ItemKind.Rig || item == ItemKind.Pack || item == ItemKind.Valuable,
+            LootKind.Toolbox or LootKind.EquipmentCase => item == ItemKind.Valuable || item == ItemKind.Part,
             _ => true
         };
 

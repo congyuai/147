@@ -111,18 +111,19 @@ namespace Dustline
             UpdateMedicineButton(player);
 
             healthReadout.text = "生命  " + Mathf.CeilToInt(player.Health.Current);
-            staminaReadout.text = "体力  " + Mathf.CeilToInt(player.Stamina);
-            SetBar(lifeBar, player.Health.Current / player.Health.Maximum);
+            staminaReadout.text = "体力  " + Mathf.CeilToInt(player.Stamina) + (player.SprintExhausted ? "  /  步行" : "");
+            SetBar(lifeBar, player.Health.Current / (player.Health.Body?.TotalMaximum ?? player.Health.Maximum));
             SetBar(staminaBar, player.Stamina * 0.01f);
             ammoReadout.text = weapon.IsMelee ? (weapon.ActiveIsBound ? session.BoundBladeName + " / 随身刀" : "检修短棍 / 近战")
                 : weapon.Magazine == null ? "未装备主武器" : weapon.Magazine.Reloading ? "正在换弹"
-                : weapon.Magazine.Rounds + " / " + weapon.Reserve + (weapon.Automatic ? "   全自动" : "   半自动");
+                : weapon.Magazine.Rounds + " / " + weapon.Reserve + (weapon.Automatic ? "  自动" : "  单发")
+                    + "\n" + (session.Catalog.Find(weapon.ReadyAmmoType)?.DisplayName ?? "无兼容备弹");
 
             if (session.Phase == SessionPhase.Practice)
             {
                 var range = session.Practice;
                 statusReadout.text = "离线靶场 / " + Mathf.RoundToInt(sampledFps) + " 帧\n开火 " + range.Shots + " / 命中 " + range.Hits + "\n击倒靶板 " + range.Plates;
-                SetFieldPrompt(player.IsTreating ? "正在使用 " + player.TreatmentItem.DisplayName : null, player.IsTreating, player.TreatmentProgress);
+                SetFieldPrompt(player.IsTreating ? TreatmentPrompt(player) : null, player.IsTreating, player.TreatmentProgress);
                 return;
             }
 
@@ -156,7 +157,7 @@ namespace Dustline
             }
             else if (player.IsTreating)
             {
-                prompt.text = "正在使用 " + player.TreatmentItem.DisplayName;
+                prompt.text = TreatmentPrompt(player);
                 progress = player.TreatmentProgress;
             }
             else if (player.SearchingLoot != null)
@@ -167,6 +168,8 @@ namespace Dustline
             else prompt.text = player.InteractionHint;
             SetFieldPrompt(prompt.text, inZone != null || player.IsTreating || player.SearchingLoot != null, progress);
         }
+
+        static string TreatmentPrompt(PlayerController player) => player.TreatmentItem.DisplayName + " / " + BodyCondition.Name(player.TreatmentPart);
 
         void SetFieldPrompt(string message, bool showProgress, float progress)
         {
@@ -237,6 +240,7 @@ namespace Dustline
             AddTouchSlot("SwitchWeapon", "切换主武器和随身刀", RaidIcon.Switch, 0.811f, 0.458f, 72f);
             AddTouchSlot("Settings", "设置", RaidIcon.Gear, 0.944f, 0.545f, 65f);
             AddTouchSlot("Map", "大地图", RaidIcon.Map, 0.944f, 0.652f, 67f);
+            AddTouchSlot("Health", "分部位健康", RaidIcon.Health, 0.077f, 0.514f, 68f);
             LoadTouchLayout();
         }
 

@@ -34,8 +34,8 @@ TagManager:
   - 
   - 
   - DustlineViewModel
-  - 
-  - 
+  - DustlineItemPreview
+  - DustlineOperatorPreview
   - 
   m_SortingLayers:
   - name: Default

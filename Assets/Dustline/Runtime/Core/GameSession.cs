@@ -8,7 +8,7 @@ using UnityEngine.Rendering.Universal;
 namespace Dustline
 {
     [DefaultExecutionOrder(-100)]
-    public sealed class GameSession : MonoBehaviour
+    public sealed partial class GameSession : MonoBehaviour
     {
         public SessionPhase Phase { get; private set; } = SessionPhase.Menu;
         public ItemCatalog Catalog { get; private set; }
@@ -32,6 +32,7 @@ namespace Dustline
         public bool InField => Phase == SessionPhase.Raid || Phase == SessionPhase.Practice;
         internal PracticeRange Practice { get; private set; }
         GridInventory practiceBag;
+        ItemStack practiceRifle;
         string preferredMedicine, practiceMedicine;
         public ProfileData Profile { get; private set; }
         public PlayerInputReader Input { get; private set; }
@@ -82,7 +83,7 @@ namespace Dustline
             cameraObject.transform.SetParent(transform);
             menuCamera = cameraObject.GetComponent<Camera>();
             menuCamera.clearFlags = CameraClearFlags.SolidColor;
-            menuCamera.cullingMask &= ~FirstPersonView.Mask;
+            menuCamera.cullingMask &= ~(FirstPersonView.Mask | ItemPreviewStage.LayerMask);
             menuCamera.backgroundColor = new Color(0.025f, 0.035f, 0.045f);
             ApplyDisplayPreferences();
             UI = gameObject.AddComponent<GameUI>();
@@ -97,12 +98,12 @@ namespace Dustline
                     throw new InvalidDataException("缺少游戏资源，请在编辑器中执行 Dustline > Prepare Project。");
                 Catalog.RebuildIndex();
                 Stash = new GridInventory(12, 10, 300, Catalog);
-                Loadout = new GridInventory(6, 6, 30, Catalog);
+                Loadout = GridInventory.Carried(Catalog);
                 store ??= new ProfileStore(Path.Combine(Application.persistentDataPath, "dustline-profile-v1.json"));
                 Profile = store.Load();
                 if (Profile == null)
                 {
-                    Profile = new ProfileData();
+                    Profile = new ProfileData { Version = 2 };
                     AddStarterKit(Loadout);
                     Stash.TryAdd("ammo", 120, out _);
                     Stash.TryAdd("medkit", 3, out _);
@@ -110,15 +111,18 @@ namespace Dustline
                 }
                 else
                 {
+                    bool upgrade = Profile.Version == 1;
+                    if (upgrade) UpgradeInventory(Profile);
                     Stash.Restore(Profile.Stash);
+                    Loadout.Restore(Profile.Loadout);
                     if (Profile.RaidInProgress)
                     {
-                        Profile.Loadout.Clear();
+                        Loadout = GridInventory.Carried(Catalog);
                         Profile.RaidInProgress = false;
                         Notice = "上次突袭中断，随身装备与物资已丢失。";
-                        store.Save(Profile);
+                        upgrade = true;
                     }
-                    Loadout.Restore(Profile.Loadout);
+                    if (upgrade) PersistSafeState();
                 }
                 UI.ShowMenu();
             }
@@ -131,10 +135,14 @@ namespace Dustline
             bag.TryAdd("armor", 1, out _);
             bag.TryAdd("ammo", 90, out _);
             bag.TryAdd("medkit", 2, out _);
+            bag.TryAdd("rig_1", 1, out _);
+            bag.TryAdd("pack_1", 1, out _);
             foreach (var item in bag.Snapshot())
             {
                 if (item.ItemId == "rifle") bag.TryEquip(item.InstanceId, EquipmentSlot.Weapon, out _);
                 if (item.ItemId == "armor") bag.TryEquip(item.InstanceId, EquipmentSlot.Armor, out _);
+                if (item.ItemId == "rig_1") bag.TryEquip(item.InstanceId, EquipmentSlot.Rig, out _);
+                if (item.ItemId == "pack_1") bag.TryEquip(item.InstanceId, EquipmentSlot.Pack, out _);
             }
         }
 
@@ -148,6 +156,7 @@ namespace Dustline
             if (focused && !paused)
             {
                 if (Input.EscapePressed || Input.SettingsPressed) UI.BackOrSettings();
+                else if (InField && Input.HealthPressed) UI.ToggleHealth();
                 else if (Phase == SessionPhase.Practice && (Input.MapPressed || Input.InventoryPressed)) UI.TogglePracticePanel();
                 else if (Phase == SessionPhase.Raid && Input.MapPressed) UI.ToggleMap();
                 else if (Phase == SessionPhase.Raid && Input.InventoryPressed) UI.ToggleInventory();
@@ -266,21 +275,12 @@ namespace Dustline
             if (Phase != SessionPhase.Menu || (bag != Stash && bag != Loadout)) return false;
             var item = bag.Find(instanceId);
             if (item == null || !WeaponTuning.SupportsUpgrades(Catalog.Find(item.ItemId)?.Weapon)
+                || !item.Parts.Get((PartSlot)slot).Empty
                 || !WeaponTuning.TrySelect(item.Mods, slot, level, out var updated, out int cost)) return false;
             if (Profile.Credits < cost) { UI.Notify("信用点不足。"); return false; }
-            var prior = item.Mods;
-            item.Mods = updated;
-            Profile.Credits -= cost;
-            try { PersistSafeState(); }
-            catch (Exception error)
-            {
-                item.Mods = prior;
-                Profile.Credits += cost;
-                Fail(error);
-                return false;
-            }
-            bag.Touch();
-            return true;
+            var draft = bag.Draft();
+            draft.Find(instanceId).Mods = updated;
+            return SaveMenuInventory(bag == Stash ? draft : Stash, bag == Loadout ? draft : Loadout, Profile.Credits - cost);
         }
 
         public void StartRaid()
@@ -305,11 +305,10 @@ namespace Dustline
                 worldObject.AddComponent<HarborAtmosphere>().Initialize(this, World.Sun);
                 CreateFieldPlayer(worldObject, World.Spawn, 40f, false);
                 World.SpawnBots();
-                Profile.Stash = Stash.Snapshot();
-                Profile.Loadout.Clear();
-                Profile.RaidInProgress = true;
-                Profile.Raids++;
-                store.Save(Profile);
+                var deployed = new ProfileData { Version = Profile.Version, Credits = Profile.Credits, Stash = Stash.Snapshot(),
+                    BoundBladeId = Profile.BoundBladeId, RaidInProgress = true, Raids = Profile.Raids == int.MaxValue ? int.MaxValue : Profile.Raids + 1, Extractions = Profile.Extractions };
+                store.Save(deployed);
+                Profile = deployed;
                 menuCamera.enabled = false;
                 Phase = SessionPhase.Raid;
                 UI.ShowRaid();
@@ -337,6 +336,7 @@ namespace Dustline
         public void StartPractice()
         {
             if (Phase != SessionPhase.Menu) return;
+            practiceRifle = Loadout.Equipped(EquipmentSlot.Weapon)?.Clone();
             Phase = SessionPhase.PracticeLoading;
             UI.ShowLoading(true);
             StartCoroutine(BuildPractice());
@@ -367,14 +367,29 @@ namespace Dustline
 
         GridInventory CreatePracticeBag()
         {
-            var bag = new GridInventory(6, 6, 30f, Catalog);
-            AddStarterKit(bag);
-            var rifle = bag.Equipped(EquipmentSlot.Weapon);
-            var definition = Catalog.Find(rifle?.ItemId)?.Weapon;
-            if (definition == null || definition.Melee || definition.AmmoId != "ammo" || bag.Count("medkit") == 0
-                || !bag.TryAdd("ammo", 150, out _) || !bag.TryAdd("bandage", 5, out _) || !bag.TryAdd("trauma_case", 2, out _))
-                throw new InvalidDataException("靶场练习装备未就绪，请执行 Dustline > Prepare Project。");
-            rifle.LoadedAmmo = definition.MagazineSize;
+            var bag = new GridInventory(8, 7, 70f, Catalog);
+            var weapon = practiceRifle?.Clone() ?? new ItemStack { ItemId = "rifle" };
+            weapon.InstanceId = Guid.NewGuid().ToString("N");
+            for (int i = 0; i <= (int)PartSlot.Magazine; i++)
+            {
+                var slot = (PartSlot)i;
+                var part = weapon.Parts.Get(slot);
+                if (part.Empty) continue;
+                part.InstanceId = Guid.NewGuid().ToString("N");
+                weapon.Parts.Set(slot, part);
+            }
+            var def = Catalog.Find(weapon.ItemId)?.Weapon;
+            const string unavailable = "靶场练习装备未就绪，请执行 Dustline > Prepare Project。";
+            if (def == null) throw new InvalidDataException(unavailable);
+            if (!def.Melee)
+            {
+                weapon.LoadedAmmo = WeaponRules.Capacity(def, weapon, Catalog);
+                weapon.LoadedAmmoId = WeaponRules.LoadedType(def, weapon);
+                if (!bag.TryAdd(weapon.LoadedAmmoId, Math.Max(30, weapon.LoadedAmmo * 4), out _)) throw new InvalidDataException(unavailable);
+            }
+            if (!bag.TryInsert(weapon, out _) || !bag.TryEquip(weapon.InstanceId, EquipmentSlot.Weapon, out _)) throw new InvalidDataException(unavailable);
+            foreach (var id in new[] { "medkit", "bandage", "trauma_case", "tourniquet", "splint", "pain_tabs", "surgery" })
+                if (!bag.TryAdd(id, id == "bandage" ? 5 : 2, out _)) throw new InvalidDataException(unavailable);
             return bag;
         }
 
@@ -391,8 +406,16 @@ namespace Dustline
 
         internal void PracticeHealthSample()
         {
-            if (Phase != SessionPhase.Practice || Player.Health.Current <= 40f) return;
-            Player.Health.Damage(Player.Health.Current - 40f, null, false);
+            if (Phase != SessionPhase.Practice) return;
+            Player.CancelTreatment();
+            Player.Health.ApplyPracticeSample(0);
+        }
+
+        internal void PracticeSevereSample()
+        {
+            if (Phase != SessionPhase.Practice) return;
+            Player.CancelTreatment();
+            Player.Health.ApplyPracticeSample(1);
         }
 
         public void LeavePractice()
@@ -408,6 +431,7 @@ namespace Dustline
             ClearField(field);
             Practice = null;
             practiceBag = null;
+            practiceRifle = null;
             practiceMedicine = null;
         }
 
@@ -424,6 +448,8 @@ namespace Dustline
             EndRaid(false, "撤离失败：你已阵亡");
         }
 
+        internal void AbandonRaid() => EndRaid(false, "撤离失败：你主动退出了本局");
+
         public void EndRaid(bool extracted, string reason)
         {
             if (Phase != SessionPhase.Raid) return;
@@ -431,19 +457,31 @@ namespace Dustline
             SyncControls();
             try
             {
+                var stash = extracted ? Stash.Draft() : Stash;
+                var carried = extracted ? Loadout.Draft() : GridInventory.Carried(Catalog);
                 if (extracted)
                 {
-                    foreach (var item in Loadout.Snapshot()) Loadout.TryTransferTo(item.InstanceId, Stash, out _);
-                    Profile.Credits += 150 + Kills * 25;
-                    Profile.Extractions++;
+                    var items = carried.Snapshot();
+                    foreach (var item in items)
+                        if (item.Slot != EquipmentSlot.Rig && item.Slot != EquipmentSlot.Pack)
+                            carried.TryTransferTo(item.InstanceId, stash, out _);
+                    foreach (var item in items)
+                        if (item.Slot == EquipmentSlot.Rig || item.Slot == EquipmentSlot.Pack)
+                            carried.TryTransferTo(item.InstanceId, stash, out _);
                 }
-                else Loadout = new GridInventory(6, 6, 30, Catalog);
-                Profile.RaidInProgress = false;
-                PersistSafeState();
-                Result = reason + "\n击败敌人：" + Kills + (extracted ? "\n带回的装备与物资已存入仓库，放不下的仍安全保留在整备背包中。\n奖励：" + (150 + Kills * 25) + " 信用点" : "\n随身装备与搜刮物资已丢失，绑定近战武器已保留。");
+                int reward = extracted ? (int)Math.Min(int.MaxValue - Profile.Credits, 150L + Math.Max(0, Kills) * 25L) : 0;
+                var settled = new ProfileData { Version = Profile.Version,
+                    Credits = Profile.Credits + reward,
+                    Stash = stash.Snapshot(), Loadout = carried.Snapshot(), BoundBladeId = Profile.BoundBladeId,
+                    Raids = Profile.Raids, Extractions = Profile.Extractions + (extracted && Profile.Extractions < Profile.Raids ? 1 : 0) };
+                store.Save(settled);
+                if (extracted) Stash.ApplyDraft(stash);
+                Loadout = carried;
+                Profile = settled;
+                Result = reason + "\n击败敌人：" + Kills + (extracted ? "\n带回的装备与物资已存入仓库，放不下的仍安全保留在整备背包中。\n奖励：" + reward + " 信用点" : "\n随身装备与搜刮物资已丢失，绑定近战武器已保留。");
                 UI.ShowResults();
             }
-            catch (Exception error) { Fail(error); }
+            catch (Exception error) { ClearRaidWorld(); Fail(error); }
         }
 
         public void ReturnToMenu()
@@ -491,14 +529,14 @@ namespace Dustline
 
         public void Buy(string itemId, int quantity)
         {
-            if (Phase != SessionPhase.Menu) return;
+            if (Phase != SessionPhase.Menu || quantity < 1) return;
             var item = Catalog.Find(itemId);
-            int cost = item.Value * quantity;
+            if (item == null) return;
+            long cost = (long)item.Value * quantity;
             if (Profile.Credits < cost) { UI.Notify("信用点不足。"); return; }
-            if (!Stash.TryAdd(itemId, quantity, out var error)) { UI.Notify(error); return; }
-            Profile.Credits -= cost;
-            InventoryChanged();
-            UI.RefreshInventory();
+            var stash = Stash.Draft();
+            if (!stash.TryAdd(itemId, quantity, out var error)) { UI.Notify(error); return; }
+            if (SaveMenuInventory(stash, Loadout, Profile.Credits - (int)cost)) UI.RefreshInventory();
         }
 
         public void Sell(GridInventory from, string id)
@@ -506,10 +544,10 @@ namespace Dustline
             if (Phase != SessionPhase.Menu || (from != Stash && from != Loadout)) return;
             var item = from.Find(id);
             if (item == null) return;
-            Profile.Credits += Mathf.Max(1, Catalog.Find(item.ItemId).Value / 2) * item.Quantity;
-            from.Remove(id);
-            InventoryChanged();
-            UI.RefreshInventory();
+            long credits = (long)Profile.Credits + (long)Mathf.Max(1, Catalog.Find(item.ItemId).Value / 2) * item.Quantity;
+            if (credits > int.MaxValue) { UI.Notify("信用点已达上限。"); return; }
+            if (!PrepareSale(from, id, out var stash, out var loadout, out var error)) { UI.Notify(error); return; }
+            if (SaveMenuInventory(stash, loadout, (int)credits)) UI.RefreshInventory();
         }
 
         public void EmergencyKit()
@@ -517,10 +555,9 @@ namespace Dustline
             if (Phase != SessionPhase.Menu) return;
             if (Profile.Credits >= Catalog.Find("rifle").Value || Stash.Count("rifle") + Loadout.Count("rifle") > 0)
             { UI.Notify("仅在没有步枪且信用点不足以购买时，才能领取应急装备。"); return; }
-            if (!Loadout.TryAdd("rifle", 1, out var error)) { UI.Notify(error); return; }
-            Loadout.TryAdd("ammo", 30, out _);
-            InventoryChanged();
-            UI.RefreshInventory();
+            var draft = Loadout.Draft();
+            if (!draft.TryAdd("rifle", 1, out var error) || !draft.TryAdd("ammo", 30, out error)) { UI.Notify(error); return; }
+            if (SaveMenuInventory(Stash, draft, Profile.Credits)) UI.RefreshInventory();
         }
 
         internal ItemStack QuickMedicine(string itemId = null)
@@ -546,19 +583,25 @@ namespace Dustline
             return true;
         }
 
-        public void UseMedicine(string id = null)
+        public void UseMedicine(string id = null) => TryUseMedicine(id, null);
+
+        internal void TryUseMedicine(string id, BodyPart? target)
         {
             if (!InField || !Input.Gameplay || !Player.Health.Alive || Player.WeaponView.MedicineBusy) return;
-            if (Player.Health.Current >= Player.Health.Maximum) { UI?.Notify("生命值已满，无需治疗。"); return; }
             var bag = ActiveFieldBag;
             var stack = id == null ? QuickMedicine() : bag.Find(id);
             var item = stack == null ? null : Catalog.Find(stack.ItemId);
             if (item == null || item.Kind != ItemKind.Medicine || stack.Quantity <= 0 || stack.Slot != EquipmentSlot.None
-                || !(item.HealAmount > 0f) || float.IsInfinity(item.HealAmount)
                 || !(item.UseSeconds > 0f) || float.IsInfinity(item.UseSeconds)
+                || (item.Treatment == TreatmentKind.Heal || item.Treatment == TreatmentKind.Pain)
+                    && (!(item.HealAmount > 0f) || float.IsInfinity(item.HealAmount))
                 || !Enum.IsDefined(typeof(MedicineForm), item.MedicineVisual))
             { UI?.Notify("没有可用的医疗品。"); return; }
-            Player.BeginTreatment(bag, stack.InstanceId, item);
+            var body = Player.Health.Body;
+            var part = target ?? (body != null ? body.Suggest(item.Treatment) : BodyPart.Chest);
+            if (!part.HasValue || (body != null ? !body.CanTreat(part.Value, item.Treatment) : Player.Health.Current >= Player.Health.Maximum))
+            { UI?.Notify("所选医疗品不适用于当前伤情。"); return; }
+            Player.BeginTreatment(bag, stack.InstanceId, item, part.Value);
         }
 
         public void SetCursor(bool visible)

@@ -132,6 +132,7 @@ namespace Dustline
             key.transform.localRotation = Quaternion.Euler(43f, -36f, 0f);
             var light = key.AddComponent<Light>();
             light.type = LightType.Directional;
+            light.cullingMask &= ~ItemPreviewStage.LayerMask;
             light.color = new Color(1f, .92f, .82f);
             light.intensity = 1.22f;
             light.shadows = LightShadows.Soft;

@@ -97,10 +97,10 @@ namespace Dustline
         {
             if (pointer != data.pointerId || data.button != PointerEventData.InputButton.Left) return;
             lastPosition = data.position;
-            Release((GestureEnd != null || Action == "Aim") && TouchWasCancelled(data));
+            Release(!editing && TouchWasCancelled(data));
         }
 
-        static bool TouchWasCancelled(PointerEventData data)
+        internal static bool TouchWasCancelled(PointerEventData data)
         {
             if (data is not ExtendedPointerEventData extended || extended.device is not Touchscreen screen) return false;
             if (!screen.added || extended.touchId == 0) return true;
@@ -116,7 +116,7 @@ namespace Dustline
             if (Knob != null) Knob.anchoredPosition = Vector2.zero;
             if (Input == null || editing || !hadPointer) return;
             if (GestureEnd != null) { GestureEnd(lastPosition, cancel); return; }
-            if (cancel && Action == "Aim") Input.CancelAimGesture();
+            if (cancel) Input.CancelAction(Action);
             else Input.Hold(Action, false);
             if (Action == "Move") Input.TouchMove = Vector2.zero;
         }

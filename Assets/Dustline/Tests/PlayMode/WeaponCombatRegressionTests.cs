@@ -84,6 +84,31 @@ namespace Dustline.Tests
         }
 
         [Test]
+        public void EmptyMagazineUsesCompatibleAlternateAmmoButLoadedMagazineDoesNotMix()
+        {
+            var f = new Fight(this, 0, 0);
+            f.Rifle.AmmoFamily = AmmoFamily.Amber;
+            f.Session.Catalog.Find("ammo").AmmoFamily = AmmoFamily.Amber;
+            var compatible = AddAsset<ItemDefinition>();
+            compatible.Id = "alternate";
+            compatible.Kind = ItemKind.Ammo;
+            compatible.AmmoFamily = AmmoFamily.Amber;
+            compatible.MaxStack = 20;
+            f.Session.Catalog.Items.Add(compatible);
+            f.Session.Catalog.RebuildIndex();
+            Assert.That(f.Bag.TryAdd("alternate", 3, out _), Is.True);
+            f.Tick(.25f);
+            Assert.That(f.Weapon.Magazine.Reloading, Is.True);
+            f.Tick(1.1f);
+            Assert.That(f.Equipped.LoadedAmmoId, Is.EqualTo("alternate"));
+            Assert.That(f.Equipped.LoadedAmmo, Is.EqualTo(3));
+            Assert.That(f.Bag.TryAdd("ammo", 9, out _), Is.True);
+            f.Tick(.25f, reload: true);
+            Assert.That(f.Weapon.Magazine.Reloading, Is.False);
+            Assert.That(f.Bag.Count("ammo"), Is.EqualTo(9));
+        }
+
+        [Test]
         public void ForegroundMagazineFollowsTheReloadTimerAndReseatsOnCompletion()
         {
             var f = new Fight(this, 2, 12);
@@ -288,6 +313,9 @@ namespace Dustline.Tests
                 Assert.That(view.GetComponent<MeshRenderer>().enabled, Is.True);
                 Assert.That(mesh.subMeshCount, Is.EqualTo(1));
                 Assert.That(view.Muzzle.localPosition.z, Is.GreaterThan(mesh.bounds.max.z));
+                var sight = view.transform.Find("Part Sight");
+                Assert.That(sight.gameObject.activeSelf, Is.EqualTo(level > 0));
+                if (level > 0) Assert.That(meshes.Add(sight.GetComponent<MeshFilter>().sharedMesh), Is.True);
                 AssertCentered(camera, view.transform.TransformPoint(new Vector3(0, sightHeights[level], -0.16f)));
                 AssertCentered(camera, view.transform.TransformPoint(new Vector3(0, sightHeights[level], 0.29f)));
             }
@@ -405,6 +433,40 @@ namespace Dustline.Tests
             fight.Tick(0.04f, move: true);
             Assert.That(actor.Sprinting, Is.False);
             fight.Tick(0.18f, move: true);
+            Assert.That(actor.Sprinting, Is.True);
+        }
+
+        [Test]
+        public void ExhaustionUsesWalkingSpeedAndPoseUntilSprintIsReleased()
+        {
+            var f = new Fight(this, 4, 0);
+            f.Rifle.MoveFactor = .76f;
+            var actor = f.Actor;
+            actor.gameObject.layer = 2;
+            var motor = actor.gameObject.AddComponent<CharacterController>();
+            motor.height = 1.8f;
+            motor.center = Vector3.up * .9f;
+            motor.radius = .35f;
+            typeof(PlayerController).GetField("motor", InstancePrivate).SetValue(actor, motor);
+            f.Tick(.04f, move: true, sprint: false);
+            float walk = actor.MoveSpeed;
+            Assert.That(walk, Is.EqualTo(PlayerController.MovementSpeed(false, false, false, f.Bag.Weight, f.Bag.MaxWeight, .76f, 1f)).Within(.03f));
+            f.Tick(.04f, move: true);
+            Assert.That(actor.Sprinting, Is.True);
+            Set(actor, "Stamina", .1f);
+            f.Tick(.04f, move: true);
+            Assert.That(actor.Sprinting, Is.False);
+            Assert.That(actor.MoveSpeed, Is.EqualTo(walk).Within(.03f));
+            Assert.That(Field<float>(actor.WeaponView, "run"), Is.Zero);
+            Assert.That(Field<float>(actor.Operator, "run"), Is.Zero);
+            Set(actor, "Stamina", 100f);
+            f.Tick(.04f, move: true);
+            Assert.That(actor.MoveSpeed, Is.EqualTo(walk).Within(.03f));
+            f.Tick(.04f, move: true, swap: true);
+            Assert.That(f.Weapon.ActiveIsBound, Is.True);
+            Assert.That(actor.MoveSpeed, Is.EqualTo(walk * 1.13f / .76f).Within(.03f));
+            f.Tick(.04f, move: true, sprint: false);
+            f.Tick(.04f, move: true);
             Assert.That(actor.Sprinting, Is.True);
         }
 
@@ -597,7 +659,7 @@ namespace Dustline.Tests
                 now = Time.time;
             }
 
-            public void Tick(float delta, bool fire = false, bool swap = false, bool reload = false, bool move = false)
+            public void Tick(float delta, bool fire = false, bool swap = false, bool reload = false, bool move = false, bool sprint = true)
             {
                 Set(input, "Fire", fire);
                 Set(input, "FirePressed", fire);
@@ -606,7 +668,8 @@ namespace Dustline.Tests
                 now += delta;
                 if (move)
                 {
-                    Set(input, "Sprint", true);
+                    Set(input, "Sprint", sprint);
+                    Set(input, "SprintHeld", sprint);
                     Set(input, "Move", Vector2.up);
                     Invoke(Actor, "Tick", now, 0.016f);
                 }

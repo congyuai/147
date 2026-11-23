@@ -8,7 +8,7 @@ namespace Dustline
 {
     public sealed partial class GameUI : MonoBehaviour
     {
-        enum ScreenPage { Lobby, Stash, Operator, Gunsmith, MenuSettings, Loading, Field, FieldInventory, FieldMap, FieldSettings, PracticePanel, TouchLayout, Results, Error }
+        enum ScreenPage { Lobby, Stash, Shop, Operator, Gunsmith, MenuSettings, Loading, Field, FieldInventory, FieldMap, FieldSettings, Health, ExitConfirm, PracticePanel, TouchLayout, Results, Error }
 
         ScreenPage current;
         public bool InventoryOpen => current == ScreenPage.FieldInventory;
@@ -37,8 +37,10 @@ namespace Dustline
         public void Initialize(GameSession owner)
         {
             session = owner;
+            session.Input.GestureUI = this;
             font = Resources.Load<Font>("Dustline/Fonts/NotoSansSC-Regular");
             icons = new RaidUiIcons();
+            itemIcons = new ItemIconCache(transform);
             var canvasObject = new GameObject("Dustline UI", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             canvasObject.transform.SetParent(transform, false);
             uiCanvas = canvasObject.GetComponent<Canvas>();
@@ -59,8 +61,9 @@ namespace Dustline
             Fill(At("Toast rule", toastPanel, 0, 0, 3, 71), Amber);
             toast = Label(toastPanel, "", 18, 16, 4, 548, 62, TextAnchor.MiddleCenter);
             toastAnchor.gameObject.SetActive(false);
-            var events = new GameObject("Event System", typeof(EventSystem), typeof(InputSystemUIInputModule));
+            var events = new GameObject("Event System", typeof(DustlineEventSystem), typeof(InputSystemUIInputModule));
             events.transform.SetParent(transform, false);
+            events.GetComponent<DustlineEventSystem>().BeforeInput = CheckSafeArea;
             hud.gameObject.SetActive(false);
             touch.gameObject.SetActive(false);
             UpdateSafeArea();
@@ -104,6 +107,7 @@ namespace Dustline
             target.raycastTarget = false;
             operatorPreview = new OperatorPreview(transform, target, session.BoundBlade);
             operatorPreview.Select(session.SelectedOperator);
+            operatorPreview.SyncGear(session.Loadout);
             var dossier = At("Operator dossier", panel, 545, 130, 667, 455);
             Fill(dossier, Ink);
             Label(dossier, "行动员外观", 30, 24, 24, 617, 52);
@@ -113,6 +117,7 @@ namespace Dustline
             {
                 session.SelectOperator(style);
                 operatorPreview.Select(session.SelectedOperator);
+                operatorPreview.SyncGear(session.Loadout);
                 StyleButton(male, session.SelectedOperator == OperatorStyle.Male, null);
                 StyleButton(female, session.SelectedOperator == OperatorStyle.Female, null);
             }
@@ -130,7 +135,7 @@ namespace Dustline
                 {
                     if (session.SelectBlade(id)) ShowOperator();
                 }, active);
-                DrawItemSymbol(blade.transform, WeaponSymbol(option.Weapon.Form), 12, 7, 40, 40, active ? Ink : Pale);
+                DrawItemIcon(blade.transform, null, null, 8, 5, 54, 44, blade: option.Weapon.Form);
             }
             Label(dossier, "随身刀不可卸下、出售，不因阵亡丢失。", 17, 24, 388, 617, 49, color: Aqua);
             Button(panel, "返回大厅", 1014, 615, 198, 49, ShowMenu, true);
@@ -158,6 +163,8 @@ namespace Dustline
                 });
             }
             if (practice) Button(panel, "靶场控制", 26, 615, 171, 49, ShowPracticePanel);
+            if (field && session.Phase == SessionPhase.Raid)
+                Button(panel, "退出本局", 26, 615, 171, 49, ShowExitConfirm, false, new Color32(91, 47, 39, 255));
             Button(panel, practice ? "返回靶场" : field ? "返回突袭" : "返回大厅", 1014, 615, 198, 49, BackOrSettings, true);
         }
 
@@ -248,12 +255,27 @@ namespace Dustline
         {
             if (MedicineWheelOpen) { CloseMedicineWheel(true); return; }
             if (current == ScreenPage.TouchLayout) ShowSettings(session.InField, true);
+            else if (current == ScreenPage.Shop && session.Phase == SessionPhase.Menu) ShowStash();
             else if (session.Phase == SessionPhase.Menu && current != ScreenPage.Lobby) ShowMenu();
             else if (session.InField)
             {
                 if (current == ScreenPage.Field) ShowSettings(true);
-                else if (current == ScreenPage.FieldInventory || current == ScreenPage.FieldSettings || current == ScreenPage.FieldMap || current == ScreenPage.PracticePanel) EnterField();
+                else if (current == ScreenPage.ExitConfirm) EnterField();
+                else if (current == ScreenPage.FieldInventory || current == ScreenPage.FieldSettings || current == ScreenPage.FieldMap
+                    || current == ScreenPage.PracticePanel || current == ScreenPage.Health) EnterField();
             }
+        }
+
+        void ShowExitConfirm()
+        {
+            if (session.Phase != SessionPhase.Raid) return;
+            var panel = Display(ScreenPage.ExitConfirm, "Raid exit confirmation");
+            Header(panel, "退出本局？", "主动退出将按撤离失败结算");
+            var body = At("Exit warning", panel, 26, 135, 1186, 438);
+            Fill(body, Ink);
+            Label(body, "随身装备和搜刮物资将丢失。\n绑定近战武器和已有仓库物资会保留。", 26, 36, 89, 1100, 147, color: Pale);
+            Button(panel, "取消 · 继续本局", 26, 615, 225, 49, EnterField, true);
+            Button(panel, "确认退出", 1014, 615, 198, 49, session.AbandonRaid, false, new Color32(91,47,39,255));
         }
 
         public void ShowLoading(bool practice = false)
@@ -267,7 +289,7 @@ namespace Dustline
         {
             ResetDamageCues();
             EnterField();
-            Notify(session.Input.TouchMode ? "点击地图键或背包键打开靶场控制。练习装备不带出。" : "Tab 或 M：靶场控制 / H：治疗 / R：换弹 / Esc：设置");
+            Notify(session.Input.TouchMode ? "点击地图键或背包键打开靶场控制。练习装备不带出。" : "Tab 或 M：靶场控制 / J：健康 / H：用药 / R：换弹");
         }
 
         internal void TogglePracticePanel()
@@ -289,7 +311,8 @@ namespace Dustline
                 27, 30, 184, 1080, 44, color: Aqua);
             Button(body, "重置标靶和计数", 30, 285, 293, 61, () => { session.Practice.ResetPlates(); EnterField(); });
             Button(body, "补充练习装备", 349, 285, 274, 61, () => { EnterField(); session.RefillPractice(); });
-            Button(body, "模拟受伤", 651, 285, 237, 61, () => { session.PracticeHealthSample(); EnterField(); });
+            Button(body, "模拟受伤", 651, 285, 220, 61, () => { session.PracticeHealthSample(); ShowHealth(); });
+            Button(body, "重伤演练", 896, 285, 220, 61, () => { session.PracticeSevereSample(); ShowHealth(); });
             Button(panel, "返回大厅", 26, 615, 162, 49, session.LeavePractice);
             Button(panel, "继续练习", 1014, 615, 198, 49, EnterField, true);
         }
@@ -300,7 +323,7 @@ namespace Dustline
             EnterField();
             Notify(session.Input.TouchMode
                 ? "摇杆前推冲刺。地图标出撤离点；双箭头切换主武器和随身刀。"
-                : "F 交互 / X 切换随身刀 / M 地图 / Tab 背包 / Esc 设置");
+                : "F 交互 / X 切换随身刀 / J 健康 / M 地图 / Tab 背包 / Esc 设置");
         }
 
         public void ShowResults()
@@ -340,6 +363,8 @@ namespace Dustline
             session.SaveControlPreferences();
             operatorPreview?.Dispose();
             operatorPreview = null;
+            DisposeGunsmithPreview();
+            healthRefresh = null;
             Clear(page);
             panelRoot = null;
             fpsReadout = null;
@@ -391,6 +416,7 @@ namespace Dustline
             lastScreen = new Vector2Int(Screen.width, Screen.height);
             if (Screen.width < 1 || Screen.height < 1) return;
             if (medicineHeld) CloseMedicineWheel(true);
+            CancelInventoryDrag();
             safe.anchorMin = new Vector2(lastSafe.xMin / Screen.width, lastSafe.yMin / Screen.height);
             safe.anchorMax = new Vector2(lastSafe.xMax / Screen.width, lastSafe.yMax / Screen.height);
             Canvas.ForceUpdateCanvases();
@@ -408,9 +434,13 @@ namespace Dustline
             toastAnchor.gameObject.SetActive(true);
         }
 
-        void Update()
+        void CheckSafeArea()
         {
             if (Screen.safeArea != lastSafe || Screen.width != lastScreen.x || Screen.height != lastScreen.y) UpdateSafeArea();
+        }
+
+        void Update()
+        {
             if (toastAnchor.gameObject.activeSelf && Time.unscaledTime >= toastUntil) toastAnchor.gameObject.SetActive(false);
             if (skipFrameSample) skipFrameSample = false;
             else
@@ -428,10 +458,29 @@ namespace Dustline
             }
             if (current == ScreenPage.Field)
             {
-                UpdateMedicineGesture();
                 UpdateHud(false);
             }
+            else if (current == ScreenPage.Health && Time.unscaledTime >= healthRefreshAt)
+            {
+                healthRefreshAt = Time.unscaledTime + .15f;
+                healthRefresh?.Invoke();
+            }
         }
+
+        internal void UpdateFieldGestures()
+        {
+            if (current == ScreenPage.Field && medicineHeld) UpdateMedicineGesture();
+        }
+
+        void LateUpdate()
+        {
+            ScrollDragEdge();
+            itemIcons?.Step();
+            if (current == ScreenPage.Gunsmith) RenderGunsmithPreview();
+        }
+
+        void OnApplicationFocus(bool focused) { if (!focused) CancelInventoryDrag(); }
+        void OnApplicationPause(bool paused) { if (paused) CancelInventoryDrag(); }
 
         static RectTransform Anchor(string title, Transform parent, float x, float y)
         {
@@ -538,6 +587,8 @@ namespace Dustline
         void OnDestroy()
         {
             operatorPreview?.Dispose();
+            DisposeGunsmithPreview();
+            itemIcons?.Dispose();
             icons?.Dispose();
         }
     }

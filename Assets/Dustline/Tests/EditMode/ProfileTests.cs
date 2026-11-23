@@ -145,6 +145,81 @@ namespace Dustline
             }
         }
 
+        [Test]
+        public void SchemaTwoBacksUpTheExactPreviousFileWithoutOverwritingLegacyBackup()
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                Directory.CreateDirectory(directory);
+                var store = new ProfileStore(System.IO.Path.Combine(directory, "profile.json"));
+                string legacy = V1Profile.Replace("690", "550");
+                File.WriteAllText(store.LegacyBackupPath, legacy);
+                var mods = new WeaponMods { Sight = 1, OwnedSight = 2, Grip = 2, OwnedGrip = 2, Stock = 1, OwnedStock = 2 };
+                var profile = new ProfileData { Credits = 700 };
+                profile.Loadout.Add(new ItemStack { ItemId = "rifle", InstanceId = "retained-rifle", Slot = EquipmentSlot.Weapon, LoadedAmmo = 8, Mods = mods });
+                store.Save(profile);
+                byte[] before = File.ReadAllBytes(store.Path);
+                var upgraded = store.Load();
+                upgraded.Version = 2;
+                upgraded.Loadout[0].LoadedAmmoId = "ammo";
+                store.Save(upgraded);
+                CollectionAssert.AreEqual(before, File.ReadAllBytes(store.UpgradeBackupPath));
+                Assert.That(File.ReadAllText(store.LegacyBackupPath), Is.EqualTo(legacy));
+                var recovered = store.Load();
+                Assert.That(recovered.Version, Is.EqualTo(2));
+                Assert.That(recovered.Loadout[0].InstanceId, Is.EqualTo("retained-rifle"));
+                Assert.That(recovered.Loadout[0].LoadedAmmo, Is.EqualTo(8));
+                Assert.That(recovered.Loadout[0].LoadedAmmoId, Is.EqualTo("ammo"));
+                Assert.That(recovered.Loadout[0].Mods, Is.EqualTo(mods));
+                Assert.That(WeaponTuning.TrySelect(recovered.Loadout[0].Mods, WeaponModSlot.Sight, 2, out _, out int cost), Is.True);
+                Assert.That(cost, Is.Zero);
+                Assert.Throws<InvalidDataException>(() => store.Save(profile));
+                CollectionAssert.AreEqual(before, File.ReadAllBytes(store.UpgradeBackupPath));
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        }
+
+        [Test]
+        public void SchemaTwoRoundTripsEquipmentCargoWearAndInstalledParts()
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                var store = new ProfileStore(System.IO.Path.Combine(directory, "profile.json"));
+                var initial = new ProfileData { Version = 2 };
+                var gun = new ItemStack { ItemId = "rifle", InstanceId = "gun", Slot = EquipmentSlot.Weapon,
+                    LoadedAmmo = 28, LoadedAmmoId = "ammo_amber_range", Mods = new WeaponMods { Grip = 1, OwnedGrip = 2 } };
+                gun.Parts.Magazine = new PartLink { ItemId = "part_mag_a", InstanceId = "extended" };
+                initial.Loadout.Add(gun);
+                initial.Loadout.Add(new ItemStack { ItemId = "helmet_4", InstanceId = "helmet", Slot = EquipmentSlot.Helmet, Wear = 23 });
+                initial.Loadout.Add(new ItemStack { ItemId = "rig_3", InstanceId = "rig", Slot = EquipmentSlot.Rig });
+                initial.Loadout.Add(new ItemStack { ItemId = "medkit", InstanceId = "kit", Area = CargoArea.Rig, X = 2, Y = 0, UsesSpent = 2, Rotated = true });
+                store.Save(initial);
+                var recovered = store.Load();
+                Assert.That(recovered.Version, Is.EqualTo(2));
+                Assert.That(recovered.Loadout[0].LoadedAmmo, Is.EqualTo(28));
+                Assert.That(recovered.Loadout[0].LoadedAmmoId, Is.EqualTo("ammo_amber_range"));
+                Assert.That(recovered.Loadout[0].Parts.Magazine.ItemId, Is.EqualTo("part_mag_a"));
+                Assert.That(recovered.Loadout[0].Parts.Magazine.InstanceId, Is.EqualTo("extended"));
+                Assert.That(recovered.Loadout[0].Mods.OwnedGrip, Is.EqualTo(2));
+                Assert.That(recovered.Loadout[1].Wear, Is.EqualTo(23));
+                Assert.That(recovered.Loadout[1].Slot, Is.EqualTo(EquipmentSlot.Helmet));
+                Assert.That(recovered.Loadout[3].Area, Is.EqualTo(CargoArea.Rig));
+                Assert.That(recovered.Loadout[3].X, Is.EqualTo(2));
+                Assert.That(recovered.Loadout[3].Rotated, Is.True);
+                Assert.That(recovered.Loadout[3].UsesSpent, Is.EqualTo(2));
+                byte[] bytes = File.ReadAllBytes(store.Path);
+                recovered.Stash.Add(new ItemStack { ItemId = "part_mag_a", InstanceId = "extended" });
+                Assert.Throws<InvalidDataException>(() => store.Save(recovered));
+                recovered.Stash.Clear();
+                recovered.Loadout[1].Area = CargoArea.Rig;
+                Assert.Throws<InvalidDataException>(() => store.Save(recovered));
+                CollectionAssert.AreEqual(bytes, File.ReadAllBytes(store.Path));
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        }
+
         [TestCase(true)]
         [TestCase(false)]
         public void ExistingLegacyBackupIsNeverOverwritten(bool matchesProfile)
@@ -254,7 +329,7 @@ namespace Dustline
         [TestCase("{\"Version\":1,\"Stash\":[],\"Loadout\":[]}")]
         [TestCase("{\"Version\":1,\"Credits\":1000,\"Loadout\":[]}")]
         [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[]}")]
-        [TestCase("{\"Version\":2,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":3,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
         [TestCase("{\"Version\":0,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
         [TestCase("{\"Version\":\"1\",\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
         [TestCase("{\"Version\":1,\"Credits\":-1,\"Stash\":[],\"Loadout\":[]}")]
@@ -352,7 +427,7 @@ namespace Dustline
                         profile.Stash[0].ItemId = WeaponDefinition.RifleId;
                         profile.Stash[0].Mods = new WeaponMods { Grip = 2, OwnedGrip = 1 };
                         break;
-                    case "invalid-version": profile.Version = 2; break;
+                    case "invalid-version": profile.Version = 3; break;
                     case "negative-credits": profile.Credits = -1; break;
                     case "negative-raids": profile.Raids = -1; break;
                     case "negative-extractions": profile.Extractions = -1; break;

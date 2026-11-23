@@ -32,6 +32,8 @@ namespace Dustline
         OperatorStyle style;
         int team;
         bool artBound, externalGrip, fallen, basePoseCaptured;
+        readonly Transform[] gear = new Transform[4];
+        readonly string[] gearIds = new string[4];
         float speed, run, duck, pronePose, cycle, breath;
         Quaternion baseLocalRotation;
         Vector3 baseLocalPosition;
@@ -110,7 +112,7 @@ namespace Dustline
             if (artBound) OperatorMesh.Release(style, team);
         }
 
-        public void SetMotion(float speed, bool sprinting, bool crouched, float delta)
+        public void SetMotion(float speed, bool sprinting, bool crouched, float delta, bool walkNow = false)
         {
             if (fallen || bones == null || !Finite(delta) || delta <= 0f) return;
             CaptureBasePose();
@@ -124,7 +126,7 @@ namespace Dustline
             this.speed = Mathf.Lerp(this.speed, target, 1f - Mathf.Exp(-11f * dt));
             duck = Mathf.Lerp(duck, crouched ? 1f : 0f, 1f - Mathf.Exp(-10f * dt));
             float sprint = sprinting && !crouched ? Mathf.SmoothStep(0f, 1f, (target - 0.7f) / 2.8f) : 0f;
-            run = Mathf.Lerp(run, sprint, 1f - Mathf.Exp(-9f * dt));
+            run = walkNow ? 0f : Mathf.Lerp(run, sprint, 1f - Mathf.Exp(-9f * dt));
             cycle = Mathf.Repeat(cycle + (this.speed / Stride()) * dt, 1f);
             breath = Mathf.Repeat(breath + dt * 1.77f, Tau);
             ApplyMotion();
@@ -238,6 +240,59 @@ namespace Dustline
             hip.rotation = transform.rotation * a;
             Joint(mid).localRotation = Quaternion.Inverse(a) * b;
             Joint(foot).localRotation = Quaternion.Inverse(b) * Quaternion.Euler(pitch, side * (4f + 6f * duck), 0f);
+        }
+
+        internal BodyPart HitRegion(Vector3 point)
+        {
+            Vector3 head = Joint(Bone.Head).TransformPoint(Vector3.up * .12f);
+            Vector3 chest = Joint(Bone.Chest).TransformPoint(Vector3.up * .095f);
+            Vector3 hips = Joint(Bone.Hips).TransformPoint(Vector3.up * .09f);
+            float best = float.PositiveInfinity;
+            BodyPart part = BodyPart.Chest;
+            Score(BodyPart.Head, head, head, .135f);
+            Score(BodyPart.Chest, chest, chest + (hips - chest) * .42f, .225f);
+            Score(BodyPart.Abdomen, hips, chest + (hips - chest) * .46f, .18f);
+            Chain(BodyPart.LeftArm, Bone.LeftUpper, Bone.LeftLower, Bone.LeftHand, .087f);
+            Chain(BodyPart.RightArm, Bone.RightUpper, Bone.RightLower, Bone.RightHand, .087f);
+            Chain(BodyPart.LeftLeg, Bone.LeftThigh, Bone.LeftShin, Bone.LeftBoot, .11f);
+            Chain(BodyPart.RightLeg, Bone.RightThigh, Bone.RightShin, Bone.RightBoot, .11f);
+            return part;
+
+            void Chain(BodyPart id, Bone a, Bone b, Bone c, float radius)
+            {
+                Score(id, Joint(a).position, Joint(b).position, radius);
+                Score(id, Joint(b).position, Joint(c).position, radius * .83f);
+            }
+            void Score(BodyPart id, Vector3 a, Vector3 b, float radius)
+            {
+                Vector3 d = b - a;
+                float t = Mathf.Clamp01(Vector3.Dot(point - a, d) / Mathf.Max(d.sqrMagnitude, .00001f));
+                float distance = (point - a - d * t).magnitude - radius;
+                if (distance < best) { best = distance; part = id; }
+            }
+        }
+
+        internal void SyncGear(GridInventory bag)
+        {
+            Set(0, EquipmentSlot.Helmet, Bone.Head, new Vector3(0,.126f,.005f), .90f);
+            Set(1, EquipmentSlot.Armor, Bone.Chest, new Vector3(0,.032f,.113f), .96f);
+            Set(2, EquipmentSlot.Rig, Bone.Chest, new Vector3(0,-.158f,.160f), .83f);
+            Set(3, EquipmentSlot.Pack, Bone.Chest, new Vector3(0,-.055f,-.190f), .90f);
+
+            void Set(int index, EquipmentSlot slot, Bone at, Vector3 offset, float scale)
+            {
+                var stack = bag?.Equipped(slot);
+                if (gearIds[index] == stack?.ItemId) return;
+                gearIds[index] = stack?.ItemId;
+                if (gear[index] != null) { gear[index].gameObject.SetActive(false); Destroy(gear[index].gameObject); }
+                if (stack == null) { gear[index] = null; return; }
+                gear[index] = ItemProp.Create(Joint(at), bag.Catalog.Find(stack.ItemId), stack, bag.Catalog);
+                gear[index].localPosition = offset;
+                if (slot == EquipmentSlot.Pack) gear[index].localRotation = Quaternion.Euler(0f, 180f, 0f);
+                gear[index].localScale = Vector3.one * scale;
+                var field = gear[index].GetComponent<MeshRenderer>();
+                if (field != null && skin.shadowCastingMode == ShadowCastingMode.ShadowsOnly) field.shadowCastingMode = ShadowCastingMode.ShadowsOnly;
+            }
         }
 
         internal void BindWeaponView(WeaponVisual weapon) => carriedWeapon = weapon;

@@ -13,7 +13,8 @@ namespace Dustline
 
         public Transform Muzzle { get; private set; }
         public WeaponForm Form { get; private set; }
-        public bool IsMelee => Form != WeaponForm.Rifle;
+        public bool IsMelee => Ar20Mesh.IsBlade(Form);
+        public int AppearanceKey => sightLevel | (gripStyle << 3) | (stockStyle << 6) | (muzzleStyle << 9) | (magStyle << 12);
         internal float VisibleAim => firstPerson && !IsMelee ? aimProgress : 0f;
         internal bool MedicineBusy => usingMedicine || medicineBlend > 0f;
         public Vector3 RightGrip => transform.TransformPoint(rightGrip);
@@ -26,12 +27,13 @@ namespace Dustline
         bool firstPerson;
         MeshFilter filter;
         MeshRenderer surface, magazineProp, medicineProp;
-        MeshFilter medicineMesh;
+        MeshFilter medicineMesh, magazineMesh;
+        readonly MeshFilter[] accessories = new MeshFilter[4];
         Ar20Mesh art;
         FirstPersonArms arms;
         PlayerController player;
         CharacterController motor;
-        int sightLevel, swingStep;
+        int sightLevel, gripStyle, stockStyle, muzzleStyle, magStyle, swingStep;
         Vector3 rightGrip, leftGrip;
         Quaternion rightGlove, leftGlove;
         static readonly Quaternion FreeGlove = Quaternion.Euler(-42, -51, 26);
@@ -90,12 +92,12 @@ namespace Dustline
             {
                 art.WarmPlayerViews();
                 arms = new FirstPersonArms(transform, player != null ? player.Operator.Style : OperatorStyle.Male, gameObject.layer);
-                magazineProp = CreateProp("Magazine", out var magazineMesh);
-                magazineMesh.sharedMesh = art.MagazineMesh;
                 medicineProp = CreateProp("Medicine", out medicineMesh);
             }
+            magazineProp = CreateProp("Magazine", out magazineMesh);
+            for (int i = 0; i < accessories.Length; i++) CreateProp("Part " + (PartSlot)i, out accessories[i]);
             surface.sharedMaterial = art.Material;
-            filter.sharedMesh = art.GetMesh(Form, sightLevel, firstPerson);
+            RefreshArt();
             ApplyPose();
         }
 
@@ -119,14 +121,14 @@ namespace Dustline
             if (Form == form) return;
             ResetPose();
             ConfigureForm(form);
-            if (art != null) filter.sharedMesh = art.GetMesh(Form, sightLevel, firstPerson);
+            RefreshArt();
             ApplyPose();
         }
 
         void ConfigureForm(WeaponForm form)
         {
             Form = form;
-            sightLevel = 0;
+            sightLevel = gripStyle = stockStyle = muzzleStyle = magStyle = 0;
             switch (Form)
             {
                 case WeaponForm.Tangdao:
@@ -148,10 +150,11 @@ namespace Dustline
                     break;
                 default:
                     rightGrip = Ar20Mesh.RightPalm;
-                    leftGrip = Ar20Mesh.LeftPalm;
+                    leftGrip = Form == WeaponForm.Pistol ? new Vector3(-.032f, -.104f, -.103f)
+                        : Form == WeaponForm.Smg ? new Vector3(-.046f, -.051f, .147f) : Ar20Mesh.LeftPalm;
                     rightGlove = Quaternion.Euler(-26f, -13f, -18f);
                     leftGlove = Quaternion.Euler(-72f, 12f, 45f);
-                    Muzzle.localPosition = Ar20Mesh.Muzzle;
+                    Muzzle.localPosition = new Vector3(0, Ar20Mesh.Muzzle.y, Ar20Mesh.Front(Form));
                     break;
             }
         }
@@ -161,8 +164,50 @@ namespace Dustline
             int value = IsMelee ? 0 : Mathf.Clamp(level, 0, 2);
             if (sightLevel == value) return;
             sightLevel = value;
-            if (art != null) filter.sharedMesh = art.GetMesh(Form, sightLevel, firstPerson);
+            RefreshArt();
             ApplyPose();
+        }
+
+        public void SetConfiguration(ItemStack stack, ItemCatalog catalog)
+        {
+            if (IsMelee) return;
+            sightLevel = WeaponRules.VisualLevel(stack, catalog, PartSlot.Sight);
+            gripStyle = WeaponRules.VisualLevel(stack, catalog, PartSlot.Grip);
+            stockStyle = WeaponRules.VisualLevel(stack, catalog, PartSlot.Stock);
+            muzzleStyle = WeaponRules.VisualLevel(stack, catalog, PartSlot.Muzzle);
+            magStyle = WeaponRules.VisualLevel(stack, catalog, PartSlot.Magazine);
+            RefreshArt();
+            ApplyPose();
+        }
+
+        void RefreshArt()
+        {
+            if (art == null) return;
+            filter.sharedMesh = art.GetMesh(Form, sightLevel, gripStyle != 0, stockStyle != 0);
+            SetAccessory(PartSlot.Sight, sightLevel, Vector3.zero);
+            SetAccessory(PartSlot.Grip, gripStyle, Vector3.zero);
+            SetAccessory(PartSlot.Stock, stockStyle, Vector3.zero);
+            float front = Ar20Mesh.Front(Form);
+            SetAccessory(PartSlot.Muzzle, muzzleStyle, new Vector3(0, Ar20Mesh.Muzzle.y, front - .012f));
+            if (!IsMelee) Muzzle.localPosition = new Vector3(0, Ar20Mesh.Muzzle.y, front + (muzzleStyle == 0 ? 0 : muzzleStyle == 1 ? .065f : .121f));
+            magazineMesh.sharedMesh = magStyle > 0 ? art.PartMesh(PartSlot.Magazine, magStyle)
+                : Form == WeaponForm.Lmg ? art.PartMesh(PartSlot.Magazine, 2) : art.MagazineMesh;
+            magazineMesh.transform.localScale = Form == WeaponForm.Pistol && magStyle == 0 ? new Vector3(.78f, .69f, .78f)
+                : Form == WeaponForm.Lmg && magStyle == 0 ? new Vector3(.89f, .83f, .91f) : Vector3.one;
+            magazineMesh.transform.localPosition = Ar20Mesh.MagazineSeat(Form);
+            SetPropVisible(magazineProp, !IsMelee);
+        }
+
+        void SetAccessory(PartSlot slot, int style, Vector3 position)
+        {
+            var part = accessories[(int)slot];
+            bool visible = style > 0 && !IsMelee;
+            if (visible)
+            {
+                part.sharedMesh = art.PartMesh(slot, style);
+                part.transform.localPosition = position;
+            }
+            if (part.gameObject.activeSelf != visible) part.gameObject.SetActive(visible);
         }
 
         public void SetEquipped(bool equipped)
@@ -345,7 +390,7 @@ namespace Dustline
             float carry = (Ease((phase - .16f) / .25f) - Ease((phase - .56f) / .25f)) * reloadBlend;
             float exchange = Ease((phase - .43f) / .12f);
             Vector3 path = Vector3.Lerp(new Vector3(-.064f, -.187f, .028f), new Vector3(-.117f, -.193f, .060f), exchange);
-            magazineProp.transform.SetLocalPositionAndRotation(path * carry,
+            magazineProp.transform.SetLocalPositionAndRotation(Ar20Mesh.MagazineSeat(Form) + path * carry,
                 Quaternion.Euler(18f * carry, Mathf.Lerp(-18f, 10f, exchange) * carry, -15f * carry));
             SetPropVisible(magazineProp, !IsMelee && !(phase >= .43f && phase < .55f && !reloadCancelled));
 
@@ -409,14 +454,16 @@ namespace Dustline
             float roll = reload * Mathf.Sin(progress * Tau);
             if (firstPerson)
             {
-                Vector3 hip = new Vector3(0.247f, -0.216f, 0.601f);
-                Vector3 ads = new Vector3(0, -Ar20Mesh.SightHeight(sightLevel) * ViewScale, 0.608f);
+                Vector3 hip = Form == WeaponForm.Pistol ? new Vector3(.178f, -.181f, .64f) : new Vector3(.247f, -.216f, .601f);
+                float line = Form == WeaponForm.Pistol && sightLevel == 0 ? .118f : Ar20Mesh.SightHeight(sightLevel);
+                Vector3 ads = new Vector3(0, -line * ViewScale, .608f);
+                float strain = player?.Health?.Body != null ? player.Health.Body.Handling - 1f : 0f;
                 float carry = run * (1 - aim);
                 position = Vector3.Lerp(hip, ads, aim) + new Vector3(0.013f * horizontal - 0.074f * reload + 0.047f * carry,
                     0.011f * vertical + 0.002f * idle + 0.072f * reload - 0.064f * carry - 0.018f * prone * (1 - aim),
                     -0.045f * kick + 0.087f * reload - 0.032f * carry);
                 rotation = Quaternion.Euler(0.92f * vertical - Mathf.Lerp(3.2f, 1.15f, aim) * kick + 13 * reload + 16 * carry,
-                    -7 * (1 - aim) + 1.45f * horizontal + 5 * reload - 17 * carry,
+                    -7 * (1 - aim) + 1.45f * horizontal + 5 * reload - 17 * carry + Mathf.Sin(breath * 2) * strain * 5f,
                     -8 * (1 - aim) - 1.8f * horizontal + 23 * reload + 9 * roll - 16 * carry);
             }
             else

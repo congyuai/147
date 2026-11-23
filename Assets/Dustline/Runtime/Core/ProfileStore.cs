@@ -35,6 +35,7 @@ namespace Dustline
 
         public string Path { get; }
         public string LegacyBackupPath => Path + ".v1.bak";
+        public string UpgradeBackupPath => Path + ".pre-v2.bak";
 
         public ProfileData Load() => ReadProfile(out _, out _);
 
@@ -99,10 +100,14 @@ namespace Dustline
                 WriteNewFile(temporary, Encoding.GetBytes(json));
 
                 // Never fall back to deleting the only durable save before the rename.
-                if (ReadProfile(out byte[] original, out bool requiresUpgrade) != null)
+                var previous = ReadProfile(out byte[] original, out bool requiresUpgrade);
+                if (previous != null)
                 {
-                    if (requiresUpgrade)
-                        BackupLegacy(original);
+                    if (profile.Version < previous.Version) throw new InvalidDataException("Cannot downgrade an existing profile.");
+                    if (previous.Version == 1 && profile.Version == 2)
+                        BackupOriginal(UpgradeBackupPath, original);
+                    else if (requiresUpgrade)
+                        BackupOriginal(LegacyBackupPath, original);
                     File.Replace(temporary, Path, null);
                 }
                 else
@@ -117,20 +122,20 @@ namespace Dustline
             }
         }
 
-        private void BackupLegacy(byte[] original)
+        private void BackupOriginal(string backup, byte[] original)
         {
-            if (File.Exists(LegacyBackupPath))
+            if (File.Exists(backup))
             {
-                if (!original.SequenceEqual(File.ReadAllBytes(LegacyBackupPath)))
+                if (!original.SequenceEqual(File.ReadAllBytes(backup)))
                     throw new IOException("The legacy backup already exists and does not match the profile being upgraded.");
                 return;
             }
 
-            string temporary = TemporaryPath(LegacyBackupPath);
+            string temporary = TemporaryPath(backup);
             try
             {
                 WriteNewFile(temporary, original);
-                File.Move(temporary, LegacyBackupPath);
+                File.Move(temporary, backup);
             }
             finally
             {
@@ -153,7 +158,7 @@ namespace Dustline
 
         private static void ValidateProfile(ProfileData profile)
         {
-            if (profile == null || profile.Version != 1 || profile.Credits < 0
+            if (profile == null || (profile.Version != 1 && profile.Version != 2) || profile.Credits < 0
                 || profile.Raids < 0 || profile.Extractions < 0 || profile.Extractions > profile.Raids
                 || profile.Stash == null || profile.Loadout == null)
                 throw new InvalidDataException("Invalid profile version, balances, counters or item lists.");
@@ -161,13 +166,13 @@ namespace Dustline
                 throw new InvalidDataException("Invalid bound blade ID.");
 
             var ids = new HashSet<string>(StringComparer.Ordinal);
-            ValidateItems(profile.Stash, ids);
-            ValidateItems(profile.Loadout, ids);
+            ValidateItems(profile.Stash, ids, profile.Version);
+            ValidateItems(profile.Loadout, ids, profile.Version);
         }
 
         private static bool IsValidBladeId(string id) => id == "" || !string.IsNullOrWhiteSpace(id);
 
-        private static void ValidateItems(List<ItemStack> items, HashSet<string> ids)
+        private static void ValidateItems(List<ItemStack> items, HashSet<string> ids, int version)
         {
             var slots = new HashSet<EquipmentSlot>();
             foreach (ItemStack item in items)
@@ -177,9 +182,20 @@ namespace Dustline
                     || item.Quantity < 1 || item.X < 0 || item.Y < 0 || item.LoadedAmmo < -1
                     || !Enum.IsDefined(typeof(EquipmentSlot), item.Slot))
                     throw new InvalidDataException("Invalid profile item or duplicate instance ID.");
+                if (!Enum.IsDefined(typeof(CargoArea), item.Area) || item.UsesSpent < 0 || item.Wear < 0
+                    || version == 1 && ((int)item.Slot > (int)EquipmentSlot.Armor || item.Area != CargoArea.Main || !item.Parts.Empty
+                        || !string.IsNullOrEmpty(item.LoadedAmmoId) || item.UsesSpent != 0 || item.Wear != 0))
+                    throw new InvalidDataException("Item data does not match the profile version.");
+                for (int i = 0; i <= (int)PartSlot.Magazine; i++)
+                {
+                    var part = item.Parts.Get((PartSlot)i);
+                    if (!part.Empty && (string.IsNullOrWhiteSpace(part.ItemId) || string.IsNullOrWhiteSpace(part.InstanceId) || !ids.Add(part.InstanceId)))
+                        throw new InvalidDataException("Invalid or duplicate installed part instance.");
+                }
                 if (!WeaponTuning.IsValidForItem(item.ItemId, item.Mods))
                     throw new InvalidDataException("Invalid weapon upgrade levels.");
-                if (item.Slot != EquipmentSlot.None && (item.Quantity != 1 || !slots.Add(item.Slot)))
+                if (item.Slot != EquipmentSlot.None && (item.Quantity != 1 || !slots.Add(item.Slot)
+                    || version == 2 && (item.Area != CargoArea.Main || item.X != 0 || item.Y != 0)))
                     throw new InvalidDataException("Invalid or duplicate equipped item.");
             }
         }
@@ -189,6 +205,7 @@ namespace Dustline
             private readonly string json;
             private int position;
             private bool hasItemWithoutMods;
+            private int version;
 
             public bool RequiresUpgrade { get; private set; }
 
@@ -212,8 +229,8 @@ namespace Dustline
                         switch (field)
                         {
                             case "Version":
-                                if (ReadInteger() != 1)
-                                    Fail("Unsupported profile version.");
+                                version = ReadInteger();
+                                if (version != 1 && version != 2) Fail("Unsupported profile version.");
                                 break;
                             case "Credits":
                             case "Raids":
@@ -246,7 +263,7 @@ namespace Dustline
                 SkipWhitespace();
                 if (position != json.Length)
                     Fail("Unexpected data after the profile.");
-                RequiresUpgrade = !fields.Contains("BoundBladeId") || hasItemWithoutMods;
+                RequiresUpgrade = version == 1 && (!fields.Contains("BoundBladeId") || hasItemWithoutMods);
             }
 
             private void ReadItems()
@@ -287,6 +304,18 @@ namespace Dustline
                                     if (ReadInteger() < 1)
                                         Fail("Invalid item quantity.");
                                     break;
+                                case "Parts":
+                                    ReadParts();
+                                    break;
+                                case "LoadedAmmoId":
+                                    ReadOptionalString();
+                                    break;
+                                case "Area":
+                                    int area = ReadInteger();
+                                    if (area < 0 || area > (int)CargoArea.Rig) Fail("Invalid cargo area.");
+                                    break;
+                                case "UsesSpent":
+                                case "Wear":
                                 case "X":
                                 case "Y":
                                     if (ReadInteger() < 0)
@@ -298,7 +327,7 @@ namespace Dustline
                                     break;
                                 case "Slot":
                                     int slot = ReadInteger();
-                                    if (slot < (int)EquipmentSlot.None || slot > (int)EquipmentSlot.Armor)
+                                    if (slot < (int)EquipmentSlot.None || slot > (int)EquipmentSlot.Pack)
                                         Fail("Invalid equipment slot.");
                                     break;
                                 case "Rotated":
@@ -321,6 +350,39 @@ namespace Dustline
                     hasItemWithoutMods |= !fields.Contains("Mods");
                 } while (Take(','));
                 Require(']');
+            }
+
+            void ReadParts()
+            {
+                Require('{');
+                if (Take('}')) return;
+                var slots = new HashSet<string>(StringComparer.Ordinal);
+                do
+                {
+                    string name = ReadString();
+                    if (!(name == "Sight" || name == "Grip" || name == "Stock" || name == "Muzzle" || name == "Magazine") || !slots.Add(name))
+                        Fail("Invalid or duplicate part slot.");
+                    Require(':');
+                    Require('{');
+                    if (Take('}')) continue;
+                    var fields = new HashSet<string>(StringComparer.Ordinal);
+                    do
+                    {
+                        string field = ReadString();
+                        if ((field != "ItemId" && field != "InstanceId") || !fields.Add(field)) Fail("Invalid part link.");
+                        Require(':');
+                        ReadOptionalString();
+                    } while (Take(','));
+                    Require('}');
+                } while (Take(','));
+                Require('}');
+            }
+
+            void ReadOptionalString()
+            {
+                SkipWhitespace();
+                if (position < json.Length && json[position] == 'n') ReadLiteral("null");
+                else ReadString();
             }
 
             private WeaponMods ReadMods()

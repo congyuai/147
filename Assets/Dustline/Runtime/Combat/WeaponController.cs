@@ -9,7 +9,10 @@ namespace Dustline
         public WeaponDefinition Definition { get; private set; }
         public bool IsMelee => Definition != null && Definition.Melee;
         public bool ActiveIsBound { get; private set; }
-        public int Reserve => Magazine == null ? 0 : CountPocketAmmo(session.ActiveFieldBag, Definition.AmmoId);
+        public int Reserve => Magazine == null ? 0 : CountPocketAmmo(session.ActiveFieldBag, SelectReloadType());
+        public WeaponStats Stats => stats;
+        public float MoveFactor => IsMelee ? 1.13f : Mathf.Clamp(Definition != null ? Definition.MoveFactor : 1f, .65f, 1.2f);
+        public string ReadyAmmoType => Magazine == null ? null : SelectReloadType();
         public bool Automatic => Magazine != null && mainAutomatic;
         public float AimFov => Magazine != null ? stats.AimFov : 75f;
         public float AimSeconds => Magazine != null ? stats.AimSeconds : 0.18f;
@@ -20,6 +23,8 @@ namespace Dustline
         WeaponDefinition mainDefinition;
         string activeId, activeItemId, mainId;
         WeaponMods appliedMods;
+        WeaponParts appliedParts;
+        string appliedAmmo, reloadAmmo;
         WeaponStats stats;
         bool preferBound, mainAutomatic, emptyClicked, queuedSwing;
         float nextAttack, contactAt = -1, chainUntil = -1;
@@ -34,6 +39,11 @@ namespace Dustline
         }
 
         public void SyncEquipment() => ResolveEquipment(false, Time.time);
+
+        internal void SyncHandForMovement(float now)
+        {
+            if (session.Input.TakeWeaponSwap()) ResolveEquipment(true, now);
+        }
 
         void ResolveEquipment(bool toggle, float now)
         {
@@ -53,8 +63,12 @@ namespace Dustline
             var definition = useBound ? session.BoundBlade : main;
             string id = useBound ? null : item.InstanceId;
             var mods = useBound ? default : item.Mods;
+            var parts = useBound ? default : item.Parts;
+            int capacity = useBound ? 0 : WeaponRules.Capacity(definition, item, session.Catalog);
+            string ammo = useBound ? null : WeaponRules.LoadedType(definition, item);
             bool changed = Definition != definition || ActiveIsBound != useBound || activeId != id
-                || activeItemId != (useBound ? null : itemId) || !ReferenceEquals(bag, activeBag);
+                || activeItemId != (useBound ? null : itemId) || !ReferenceEquals(bag, activeBag)
+                || capacity != (Magazine?.Capacity ?? 0);
             if (changed)
             {
                 player.CancelTreatment();
@@ -66,23 +80,26 @@ namespace Dustline
                 activeItemId = useBound ? null : itemId;
                 Definition = definition;
                 ActiveIsBound = useBound;
-                Magazine = useBound || definition.Melee ? null : new Magazine(definition.MagazineSize, item.LoadedAmmo);
+                Magazine = useBound || definition.Melee ? null : new Magazine(capacity, item.LoadedAmmo);
                 nextAttack = now + 0.18f;
                 emptyClicked = false;
                 player.SetWeaponView(definition);
                 session.Input.SetAimAvailable(Magazine != null);
             }
-            else if (Magazine != null && Magazine.Rounds != Mathf.Clamp(item.LoadedAmmo, 0, Magazine.Capacity))
+            else if (Magazine != null && (Magazine.Rounds != Mathf.Clamp(item.LoadedAmmo, 0, Magazine.Capacity) || appliedAmmo != ammo))
             {
                 // Restore/transactions can replace both the object and its loaded count.
                 CancelReload(Mathf.Max(0, item.LoadedAmmo));
             }
 
-            if (changed || mods.Sight != appliedMods.Sight || mods.Grip != appliedMods.Grip || mods.Stock != appliedMods.Stock)
+            appliedAmmo = ammo;
+            if (changed || mods.Sight != appliedMods.Sight || mods.Grip != appliedMods.Grip || mods.Stock != appliedMods.Stock
+                || !WeaponRules.SameParts(parts, appliedParts))
             {
                 appliedMods = mods;
-                stats = WeaponTuning.Evaluate(definition, mods);
-                player.WeaponView.SetSightLevel(Magazine != null ? mods.Sight : 0);
+                appliedParts = parts;
+                stats = WeaponTuning.Evaluate(definition, useBound ? null : item, session.Catalog);
+                player.WeaponView.SetConfiguration(useBound ? null : item, session.Catalog);
             }
         }
 
@@ -104,7 +121,7 @@ namespace Dustline
             }
 
             // Switching or inventory replacement must run before completing a pending action.
-            ResolveEquipment(input.Gameplay && input.SwitchWeaponPressed, now);
+            ResolveEquipment(input.TakeWeaponSwap(), now);
             if (!input.Gameplay)
             {
                 CancelActions();
@@ -127,7 +144,12 @@ namespace Dustline
                 CompleteReload(delta);
                 return;
             }
-            if (input.ReloadPressed && TryBeginReload()) return;
+            if (input.ReloadPressed)
+            {
+                if (TryBeginReload()) return;
+                session.UI?.Notify(Magazine.Rounds == Magazine.Capacity ? "弹匣已满。"
+                    : Magazine.Rounds > 0 ? "没有同种备弹；局内不能混装弹种。" : "没有可用于当前武器的兼容备弹。");
+            }
             if (now < nextAttack) return;
             if (Magazine.Rounds == 0 && TryBeginReload()) return;
             if (Automatic ? input.Fire : input.FirePressed) Fire(now, input.Aim);
@@ -142,12 +164,15 @@ namespace Dustline
 
         bool TryBeginReload()
         {
-            if (!Magazine.BeginReload(Reserve, stats.ReloadSeconds)) return false;
+            string ammo = SelectReloadType();
+            float duration = stats.ReloadSeconds * (player.Health.Body?.Handling ?? 1f);
+            if (!Magazine.BeginReload(CountPocketAmmo(activeBag, ammo), duration)) return false;
+            reloadAmmo = ammo;
             emptyClicked = false;
             session.Input.SetAimAvailable(false);
             var visual = player.WeaponView;
             visual.BeginReload(Magazine);
-            session.Effects?.Reload(visual.Muzzle.position, stats.ReloadSeconds);
+            session.Effects?.Reload(visual.Muzzle.position, duration);
             return true;
         }
 
@@ -162,8 +187,9 @@ namespace Dustline
             var bag = activeBag;
             var item = FindActiveItem();
             if (item == null) { SyncEquipment(); return; }
-            string ammoId = Definition.AmmoId;
+            string ammoId = reloadAmmo;
             int previous = item.LoadedAmmo;
+            string previousType = item.LoadedAmmoId;
             int loaded = mag.Step(delta, CountPocketAmmo(bag, ammoId));
             if (mag.Reloading) return;
             session.Input.SetAimAvailable(true);
@@ -172,9 +198,12 @@ namespace Dustline
 
             // Consume notifies Changed synchronously; observers must see the new loaded count alongside the new reserve.
             item.LoadedAmmo = mag.Rounds;
+            appliedAmmo = item.LoadedAmmoId = ammoId;
             if (!bag.Consume(ammoId, loaded))
             {
                 item.LoadedAmmo = previous;
+                item.LoadedAmmoId = previousType;
+                appliedAmmo = WeaponRules.LoadedType(Definition, item);
                 CancelReload(previous);
                 return;
             }
@@ -188,8 +217,22 @@ namespace Dustline
             return item != null && item.InstanceId == activeId && item.ItemId == activeItemId ? item : null;
         }
 
+        string SelectReloadType()
+        {
+            if (Magazine == null || activeBag == null) return null;
+            if (Magazine.Reloading) return reloadAmmo;
+            var item = FindActiveItem();
+            string prior = WeaponRules.LoadedType(Definition, item);
+            if (WeaponRules.CanLoad(Definition, item, session.Catalog.Find(prior), out _)
+                && (Magazine.Rounds > 0 || CountPocketAmmo(activeBag, prior) > 0)) return prior;
+            foreach (var stack in activeBag.Items)
+                if (stack.Slot == EquipmentSlot.None && WeaponRules.CanLoad(Definition, item, session.Catalog.Find(stack.ItemId), out _)) return stack.ItemId;
+            return null;
+        }
+
         static int CountPocketAmmo(GridInventory bag, string ammoId)
         {
+            if (bag == null || ammoId == null) return 0;
             int count = 0;
             var items = bag.Items;
             for (int i = 0; i < items.Count; i++)
@@ -222,16 +265,26 @@ namespace Dustline
             nextAttack = now + stats.FireInterval;
             item.LoadedAmmo = Magazine.Rounds;
             var bag = activeBag;
-            float spread = aiming ? stats.AimSpread : stats.HipSpread;
+            float handling = player.Health.Body?.Handling ?? 1f;
+            float spread = (aiming ? stats.AimSpread : stats.HipSpread) * handling;
+            if (Definition.Rays > 1) spread = Mathf.Max(spread, .035f);
             Vector2 offset = Random.insideUnitCircle * spread;
             Vector3 direction = (view.forward + view.right * offset.x + view.up * offset.y).normalized;
             bool struck = Physics.Raycast(start, direction, out var hit, stats.Range, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
             Vector3 end = struck ? hit.point : start + direction * stats.Range;
             bool traceFromMuzzle = visual.AlignShot(direction, end);
             var target = struck ? hit.collider.GetComponentInParent<Health>() : null;
-            DealDamage(target);
+            int rays = Mathf.Clamp(Definition.Rays, 1, 9);
+            DealDamage(target, stats.Damage, hit.point);
+            for (int i = 1; i < rays; i++)
+            {
+                Vector2 scatter = Random.insideUnitCircle * spread;
+                Vector3 ray = (view.forward + view.right * scatter.x + view.up * scatter.y).normalized;
+                if (Physics.Raycast(start, ray, out var pellet, stats.Range, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                    DealDamage(pellet.collider.GetComponentInParent<Health>(), stats.Damage, pellet.point);
+            }
             CombatNoise.Emit(transform.position, 65, player.Health);
-            float recoil = stats.Recoil * (aiming ? 0.65f : 1f);
+            float recoil = stats.Recoil * handling * (aiming ? 0.65f : 1f);
             player.Recoil(recoil);
             visual.Kick(recoil);
             if (session.Effects != null)
@@ -287,17 +340,17 @@ namespace Dustline
             if (toContact.sqrMagnitude > 0.0001f && Physics.Linecast(view.position, hit.point + 0.012f * toContact.normalized,
                 out var blocker, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) hit = blocker;
             var target = hit.collider.GetComponentInParent<Health>();
-            DealDamage(target);
+            DealDamage(target, stats.Damage, hit.point);
             session.EnvironmentAudio?.PlayMelee(hit.point, target != null ? MeleeSound.Contact : MeleeSound.Solid);
             Vector3 swipe = step == 0 ? -view.right - view.up * 0.60f : step == 1 ? view.right + view.up * 0.38f : -view.up;
             session.Effects?.MeleeImpact(in hit, target != null, Definition.Form, swipe);
         }
 
-        void DealDamage(Health target)
+        void DealDamage(Health target, float amount, Vector3 point)
         {
             if (target == null || !target.Alive) return;
             float before = target.Current;
-            target.Damage(stats.Damage, player.Health);
+            target.DamageAt(amount, player.Health, point);
             if (target.Current < before) session.UI?.HitMarker();
         }
 

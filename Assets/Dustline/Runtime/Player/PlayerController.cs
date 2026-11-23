@@ -15,6 +15,7 @@ namespace Dustline
         public bool Crouched { get; private set; }
         public bool Prone { get; private set; }
         public bool Sprinting { get; private set; }
+        public bool SprintExhausted => sprintLocked;
         public float MoveSpeed { get; private set; }
         public float Lean { get; private set; }
         public float AimProgress => WeaponView != null ? WeaponView.VisibleAim : 0f;
@@ -26,6 +27,8 @@ namespace Dustline
         public bool IsTreating => treatmentBag != null;
         public float TreatmentProgress => IsTreating ? Mathf.Clamp01(1f - treatmentLeft / treatmentDuration) : 0f;
         public ItemDefinition TreatmentItem => treatmentItem;
+        public BodyPart TreatmentPart => treatmentPart;
+        BodyPart treatmentPart;
         GridInventory treatmentBag;
         ItemDefinition treatmentItem;
         string treatmentInstance;
@@ -52,11 +55,9 @@ namespace Dustline
             motor.stepOffset = 0.25f;
             Health = gameObject.AddComponent<Health>();
             Health.Initialize(100, 0);
-            Health.ArmorReduction = () =>
-            {
-                var armor = session.ActiveFieldBag.Equipped(EquipmentSlot.Armor);
-                return armor == null ? 0 : session.Catalog.Find(armor.ItemId).DamageReduction;
-            };
+            Health.EnableBody();
+            Health.HitPart = ResolveBodyPart;
+            Health.ProtectPart = ApplyArmor;
             Health.Damaged += session.UI.ShowDamage;
             Health.Hurt += _ => CancelTreatment();
             Health.Died += _ => session.PlayerDown();
@@ -77,6 +78,21 @@ namespace Dustline
             Weapon.Initialize(session, this);
         }
 
+        BodyPart ResolveBodyPart(Vector3 point)
+        {
+            return Operator.HitRegion(point);
+        }
+
+        float ApplyArmor(BodyPart part, float damage)
+        {
+            var bag = session.ActiveFieldBag;
+            var armor = bag.Equipped(part == BodyPart.Head ? EquipmentSlot.Helmet : EquipmentSlot.Armor);
+            var rule = session.Catalog.Find(armor?.ItemId);
+            float remaining = BodyCondition.Protect(part, damage, rule, armor);
+            if (remaining < damage) bag.Touch();
+            return remaining;
+        }
+
         public void SetWeaponView(WeaponDefinition definition)
         {
             WeaponForm form = definition == null ? WeaponForm.Rifle : definition.Form;
@@ -92,12 +108,13 @@ namespace Dustline
             if (Foreground != null) Foreground.fieldOfView = value;
         }
 
-        internal bool BeginTreatment(GridInventory bag, string instanceId, ItemDefinition item)
+        internal bool BeginTreatment(GridInventory bag, string instanceId, ItemDefinition item, BodyPart part)
         {
             if (IsTreating) return false;
             treatmentBag = bag;
             treatmentInstance = instanceId;
             treatmentItem = item;
+            treatmentPart = part;
             treatmentLeft = treatmentDuration = Mathf.Clamp(item.UseSeconds, 0.4f, 10f);
             Weapon.BeginTreatment();
             WeaponView.BeginMedicine(item.MedicineVisual);
@@ -119,7 +136,8 @@ namespace Dustline
             var stack = treatmentBag.Find(treatmentInstance);
             if (!session.Input.Gameplay || session.Input.SwitchWeaponPressed || !Health.Alive
                 || treatmentBag != session.ActiveFieldBag || stack == null || stack.Quantity <= 0 || stack.ItemId != treatmentItem.Id
-                || stack.Slot != EquipmentSlot.None || Health.Current >= Health.Maximum)
+                || stack.Slot != EquipmentSlot.None || (Health.Body != null ? !Health.Body.CanTreat(treatmentPart, treatmentItem.Treatment)
+                    : Health.Current >= Health.Maximum))
             {
                 CancelTreatment();
                 return;
@@ -128,9 +146,10 @@ namespace Dustline
             if (treatmentLeft > 0f) return;
             var bag = treatmentBag;
             string id = treatmentInstance;
-            float amount = treatmentItem.HealAmount;
+            var item = treatmentItem;
+            var part = treatmentPart;
             CancelTreatment();
-            if (bag.ConsumeInstance(id)) Health.Heal(amount);
+            if (Health.TryTreat(part, item)) bag.ConsumeInstance(id);
             session.UI?.RefreshInventory();
         }
 
@@ -150,7 +169,8 @@ namespace Dustline
         void Tick(float now, float frame)
         {
             if (!session.InField || !Health.Alive) return;
-            TickTreatment(frame);
+            Health.StepBody(frame);
+            if (!Health.Alive || !session.InField) return;
             var input = session.Input;
             if (input.Gameplay)
             {
@@ -158,10 +178,16 @@ namespace Dustline
                 transform.Rotate(0, input.Look.x, 0);
                 if (input.CrouchPressed) ToggleCrouch();
                 if (input.PronePressed) ToggleProne();
-                if (input.HealPressed && !input.SwitchWeaponPressed && !input.InteractPressed) session.UseMedicine(input.HealInstance);
+                if (input.HealPressed && !input.SwitchWeaponPressed && !input.InteractPressed) session.TryUseMedicine(input.HealInstance, input.HealPart);
+            }
+            Weapon.SyncHandForMovement(now);
+            if (Stamina <= .01f && !sprintLocked)
+            {
+                sprintLocked = true;
+                staminaResumeAt = now + .35f;
             }
             bool lowProfile = Prone || Crouched || currentHeight < 1.7f;
-            input.SprintAllowed = !sprintLocked && !lowProfile && !WeaponView.MedicineBusy;
+            input.SprintAllowed = !sprintLocked && !lowProfile && !WeaponView.MedicineBusy && (Health.Body?.LegsAllowSprint ?? true);
 
             bool grounded = motor.isGrounded;
             if (input.Gameplay && input.JumpPressed && grounded && !Prone)
@@ -173,11 +199,16 @@ namespace Dustline
                 }
             }
             bool walkForFire = WalkForFire(now, input.Gameplay, Weapon.Magazine != null, input.Fire);
-            bool sprint = input.Gameplay && input.Sprint && !walkForFire && input.SprintAllowed && input.Move.y > 0.1f
-                && Stamina > 0.01f && !lowProfile;
-            float speed = Prone ? 1.25f : lowProfile ? 2f : sprint ? 6.5f : 3.8f;
+            if (sprintLocked && input.Gameplay && !input.SprintHeld && Stamina >= 25f) sprintLocked = false;
+            bool sprint = input.Gameplay && input.Sprint && !walkForFire && input.SprintAllowed && !sprintLocked && input.Move.y > .1f
+                && Stamina > .01f && !lowProfile;
+            if (sprint && Stamina - 9.5f * frame <= .01f)
+            {
+                Stamina = 0f; sprintLocked = true; sprint = false;
+                staminaResumeAt = now + .35f;
+            }
             var bag = session.ActiveFieldBag;
-            speed *= Mathf.Lerp(1, 0.65f, bag.Weight / bag.MaxWeight);
+            float speed = MovementSpeed(Prone, lowProfile, sprint, bag.Weight, bag.MaxWeight, Weapon.MoveFactor, Health.Body?.Mobility ?? 1f);
             Vector2 move = input.Gameplay ? input.Move : Vector2.zero;
             Vector3 movement = transform.right * move.x + transform.forward * move.y;
             UpdateStanceHeight(frame);
@@ -198,11 +229,10 @@ namespace Dustline
             }
             else if (now >= staminaResumeAt) Stamina = Mathf.Min(100f, Stamina + 15f * frame);
             if (Stamina <= 0.01f) sprintLocked = true;
-            else if (Stamina >= 25f) sprintLocked = false;
-            input.SprintAllowed = !sprintLocked && !lowProfile && !WeaponView.MedicineBusy;
+            input.SprintAllowed = !sprintLocked && !lowProfile && !WeaponView.MedicineBusy && (Health.Body?.LegsAllowSprint ?? true);
             if (steps.Advance(travel, motor.isGrounded,
                 Prone ? 0.76f : lowProfile ? 0.91f : running ? 1.67f : 1.42f))
-                session.EnvironmentAudio.PlayFootstep(transform.position,
+                session.EnvironmentAudio?.PlayFootstep(transform.position,
                     Prone ? 0.30f : lowProfile ? 0.46f : running ? 1f : 0.83f, true);
 
             float leanTarget = input.Gameplay && !Prone
@@ -219,10 +249,11 @@ namespace Dustline
             if (session.Phase == SessionPhase.Raid) UpdateLoot(input, move.sqrMagnitude > 0.04f || IsTreating);
             bool aiming = input.Gameplay && input.Aim && Weapon.Magazine != null && !WeaponView.MedicineBusy;
             WeaponView.SetMedicineProgress(TreatmentProgress);
-            WeaponView.SetPose(aiming, MoveSpeed, running, lowProfile, frame, walkForFire || Weapon.Magazine?.Reloading == true);
+            WeaponView.SetPose(aiming, MoveSpeed, running, lowProfile, frame, sprintLocked || walkForFire || Weapon.Magazine?.Reloading == true);
             SetViewFov(Mathf.Lerp(75f, Weapon.AimFov, Mathf.SmoothStep(0f, 1f, AimProgress)));
 
-            Operator.SetMotion(MoveSpeed, running, lowProfile, frame);
+            Operator.SetMotion(MoveSpeed, running, lowProfile, frame, sprintLocked);
+            Operator.SyncGear(session.ActiveFieldBag);
             Operator.SetProne(Prone, frame);
             Operator.PoseArms(WeaponView.RightGrip, WeaponView.LeftGrip);
             bool moving = MoveSpeed > 0.35f;
@@ -232,6 +263,14 @@ namespace Dustline
                 noiseAt = now + (running ? 0.32f : Prone ? 0.72f : 0.55f);
             }
         }
+
+        void LateUpdate()
+        {
+            if (session != null && session.InField && Health.Alive) TickTreatment(Time.deltaTime);
+        }
+
+        public static float MovementSpeed(bool prone, bool low, bool sprint, float weight, float limit, float weapon, float legs)
+            => (prone ? 1.25f : low ? 2f : sprint ? 6.5f : 3.8f) * Mathf.Lerp(1f, .65f, limit > 0 ? weight / limit : 0f) * weapon * legs;
 
         void UpdateStanceHeight(float delta)
         {

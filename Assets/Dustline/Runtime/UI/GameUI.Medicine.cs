@@ -14,6 +14,8 @@ namespace Dustline
         TouchControl medicineControl;
         MedicineWheelRing medicineRing;
         Image medicineGlyph, medicineDialProgress;
+        RawImage medicineModel;
+        string shownMedicine;
         Text medicineCount, medicineLabel;
         Vector2 medicinePointer, medicineStart;
         float medicinePressAt;
@@ -26,6 +28,12 @@ namespace Dustline
             medicineGlyph = glyph;
             medicineGlyph.preserveAspect = true;
             var root = (RectTransform)control.transform;
+            var picture = Stretch("Selected medicine model", root);
+            picture.anchorMin = new Vector2(.17f, .17f);
+            picture.anchorMax = new Vector2(.83f, .83f);
+            medicineModel = picture.gameObject.AddComponent<RawImage>();
+            medicineModel.color = Color.clear;
+            medicineModel.raycastTarget = false;
             medicineCount = Label(root, "", 15, 0, 0, 25, 20, TextAnchor.MiddleCenter, Pale);
             var countRect = medicineCount.rectTransform;
             countRect.anchorMin = countRect.anchorMax = new Vector2(.68f, .26f);
@@ -50,9 +58,21 @@ namespace Dustline
             if (!session.Input.TouchMode) return;
             var stack = session.QuickMedicine();
             var definition = player.TreatmentItem ?? (stack != null ? session.Catalog.Find(stack.ItemId) : null);
-            medicineGlyph.sprite = icons[definition == null ? RaidIcon.Heal : ItemSymbol(definition)];
-            medicineGlyph.color = definition == null ? Muted : Pale;
-            int count = definition == null ? 0 : session.ActiveFieldBag.Count(definition.Id);
+            medicineGlyph.color = Muted;
+            if (definition == null) { itemIcons.Unbind(medicineModel); shownMedicine = null; }
+            else if (shownMedicine != definition.Id || medicineModel.texture == null)
+            {
+                shownMedicine = definition.Id;
+                var rect = medicineModel.rectTransform;
+                float aspect = Mathf.Clamp(definition.Width / (float)definition.Height, .25f, 4f);
+                float width = .66f * Mathf.Min(1f, aspect), height = .66f * Mathf.Min(1f, 1f / aspect);
+                rect.anchorMin = new Vector2(.5f - width * .5f, .5f - height * .5f);
+                rect.anchorMax = new Vector2(.5f + width * .5f, .5f + height * .5f);
+                rect.offsetMin = rect.offsetMax = Vector2.zero;
+                itemIcons.Bind(medicineModel, definition, stack, session.Catalog);
+            }
+            medicineGlyph.enabled = medicineModel.texture == null || medicineModel.texture is RenderTexture target && !target.IsCreated();
+            int count = definition == null ? 0 : session.ActiveFieldBag.RemainingUses(definition.Id);
             medicineCount.text = count > 0 ? count.ToString() : "";
             medicineDialProgress.fillAmount = player.TreatmentProgress;
         }
@@ -88,8 +108,13 @@ namespace Dustline
         {
             if (!medicineHeld) return;
             if (cancelled) { CloseMedicineWheel(true); return; }
-            bool quick = !medicineLong && Time.unscaledTime - medicinePressAt < MedicineHoldSeconds
-                && medicineControl.ContainsDialPoint(point, null);
+            if (!medicineLong && Time.unscaledTime - medicinePressAt >= MedicineHoldSeconds)
+            {
+                medicinePointer = point;
+                if (session.Input.Gameplay && !session.Player.WeaponView.MedicineBusy) OpenMedicineWheel();
+                else medicineLong = true;
+            }
+            bool quick = !medicineLong && medicineControl.ContainsDialPoint(point, null);
             if (MedicineWheelOpen)
             {
                 int index = MedicineIndex(point);
@@ -133,9 +158,9 @@ namespace Dustline
                 float angle = i * Mathf.PI * 2f / wheelItems.Count;
                 var slot = Anchor("Medicine option", medicineHub, .5f, .5f);
                 slot.anchoredPosition = new Vector2(Mathf.Sin(angle), Mathf.Cos(angle)) * 104f;
-                slot.sizeDelta = new Vector2(100f, 81f);
-                DrawItemSymbol(slot, ItemSymbol(item), 27, 0, 46, 46, Pale);
-                Label(slot, item.DisplayName + " ×" + bag.Count(item.Id), 14, 0, 48, 100, 28, TextAnchor.UpperCenter, Pale);
+                slot.sizeDelta = new Vector2(82f, 64f);
+                DrawItemIcon(slot, item, null, 19, 1, 44, 37);
+                Label(slot, item.DisplayName + " ×" + bag.RemainingUses(item.Id), 12, 0, 38, 82, 26, TextAnchor.UpperCenter, Pale);
             }
             ReleaseOtherFieldPointers();
             session.SyncControls();

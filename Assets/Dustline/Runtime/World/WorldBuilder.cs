@@ -116,6 +116,7 @@ namespace Dustline
             sunObject.transform.rotation = Quaternion.Euler(27, -38, 0);
             Sun = sunObject.GetComponent<Light>();
             Sun.type = LightType.Directional;
+            Sun.cullingMask &= ~ItemPreviewStage.LayerMask;
             Sun.color = new Color(1f, 0.78f, 0.59f);
             Sun.intensity = 1.15f;
             Sun.shadows = LightShadows.Soft;

@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace Dustline
 {
-    public enum WeaponForm { Rifle, Baton, Tangdao, ShortBlade }
+    public enum WeaponForm { Rifle, Baton, Tangdao, ShortBlade, Pistol, Smg, Shotgun, Marksman, Sniper, Lmg }
 
     [CreateAssetMenu(menuName = "Dustline/Weapon Definition")]
     public sealed class WeaponDefinition : ScriptableObject
@@ -12,6 +12,10 @@ namespace Dustline
         public WeaponForm Form;
         public bool Melee;
         public string AmmoId;
+        public AmmoFamily AmmoFamily;
+        public string FrameInterface;
+        public float MoveFactor = 1f;
+        public int Rays = 1;
         public int MagazineSize = 20;
         public float Damage = 24f;
         public float FireInterval = 0.13f;

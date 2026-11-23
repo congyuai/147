@@ -36,10 +36,24 @@ namespace Dustline
                 if (!Enum.IsDefined(typeof(ItemKind), definition.Kind)
                     || definition.Width < 1 || definition.Height < 1 || definition.MaxStack < 1
                     || float.IsNaN(definition.UnitWeight) || float.IsInfinity(definition.UnitWeight)
-                    || definition.UnitWeight < 0f)
+                    || definition.UnitWeight < 0f || definition.Value < 0)
                     throw new ArgumentException("Invalid inventory definition: " + definition.Id, nameof(Items));
                 if (definition.Weapon != null && !definition.Weapon.Melee && definition.Weapon.MagazineSize < 1)
                     throw new ArgumentException("Invalid magazine size: " + definition.Id, nameof(Items));
+                if ((definition.Kind == ItemKind.Rig || definition.Kind == ItemKind.Pack) && (definition.Storage.Columns < 1
+                    || definition.Storage.Columns > 12 || definition.Storage.Rows < 1 || definition.Storage.Rows > 12
+                    || definition.Storage.Split < 0 || definition.Storage.Split >= definition.Storage.Columns
+                    || !(definition.Storage.CarryBonus >= 0f) || float.IsInfinity(definition.Storage.CarryBonus)
+                    || !(definition.Storage.WeightLimit >= 0f) || float.IsInfinity(definition.Storage.WeightLimit)))
+                    throw new ArgumentException("Invalid cargo capacity: " + definition.Id, nameof(Items));
+                if (definition.Kind == ItemKind.Part && (!Enum.IsDefined(typeof(PartSlot), definition.Part.Slot)
+                    || definition.Part.Form < 1 || definition.Part.Form > 3 || string.IsNullOrWhiteSpace(definition.Part.Interface)
+                    || definition.Part.Slot == PartSlot.Magazine && definition.Part.Capacity < 1))
+                    throw new ArgumentException("Invalid part fitting: " + definition.Id, nameof(Items));
+                if (definition.Kind == ItemKind.Medicine && (definition.Uses < 1 || definition.Uses > 1000
+                    || !Enum.IsDefined(typeof(MedicineForm), definition.MedicineVisual)
+                    || !Enum.IsDefined(typeof(TreatmentKind), definition.Treatment)))
+                    throw new ArgumentException("Invalid treatment item: " + definition.Id, nameof(Items));
                 if (rebuilt.ContainsKey(definition.Id))
                     throw new ArgumentException("Duplicate item ID: " + definition.Id, nameof(Items));
 

@@ -4,9 +4,7 @@ using UnityEngine;
 namespace Dustline
 {
     enum RaidIcon { Dial, Knob, Aim, Fire, Reload, Crouch, Search, Heal, Bag, Gear, Reticle, Hit, Strike, Prone, Jump, LeanLeft, LeanRight,
-        InteractDoor, Map, Heading, Danger, Exit, Switch, ControlRing, DamageArc,
-        RifleItem, BatonItem, AmmoItem, PouchItem, BandageItem, TraumaItem, ArmorItem, CircuitItem, ModuleItem,
-        TangdaoItem, ShortBladeItem, GenericItem }
+        InteractDoor, Map, Heading, Danger, Exit, Switch, ControlRing, DamageArc, Health }
 
     sealed class RaidUiIcons : IDisposable
     {
@@ -54,47 +52,11 @@ namespace Dustline
         {
             switch (icon)
             {
-                case RaidIcon.RifleItem:
-                    return Cover(Mathf.Min(Mathf.Min(Box(p, -3, 4, 18, 4), Box(p, 20, 5, 8, 2)),
-                        Mathf.Min(Box(p, -23, 3, 5, 6), Mathf.Min(Box(p, 7, -3, 4, 6), Segment(p, -12, 1, -15, -9, 3.2f)))));
-                case RaidIcon.BatonItem:
-                    return Cover(Mathf.Min(Segment(p, -17, -17, 20, 20, 3), Segment(p, -19, -19, -6, -6, 5.2f)));
-                case RaidIcon.AmmoItem:
-                    float round = 60f;
-                    for (int i = -1; i <= 1; i++)
-                    {
-                        float x = i * 12;
-                        round = Mathf.Min(round, Mathf.Min(Box(p, x, -5, 4.25f, 13), Segment(p, x, 6, x, 17, 2.8f)));
-                    }
-                    return Cover(round);
-                case RaidIcon.PouchItem:
-                    return Cover(Mathf.Min(Outline(p, 0, -1, 22, 15, 2.7f), Mathf.Min(Cross(p, 0, 9.5f, 3.5f),
-                        Outline(p, 0, 18, 8, 3.5f, 2f))));
-                case RaidIcon.BandageItem:
-                    return Cover(Mathf.Min(Ring(p, -7, 3, 12, 3), Mathf.Min(Circle(p, -7, 3, 4.4f),
-                        Mathf.Min(Segment(p, -12, -9, 22, -9, 2.6f), Segment(p, 22, -9, 13, -18, 2.4f)))));
-                case RaidIcon.TraumaItem:
-                    return Cover(Mathf.Min(Outline(p, 0, -1, 25, 17, 2), Mathf.Min(Cross(p, 0, 10, 3),
-                        Mathf.Min(Box(p, -18, 9, 2.5f, 3), Mathf.Min(Box(p, 18, 9, 2.5f, 3), Outline(p, 0, 19, 10, 4, 2))))));
-                case RaidIcon.ArmorItem:
-                    float width = p.y > 9 ? 16.5f : 21f;
-                    return Cover(Mathf.Max(Box(p, 0, -1, width, 21), Mathf.Max(8f - Vector2.Distance(p, new Vector2(0, 24)),
-                        -Outline(p, 0, -4, 13, 9, 1.6f))));
-                case RaidIcon.CircuitItem:
-                    float chip = Outline(p, 0, 0, 21, 18, 2);
-                    for (int i = -2; i <= 2; i++)
-                        chip = Mathf.Min(chip, Segment(p, i * 7, -18, i * 7, -24, 2));
-                    return Cover(Mathf.Min(chip, Mathf.Min(Box(p, -5, 3, 6, 7), Box(p, 11, -4, 4, 5))));
-                case RaidIcon.ModuleItem:
-                    return Cover(Mathf.Min(Outline(p, 0, 0, 22, 17, 2.5f), Mathf.Min(Ring(p, 5, 0, 9.5f, 2.5f),
-                        Mathf.Min(Box(p, -13, 4, 2, 3), Box(p, -13, -5, 2, 3)))));
-                case RaidIcon.TangdaoItem:
-                case RaidIcon.ShortBladeItem:
-                    float reach = icon == RaidIcon.TangdaoItem ? 22f : 13f;
-                    return Cover(Mathf.Min(Segment(p, -7, -7, reach, reach, icon == RaidIcon.TangdaoItem ? 3f : 5f),
-                        Mathf.Min(Segment(p, -21, -21, -8, -8, 4f), Segment(p, -15, 0, 0, -15, 2.3f))));
-                case RaidIcon.GenericItem:
-                    return Cover(Mathf.Min(Outline(p, 0, 0, 20, 17, 2.7f), Segment(p, -17, 5, 17, 5, 1.6f)));
+                case RaidIcon.Health:
+                    const float limb = 3f;
+                    p.x = Mathf.Abs(p.x);
+                    return Cover(Mathf.Min(Circle(p, 0, 20, 5.2f), Mathf.Min(Box(p, 0, 1, 6, 11),
+                        Mathf.Min(Segment(p, 4, 8, 17, -5, limb), Segment(p, 3, -6, 10, -23, limb)))));
                 case RaidIcon.Dial:
                     return Mathf.Max(Cover(Ring(p, 0, 0, 28, 1.3f)), Cover(p.magnitude - 27) * 0.76f);
                 case RaidIcon.Knob:

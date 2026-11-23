@@ -10,16 +10,16 @@ using UnityEngine.Rendering.Universal;
 namespace Dustline.Editor
 {
     [InitializeOnLoad]
-    public static class ProjectSetup
+    public static partial class ProjectSetup
     {
         const string Root = "Assets/Dustline/Resources/Dustline";
         const string Scene = "Assets/Dustline/Scenes/Bootstrap.unity";
         const string PipelinePath = "Assets/Dustline/Settings/MobilePipeline.asset";
         const string RendererPath = "Assets/Dustline/Settings/MobileRenderer.asset";
         const string RenderingRoot = Root + "/Rendering";
-        const string Version = "0.3.2";
-        const int AndroidVersionCode = 6;
-        const int RaidRendererLayers = FirstPersonView.Mask | (1 << 2) | 1;
+        const string Version = "0.4.0";
+        const int AndroidVersionCode = 7;
+        const int RaidRendererLayers = FirstPersonView.Mask | (1 << 29) | (1 << 30) | (1 << 2) | 1;
         static readonly string[] LitVariantAssets = { "LitBase", "LitMetal", "LitEmission", "LitMetalEmission" };
         static readonly Dictionary<string, string> ItemNames = new Dictionary<string, string> {
             { "rifle", "AR-20突击步枪" }, { "ammo", "5.56毫米弹药" },
@@ -44,7 +44,9 @@ namespace Dustline.Editor
                 || (renderer.opaqueLayerMask.value & RaidRendererLayers) != RaidRendererLayers
                 || (renderer.transparentLayerMask.value & RaidRendererLayers) != RaidRendererLayers
                 || !PortTextureSetup.IsPrepared()
-                || catalog.Find("bandage") == null || catalog.Find("trauma_case") == null
+                || catalog.Find("pack_6") == null || catalog.Find("dust_lmg")?.Weapon == null
+                || catalog.Find("rig_watch") == null || catalog.Items.Exists(item => (item.Kind == ItemKind.Rig || item.Kind == ItemKind.Pack) && item.Storage.WeightLimit <= 0f)
+                || catalog.Find("surgery") == null || catalog.Find("part_sight_prism") == null
                 || !LitVariantsPrepared()
                 || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/Loot.asset") == null
                 || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/HighValueLoot.asset") == null
@@ -119,7 +121,7 @@ namespace Dustline.Editor
             settings.FindProperty("m_FogKeepExp2").boolValue = false;
             // Runtime meshes create these four local keyword combinations; retain them through referenced materials.
             for (int i = 0; i < LitVariantAssets.Length; i++) EnsureLitMaterial(LitVariantAssets[i], lit, (i & 1) != 0, (i & 2) != 0);
-            foreach (var shaderName in new[] { "Universal Render Pipeline/Unlit", "Dustline/Harbor Sky", PortRaster.SurfaceShader, "UI/Default" })
+            foreach (var shaderName in new[] { "Universal Render Pipeline/Unlit", "Dustline/Harbor Sky", PortRaster.SurfaceShader, "Hidden/Dustline/Item Icon Alpha", "UI/Default" })
             {
                 var shader = Shader.Find(shaderName);
                 if (shader == null || ShaderUtil.ShaderHasError(shader))
@@ -185,6 +187,7 @@ namespace Dustline.Editor
             EnsureLootEntry(table, "bandage", 1, 2, 7);
             EnsureLootEntry(table, "trauma_case", 1, 1, 1);
             EnsureHighValueLoot();
+            PrepareEquipment(catalog, table, AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/HighValueLoot.asset"));
             EnsureBoundBlades();
             PlayerSettings.companyName = "Dustline";
             PlayerSettings.productName = "Dustline Extraction";

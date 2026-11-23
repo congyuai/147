@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace Dustline
 {
-    sealed class Ar20Mesh
+    sealed partial class Ar20Mesh
     {
         public static readonly Vector3 Muzzle = new Vector3(0f, 0.032f, 0.518f);
         public static readonly Vector3 RightPalm = new Vector3(0.037f, -0.113f, -0.165f);
@@ -17,8 +17,10 @@ namespace Dustline
         static Ar20Mesh shared;
         int users;
         readonly Texture2D colorMap, finishMap, lightMap;
-        readonly Mesh[] variants = new Mesh[9];
-        readonly Mesh[] medicine = new Mesh[3];
+        readonly Dictionary<int, Mesh> variants = new Dictionary<int, Mesh>();
+        readonly Dictionary<int, Mesh> parts = new Dictionary<int, Mesh>();
+        readonly Dictionary<string, Mesh> objects = new Dictionary<string, Mesh>(System.StringComparer.Ordinal);
+        readonly Mesh[] medicine = new Mesh[(int)MedicineForm.Surgery + 1];
         Mesh magazineMesh;
         public readonly Material Material;
 
@@ -29,20 +31,20 @@ namespace Dustline
             return shared;
         }
 
-        public Mesh GetMesh(WeaponForm form, int sight, bool separateMagazine = false)
+        public Mesh GetMesh(WeaponForm form, int sight, bool customGrip = false, bool customStock = false)
         {
-            int level = Mathf.Clamp(sight, 0, 2);
-            int index = form == WeaponForm.Rifle ? level + (separateMagazine ? 6 : 0) : 2 + (int)form;
-            if (variants[index] != null) return variants[index];
-            Mesh mesh;
+            sight = Mathf.Clamp(sight, 0, 4);
+            int index = ((int)form << 5) | (sight << 2) | (customGrip ? 2 : 0) | (customStock ? 1 : 0);
+            if (variants.TryGetValue(index, out var mesh)) return mesh;
             switch (form)
             {
                 case WeaponForm.Baton: mesh = BuildBaton(); break;
                 case WeaponForm.Tangdao: mesh = BuildTangdao(); break;
                 case WeaponForm.ShortBlade: mesh = BuildShortBlade(); break;
-                default: mesh = BuildRifle(level, !separateMagazine); break;
+                case WeaponForm.Rifle: mesh = BuildRifle(sight, customGrip, customStock); break;
+                default: mesh = BuildFrame(form, sight, customGrip, customStock); break;
             }
-            mesh.name = "Dustline / " + form + (form == WeaponForm.Rifle ? " / sights " + level : string.Empty);
+            mesh.name = "Dustline / " + form + " / " + index;
             return variants[index] = mesh;
         }
 
@@ -68,7 +70,7 @@ namespace Dustline
 
         public void WarmPlayerViews()
         {
-            for (int i = 0; i < 3; i++) GetMesh(WeaponForm.Rifle, i, true);
+            GetMesh(WeaponForm.Rifle, 0);
             GetMesh(WeaponForm.Baton, 0);
             GetMesh(WeaponForm.Tangdao, 0);
             GetMesh(WeaponForm.ShortBlade, 0);
@@ -78,7 +80,9 @@ namespace Dustline
         public void Release()
         {
             if (--users != 0) return;
-            foreach (var mesh in variants) Dispose(mesh);
+            foreach (var mesh in variants.Values) Dispose(mesh);
+            foreach (var mesh in parts.Values) Dispose(mesh);
+            foreach (var mesh in objects.Values) Dispose(mesh);
             foreach (var mesh in medicine) Dispose(mesh);
             Dispose(magazineMesh);
             Dispose(Material);
@@ -169,11 +173,13 @@ namespace Dustline
 
         static byte Channel(float value) => (byte)Mathf.Clamp(Mathf.RoundToInt(value), 0, 255);
 
-        public static float SightHeight(int level) => level == 2 ? 0.164f : level == 1 ? 0.148f : 0.132f;
+        public static float SightHeight(int level) => level == 2 || level == 4 ? 0.164f : level > 0 ? 0.148f : 0.132f;
 
-        static Mesh BuildRifle(int sight, bool assembled)
+        static Mesh BuildRifle(int sight, bool customGrip, bool customStock)
         {
             var b = new Sculpt();
+            if (!customStock)
+            {
             b.Loft(Finish.Polymer, S(-0.411f, -0.005f, 0.035f, 0.065f, 0.010f),
                 S(-0.364f, 0.001f, 0.036f, 0.058f, 0.010f), S(-0.303f, 0.019f, 0.033f, 0.036f, 0.010f),
                 S(-0.235f, 0.032f, 0.029f, 0.026f, 0.008f));
@@ -183,6 +189,7 @@ namespace Dustline
                 S(-0.367f, 0.059f, 0.033f, 0.012f, 0.006f), S(-0.303f, 0.058f, 0.031f, 0.012f, 0.006f),
                 S(-0.231f, 0.042f, 0.026f, 0.011f, 0.005f));
 
+            }
             b.Loft(Finish.Anodized, S(-0.248f, 0.039f, 0.027f, 0.033f, 0.007f),
                 S(-0.218f, 0.040f, 0.038f, 0.047f, 0.008f), S(0.126f, 0.040f, 0.037f, 0.047f, 0.008f),
                 S(0.165f, 0.034f, 0.034f, 0.040f, 0.007f));
@@ -204,11 +211,14 @@ namespace Dustline
 
             Quaternion down = Quaternion.Euler(90f, 0f, 0f);
             var grip = new Vector3(0f, -0.024f, -0.140f);
+            if (!customGrip)
+            {
             b.Loft(Finish.Polymer, grip, down, S(0f, 0f, 0.024f, 0.032f, 0.008f),
                 S(0.027f, -0.006f, 0.028f, 0.033f, 0.009f), S(0.092f, -0.026f, 0.025f, 0.027f, 0.007f),
                 S(0.137f, -0.040f, 0.022f, 0.023f, 0.007f));
             b.Loft(Finish.Rubber, grip, down, S(0.124f, -0.037f, 0.025f, 0.027f, 0.007f),
                 S(0.142f, -0.042f, 0.025f, 0.026f, 0.007f), S(0.151f, -0.043f, 0.022f, 0.024f, 0.006f));
+            }
             b.Loft(Finish.Graphite, S(-0.117f, -0.049f, 0.026f, 0.030f, 0.008f),
                 S(-0.079f, -0.081f, 0.019f, 0.005f, 0.002f), S(-0.033f, -0.074f, 0.020f, 0.005f, 0.002f),
                 S(-0.007f, -0.046f, 0.022f, 0.024f, 0.007f));
@@ -237,13 +247,12 @@ namespace Dustline
                     b.Plate(Finish.Recess, side, 0.045f, 0.0475f, 0.10f,
                         P(z, y), P(z + 0.023f, y), P(z + 0.032f, y + 0.012f), P(z + 0.007f, y + 0.012f));
                 }
-                b.Plate(Finish.Parkerized, side, 0.029f, 0.037f, 0.13f,
+                if (!customStock) b.Plate(Finish.Parkerized, side, 0.029f, 0.037f, 0.13f,
                     P(-0.388f, -0.032f), P(-0.356f, -0.030f), P(-0.307f, -0.006f), P(-0.338f, 0.006f), P(-0.389f, -0.005f));
                 b.Box(Finish.Graphite, side * 0.040f, -0.011f, -0.138f, 0.008f, 0.016f, 0.027f);
                 b.Box(Finish.Anodized, side * 0.039f, -0.017f, 0.071f, 0.006f, 0.019f, 0.028f);
             }
-            if (assembled) AddMagazine(b);
-            BuildSights(b, sight);
+            if (sight == 0) BuildSights(b, 0);
             return b.FinishMesh();
         }
 
@@ -275,11 +284,28 @@ namespace Dustline
                     S(0.058f, 0, 0.033f, 0.033f, 0.016f));
                 b.Box(Finish.Jade, 0, 0.022f, 0f, 0.070f, 0.044f, 0.035f);
             }
+            else if (form == MedicineForm.Splint)
+            {
+                b.Box(Finish.Warm, 0, 0f, 0, .072f, .021f, .158f);
+                b.Box(Finish.Blue, 0, .012f, -.042f, .077f, .013f, .033f);
+                b.Box(Finish.Blue, 0, .012f, .042f, .077f, .013f, .033f);
+            }
+            else if (form == MedicineForm.Tourniquet)
+            {
+                b.Box(Finish.Wrap, 0, 0, 0, .108f, .037f, .072f);
+                b.Box(Finish.Amber, .033f, .017f, 0, .024f, .020f, .067f);
+                b.Box(Finish.Ink, -.008f, .023f, 0, .028f, .018f, .102f);
+            }
+            else if (form == MedicineForm.Tablets)
+            {
+                b.Loft(Finish.Porcelain, S(-.047f, 0, .034f, .033f, .017f), S(.037f, 0, .036f, .034f, .017f));
+                b.Loft(Finish.Blue, S(.035f, 0, .039f, .037f, .018f), S(.052f, 0, .038f, .037f, .018f));
+            }
             else
             {
-                bool kit = form == MedicineForm.Case;
-                float width = kit ? 0.18f : 0.15f;
-                b.Box(kit ? Finish.Amber : Finish.Jade, 0, 0, 0, width, 0.063f, 0.122f);
+                bool kit = form == MedicineForm.Case || form == MedicineForm.Surgery;
+                float width = form == MedicineForm.Surgery ? .205f : kit ? 0.18f : 0.15f;
+                b.Box(form == MedicineForm.Surgery ? Finish.Blue : kit ? Finish.Amber : Finish.Jade, 0, 0, 0, width, 0.063f, 0.122f);
                 b.Box(Finish.Graphite, 0, 0.019f, 0.056f, width * 0.91f, 0.047f, 0.024f);
                 b.Box(Finish.Porcelain, 0, 0.033f, 0f, 0.051f, 0.005f, 0.014f);
                 b.Box(Finish.Porcelain, 0, 0.034f, 0f, 0.015f, 0.004f, 0.055f);
@@ -304,9 +330,10 @@ namespace Dustline
                 return;
             }
 
-            bool enclosed = sight == 2;
+            bool enclosed = sight == 2 || sight == 4;
+            bool aftermarket = sight >= 3;
             float rear = enclosed ? -0.142f : -0.117f;
-            float front = enclosed ? 0.037f : -0.066f;
+            float front = enclosed ? (aftermarket ? .062f : .037f) : (aftermarket ? -.040f : -.066f);
             float width = enclosed ? 0.034f : 0.038f, height = enclosed ? 0.032f : 0.028f;
             float holeWidth = enclosed ? 0.025f : 0.030f, holeHeight = enclosed ? 0.024f : 0.021f;
             b.Box(Finish.Graphite, 0, 0.103f, (rear + front) * 0.5f, 0.056f, 0.018f, front - rear + 0.023f);
@@ -318,6 +345,11 @@ namespace Dustline
             float dotZ = front - 0.009f;
             b.Box(Finish.Recess, 0, y - holeHeight * 0.5f, dotZ, 0.002f, holeHeight + 0.002f, 0.003f);
             b.Box(Finish.OpticDot, 0, y, dotZ, 0.0032f, 0.0032f, 0.005f);
+            if (aftermarket)
+            {
+                b.Box(Finish.Jade, -width - .004f, y - .011f, (rear + front) * .5f, .009f, .017f, .049f);
+                b.Box(Finish.Steel, width + .006f, y - .019f, rear + .017f, .016f, .020f, .030f);
+            }
         }
 
         static Mesh BuildBaton()

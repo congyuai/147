@@ -7,16 +7,19 @@ namespace Dustline
 {
     public sealed class InventoryBoard : MaskableGraphic, IPointerClickHandler
     {
-        int columns, rows;
+        int columns, rows, split;
+        internal GridInventory Bag;
+        internal CargoArea Area;
         float cell;
         Action<int, int> onCell;
         static readonly Color32 EmptyDark = new Color32(29, 40, 46, 255);
         static readonly Color32 EmptyLight = new Color32(36, 49, 54, 255);
 
-        internal void Initialize(int width, int height, float cellSize, Action<int, int> select)
+        internal void Initialize(int width, int height, float cellSize, Action<int, int> select, int divider = 0)
         {
             columns = width;
             rows = height;
+            split = divider;
             cell = cellSize;
             onCell = select;
             SetVerticesDirty();
@@ -24,12 +27,17 @@ namespace Dustline
 
         public void OnPointerClick(PointerEventData data)
         {
-            if (data.button != PointerEventData.InputButton.Left || cell <= 0) return;
-            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, data.position, data.pressEventCamera, out var point)) return;
+            if (data.button == PointerEventData.InputButton.Left && TryCell(data.position, data.pressEventCamera, out int x, out int y)) onCell?.Invoke(x, y);
+        }
+
+        internal bool TryCell(Vector2 screen, Camera eventCamera, out int x, out int y)
+        {
+            x = y = -1;
+            if (cell <= 0f || !RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, screen, eventCamera, out var point)) return false;
             Rect bounds = rectTransform.rect;
-            int x = Mathf.FloorToInt((point.x - bounds.xMin) / cell);
-            int y = Mathf.FloorToInt((bounds.yMax - point.y) / cell);
-            if (x >= 0 && x < columns && y >= 0 && y < rows) onCell?.Invoke(x, y);
+            x = Mathf.FloorToInt((point.x - bounds.xMin) / cell);
+            y = Mathf.FloorToInt((bounds.yMax - point.y) / cell);
+            return x >= 0 && x < columns && y >= 0 && y < rows;
         }
 
         protected override void OnPopulateMesh(VertexHelper mesh)
@@ -39,9 +47,9 @@ namespace Dustline
             for (int y = 0; y < rows; y++)
                 for (int x = 0; x < columns; x++)
                 {
-                    float left = bounds.xMin + x * cell + 1;
+                    float left = bounds.xMin + x * cell + (split > 0 && split == x ? 4 : 1);
                     float top = bounds.yMax - y * cell - 1;
-                    float right = left + cell - 2;
+                    float right = bounds.xMin + (x + 1) * cell - (split > 0 && split == x + 1 ? 4 : 1);
                     float bottom = top - cell + 2;
                     Color32 color = ((x + y) & 1) == 0 ? EmptyDark : EmptyLight;
                     int first = mesh.currentVertCount;

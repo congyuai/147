@@ -229,10 +229,10 @@ namespace Dustline
                 end = hit.point;
                 Health struck = hit.collider.GetComponentInParent<Health>();
                 hitEnemy = CanEngage(struck);
-                if (hitEnemy) struck.Damage(tuning.Damage, health);
+                if (hitEnemy) struck.DamageAt(tuning.Damage, health, hit.point);
             }
             CombatNoise.Emit(transform.position, 55f, health);
-            session.Effects.Shot(weapon.Muzzle.position, end, hitSomething ? hit.normal : Vector3.zero, hitSomething, hitEnemy, false);
+            session.Effects?.Shot(weapon.Muzzle.position, end, hitSomething ? hit.normal : Vector3.zero, hitSomething, hitEnemy, false);
             weapon.Kick();
         }
         void Die(Health killer)

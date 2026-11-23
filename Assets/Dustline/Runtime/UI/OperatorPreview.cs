@@ -74,6 +74,8 @@ namespace Dustline
             model.PoseArms(weapon.RightGrip, weapon.LeftGrip);
         }
 
+        internal void SyncGear(GridInventory bag) => model?.SyncGear(bag);
+
         public void Dispose()
         {
             camera.targetTexture = null;

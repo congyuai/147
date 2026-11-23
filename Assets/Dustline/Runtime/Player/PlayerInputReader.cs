@@ -17,6 +17,7 @@ namespace Dustline
         public GyroMode GyroUsage { get; set; }
         public AimMode AimBehavior { get; private set; }
         public bool HasGyroscope => Application.isMobilePlatform && GyroDevice.current != null;
+        internal GameUI GestureUI;
         public bool Gameplay;
         public bool TouchMode => Application.isMobilePlatform || ForceTouch;
         public bool ForceTouch;
@@ -26,6 +27,9 @@ namespace Dustline
         public bool FirePressed { get; private set; }
         public bool Aim { get; private set; }
         public bool Sprint { get; private set; }
+        public bool SprintHeld { get; private set; }
+        public bool HealthPressed { get; private set; }
+        bool healthPage;
         public bool ReloadPressed { get; private set; }
         public bool CrouchPressed { get; private set; }
         public bool PronePressed { get; private set; }
@@ -40,6 +44,8 @@ namespace Dustline
         public bool HealPressed { get; private set; }
         internal string HealInstance { get; private set; }
         string medicineTapInstance;
+        BodyPart? medicineTapPart;
+        internal BodyPart? HealPart { get; private set; }
         public bool EscapePressed { get; private set; }
         public Vector2 TouchMove;
         Vector2 touchLook, gyroSmoothed;
@@ -51,11 +57,14 @@ namespace Dustline
 
         void Update()
         {
+            GestureUI?.UpdateFieldGestures();
             var keyboard = Keyboard.current;
             var mouse = Mouse.current;
             InventoryPressed = inventory || (keyboard?.tabKey.wasPressedThisFrame ?? false);
             EscapePressed = keyboard?.escapeKey.wasPressedThisFrame ?? false;
             SettingsPressed = settings;
+            HealthPressed = healthPage || (keyboard?.jKey.wasPressedThisFrame ?? false);
+            healthPage = false;
             MapPressed = map || (keyboard?.mKey.wasPressedThisFrame ?? false);
             SwitchWeaponPressed = Gameplay && (weaponSwap || (keyboard?.xKey.wasPressedThisFrame ?? false));
             ReloadPressed = reload || (keyboard?.rKey.wasPressedThisFrame ?? false);
@@ -67,7 +76,9 @@ namespace Dustline
             InteractPressed = interact || (keyboard?.fKey.wasPressedThisFrame ?? false);
             HealPressed = heal || (keyboard?.hKey.wasPressedThisFrame ?? false);
             HealInstance = heal ? medicineTapInstance : null;
+            HealPart = heal ? medicineTapPart : null;
             medicineTapInstance = null;
+            medicineTapPart = null;
             inventory = reload = crouch = prone = jump = interact = heal = settings = map = weaponSwap = false;
             Move = Vector2.zero;
             if (keyboard != null)
@@ -98,9 +109,9 @@ namespace Dustline
             }
             Aim = Gameplay && aimAvailable && aimGesture.Active(AimBehavior);
             Look += ReadGyro();
-            if (!SprintAllowed) autoSprint = false;
-            else autoSprint = Gameplay && TouchMode && !Aim && AutoSprintForward(TouchMove.y, autoSprint, SprintThreshold);
-            Sprint = SprintAllowed && !Aim && (TouchMode ? autoSprint : (keyboard?.leftShiftKey.isPressed ?? false));
+            autoSprint = Gameplay && TouchMode && AutoSprintForward(TouchMove.y, autoSprint, SprintThreshold);
+            SprintHeld = Gameplay && (TouchMode ? autoSprint : (keyboard?.leftShiftKey.isPressed ?? false));
+            Sprint = SprintAllowed && !Aim && SprintHeld;
             if (!Gameplay) { Move = Look = Vector2.zero; Aim = Sprint = LeanLeft = LeanRight = false; }
             wasFire = Gameplay && held;
         }
@@ -198,22 +209,53 @@ namespace Dustline
             if (action == "Jump") jump = true;
             if (action == "Interact") interact = true;
             if (action == "Inventory") inventory = true;
+            if (action == "Health") healthPage = true;
             if (action == "Settings") settings = true;
             if (action == "Map") map = true;
             if (action == "SwitchWeapon") weaponSwap = true;
             if (action == "Heal") TapMedicine();
         }
 
-        internal void TapMedicine(string instance = null)
+        internal bool TakeWeaponSwap()
+        {
+            bool toggle = Gameplay && SwitchWeaponPressed;
+            SwitchWeaponPressed = false;
+            return toggle;
+        }
+
+        internal void CancelAction(string action)
+        {
+            if (action == "Aim") CancelAimGesture();
+            else Hold(action, false);
+            switch (action)
+            {
+                case "Fire": touchFireTap = false; break;
+                case "Reload": reload = false; break;
+                case "Crouch": crouch = false; break;
+                case "Prone": prone = false; break;
+                case "Jump": jump = false; break;
+                case "Interact": interact = false; break;
+                case "Inventory": inventory = false; break;
+                case "Settings": settings = false; break;
+                case "Map": map = false; break;
+                case "SwitchWeapon": weaponSwap = false; break;
+                case "Health": healthPage = false; break;
+            }
+        }
+
+        internal void TapMedicine(string instance = null, BodyPart? part = null)
         {
             heal = true;
             medicineTapInstance = instance;
+            medicineTapPart = part;
         }
 
         public void ReleaseTouch()
         {
             TouchMove = touchLook = Move = Look = Vector2.zero;
-            Fire = FirePressed = Sprint = wasFire = mouseArmed = false;
+            Fire = FirePressed = Sprint = SprintHeld = wasFire = mouseArmed = false;
+            HealthPressed = healthPage = false;
+            HealPart = medicineTapPart = null;
             touchFire = touchFireTap = touchLeanLeft = touchLeanRight = autoSprint = false;
             LeanLeft = LeanRight = SwitchWeaponPressed = false;
             ReloadPressed = CrouchPressed = PronePressed = JumpPressed = InteractPressed = HealPressed = false;

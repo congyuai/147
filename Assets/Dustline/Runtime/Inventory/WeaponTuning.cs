@@ -87,6 +87,33 @@ namespace Dustline
                 0.18f + 0.043f * mods.Sight - 0.018f * mods.Stock);
         }
 
+        public static WeaponStats Evaluate(WeaponDefinition definition, ItemStack item, ItemCatalog catalog)
+        {
+            WeaponMods legacy = item != null ? item.Mods : default;
+            if (item != null)
+            {
+                if (!item.Parts.Sight.Empty) legacy.Sight = 0;
+                if (!item.Parts.Grip.Empty) legacy.Grip = 0;
+                if (!item.Parts.Stock.Empty) legacy.Stock = 0;
+            }
+            WeaponStats stats = Evaluate(definition, legacy);
+            if (item == null || item.Parts.Empty || catalog == null) return stats;
+            float stability = 1f, reload = 1f, aim = 1f, fov = stats.AimFov;
+            for (int i = 0; i <= (int)PartSlot.Magazine; i++)
+            {
+                var slot = (PartSlot)i;
+                var part = catalog.Find(item.Parts.Get(slot).ItemId);
+                if (part == null) continue;
+                var spec = part.Part;
+                stability *= spec.Stability > 0f ? spec.Stability : 1f;
+                reload *= spec.ReloadFactor > 0f ? spec.ReloadFactor : 1f;
+                aim *= spec.AimFactor > 0f ? spec.AimFactor : 1f;
+                if (slot == PartSlot.Sight) fov = spec.Form == 2 ? 35f : 42f;
+            }
+            return new WeaponStats(stats.Damage, stats.FireInterval, stats.Range, stats.ReloadSeconds * reload, stats.Recoil * stability,
+                stats.HipSpread * stability, stats.AimSpread * stability, fov, stats.AimSeconds * aim);
+        }
+
         public static bool SupportsUpgrades(WeaponDefinition definition) =>
             definition != null && definition.Form == WeaponForm.Rifle && !definition.Melee;
 
