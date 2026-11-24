@@ -13,6 +13,7 @@ namespace Dustline
         public PlayerInputReader Input;
         public string Action;
         public RectTransform Knob;
+        internal RectTransform SprintTarget;
         public Action<TouchControl> SelectForLayout;
         public Action<TouchControl, PointerEventData, Vector2> DragForLayout;
         internal Action<Vector2> GestureStart;
@@ -29,6 +30,11 @@ namespace Dustline
             face = image;
             idleColor = image.color;
             pressedColor = pressed;
+        }
+
+        internal void ShowLatched(bool active)
+        {
+            if (face != null) face.color = active || pointer != int.MinValue ? pressedColor : idleColor;
         }
 
         public void SetEditing(bool value)
@@ -64,7 +70,7 @@ namespace Dustline
             if (GestureStart != null) { GestureStart(data.position); return; }
             Input.Hold(Action, true);
             if (Action != "Move" && Action != "Look") Input.Tap(Action);
-            if (Action == "Move") SetStick(data);
+            if (Action == "Move") SetStick(data, false);
         }
         public void OnDrag(PointerEventData data)
         {
@@ -82,16 +88,19 @@ namespace Dustline
                 float scale = GetComponentInParent<Canvas>().scaleFactor;
                 Input.AddLook((data.position - lastPosition) / Mathf.Max(0.1f, scale));
             }
-            if (Action == "Move") SetStick(data);
+            if (Action == "Move") SetStick(data, true);
             lastPosition = data.position;
         }
-        void SetStick(PointerEventData data)
+        void SetStick(PointerEventData data, bool dragging)
         {
             var rect = (RectTransform)transform;
-            RectTransformUtility.ScreenPointToLocalPointInRectangle(rect, data.position, data.pressEventCamera, out var local);
-            var value = Vector2.ClampMagnitude((local - rect.rect.center) / (rect.rect.width * 0.35f), 1);
-            Input.TouchMove = value;
-            if (Knob != null) Knob.anchoredPosition = value * rect.rect.width * 0.28f;
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rect, data.position, data.pressEventCamera, out var local)) return;
+            var raw = (local - rect.rect.center) / (rect.rect.width * .35f);
+            bool target = dragging && SprintTarget != null
+                && RectTransformUtility.ScreenPointToLocalPointInRectangle(SprintTarget, data.position, data.pressEventCamera, out var hit)
+                && hit.sqrMagnitude <= SprintTarget.rect.width * SprintTarget.rect.width * .25f;
+            Input.MoveTouchStick(raw, target);
+            if (Knob != null) Knob.anchoredPosition = Vector2.ClampMagnitude(raw, 1f) * rect.rect.width * .28f;
         }
         public void OnPointerUp(PointerEventData data)
         {
@@ -118,11 +127,7 @@ namespace Dustline
             if (GestureEnd != null) { GestureEnd(lastPosition, cancel); return; }
             if (cancel) Input.CancelAction(Action);
             else Input.Hold(Action, false);
-            if (Action == "Move")
-            {
-                Input.TouchMove = Vector2.zero;
-                if (cancel) Input.CancelTouchSprint();
-            }
+            if (Action == "Move") Input.ReleaseTouchStick(cancel);
         }
         internal void CancelPointer() => Release(true);
 

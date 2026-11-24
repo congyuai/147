@@ -449,13 +449,7 @@ namespace Dustline.Tests
         {
             var fight = new Fight(this, 4, 0);
             var actor = fight.Actor;
-            actor.gameObject.layer = 2;
-            var motor = actor.gameObject.AddComponent<CharacterController>();
-            motor.height = 1.8f;
-            motor.center = Vector3.up * 0.9f;
-            motor.radius = 0.35f;
-            typeof(PlayerController).GetField("motor", InstancePrivate).SetValue(actor, motor);
-            typeof(PlayerController).GetField("session", InstancePrivate).SetValue(actor, fight.Session);
+            Ground(fight);
             float sprintSpeed = 6.5f * Mathf.Lerp(1f, 0.65f, fight.Bag.Weight / fight.Bag.MaxWeight);
             float walkSpeed = 3.8f * Mathf.Lerp(1f, 0.65f, fight.Bag.Weight / fight.Bag.MaxWeight);
 
@@ -466,6 +460,9 @@ namespace Dustline.Tests
             Assert.That(actor.Sprinting, Is.False);
             Assert.That(actor.MoveSpeed, Is.EqualTo(walkSpeed).Within(0.03f));
             Assert.That(fight.Equipped.LoadedAmmo, Is.EqualTo(3));
+            float shot = (float)typeof(WeaponController).GetProperty("LastShotSpread", InstancePrivate).GetValue(fight.Weapon);
+            Assert.That(shot, Is.GreaterThan(FieldHandling.Spread(fight.Weapon.Stats.HipSpread, 1f, ShotPosture.Walking, 1f)));
+            Assert.That(shot, Is.LessThan(FieldHandling.Spread(fight.Weapon.Stats.HipSpread, 1f, ShotPosture.Airborne, 0f)));
             Assert.That(Field<float>(actor.WeaponView, "run"), Is.Zero);
             fight.Tick(0.04f, move: true);
             Assert.That(actor.Sprinting, Is.False);
@@ -479,12 +476,7 @@ namespace Dustline.Tests
             var f = new Fight(this, 4, 0);
             f.Rifle.MoveFactor = .76f;
             var actor = f.Actor;
-            actor.gameObject.layer = 2;
-            var motor = actor.gameObject.AddComponent<CharacterController>();
-            motor.height = 1.8f;
-            motor.center = Vector3.up * .9f;
-            motor.radius = .35f;
-            typeof(PlayerController).GetField("motor", InstancePrivate).SetValue(actor, motor);
+            Ground(f);
             f.Tick(.04f, move: true, sprint: false);
             float walk = actor.MoveSpeed;
             Assert.That(walk, Is.EqualTo(PlayerController.MovementSpeed(false, false, false, f.Bag.Weight, f.Bag.MaxWeight, .76f, 1f)).Within(.03f));
@@ -505,6 +497,77 @@ namespace Dustline.Tests
             f.Tick(.04f, move: true, sprint: false);
             f.Tick(.04f, move: true);
             Assert.That(actor.Sprinting, Is.True);
+        }
+
+        [Test]
+        public void ThreeSecondsOfLightAndFullJoystickInputMoveTheSameDistance()
+        {
+            var fight = new Fight(this, 4, 0);
+            Ground(fight);
+            var input = fight.Session.Input;
+            input.ForceTouch = true;
+            float clock = Time.time;
+            float light = Walk(.16f), full = Walk(1f);
+            float speed = PlayerController.MovementSpeed(false, false, false, fight.Bag.Weight, fight.Bag.MaxWeight, 1f, 1f);
+            Assert.That(light, Is.EqualTo(3f * speed).Within(.05f));
+            Assert.That(full, Is.EqualTo(light).Within(.05f));
+            input.Tap("Quiet");
+            Assert.That(Walk(1f), Is.EqualTo(full * .55f).Within(.06f));
+            Assert.That(input.QuietWalk, Is.True);
+
+            float Walk(float amount)
+            {
+                Invoke(input, "MoveTouchStick", new Vector2(0f, amount), false);
+                float start = fight.Actor.transform.position.z;
+                for (int frame = 0; frame < 150; frame++)
+                {
+                    Invoke(input, "Update");
+                    Invoke(fight.Actor, "Tick", clock += .02f, .02f);
+                    Assert.That(fight.Actor.Sprinting, Is.False);
+                }
+                return fight.Actor.transform.position.z - start;
+            }
+        }
+
+        [Test]
+        public void HeldTriggerMovesSuccessiveImpactPointsUpTheSameWall()
+        {
+            var fight = new Fight(this, 8, 0, hipSpread: .0015f);
+            var eye = fight.Actor.View.transform;
+            var wall = AddBox(eye.position + eye.forward * 12f, new Vector3(8f, 9f, .15f));
+            Physics.SyncTransforms();
+            float lastY = float.NegativeInfinity;
+            var viewmodel = fight.Actor.WeaponView.transform;
+            float initialZ = viewmodel.localPosition.z;
+            for (int i = 0; i < 8; i++)
+            {
+                Vector3 direction = eye.forward, start = eye.position;
+                fight.Tick(.25f, fire: true, press: i == 0);
+                Assert.That(fight.Weapon.Magazine.Rounds, Is.EqualTo(7 - i));
+                var hit = Field<RaycastHit[]>(fight.Weapon, "shotHits")[0];
+                Assert.That(hit.collider, Is.SameAs(wall));
+                Assert.That(Vector3.Angle(hit.point - start, direction), Is.LessThan(.12f));
+                Assert.That(hit.point.y, Is.GreaterThan(lastY));
+                lastY = hit.point.y;
+            }
+            Assert.That(lastY - eye.position.y, Is.GreaterThan(1f));
+            Assert.That(viewmodel.localPosition.z, Is.LessThan(initialZ));
+        }
+
+        void Ground(Fight fight)
+        {
+            AddBox(TestOrigin - Vector3.up * .5f, new Vector3(64f, 1f, 64f));
+            var actor = fight.Actor;
+            actor.gameObject.layer = 2;
+            var motor = actor.gameObject.AddComponent<CharacterController>();
+            motor.height = 1.8f;
+            motor.center = Vector3.up * .9f;
+            motor.radius = .35f;
+            motor.minMoveDistance = 0f;
+            typeof(PlayerController).GetField("motor", InstancePrivate).SetValue(actor, motor);
+            Physics.SyncTransforms();
+            motor.Move(Vector3.down * .08f);
+            Assert.That(motor.isGrounded, Is.True);
         }
 
         [TestCase(-1f)]
@@ -623,13 +686,14 @@ namespace Dustline.Tests
             readonly PlayerInputReader input;
             float now;
 
-            public Fight(WeaponCombatRegressionTests test, int loaded, int reserve, bool withRifle = true)
+            public Fight(WeaponCombatRegressionTests test, int loaded, int reserve, bool withRifle = true, float hipSpread = .012f)
             {
                 Rifle = test.AddAsset<WeaponDefinition>();
                 Rifle.Form = WeaponForm.Rifle;
                 Rifle.MagazineSize = 8;
                 Rifle.AmmoId = "ammo";
                 Rifle.ReloadSeconds = 1;
+                Rifle.HipSpread = hipSpread;
                 var rifleItem = test.AddAsset<ItemDefinition>();
                 rifleItem.Id = WeaponDefinition.RifleId;
                 rifleItem.Kind = ItemKind.Weapon;
@@ -696,10 +760,10 @@ namespace Dustline.Tests
                 now = Time.time;
             }
 
-            public void Tick(float delta, bool fire = false, bool swap = false, bool reload = false, bool move = false, bool sprint = true)
+            public void Tick(float delta, bool fire = false, bool swap = false, bool reload = false, bool move = false, bool sprint = true, bool press = true)
             {
                 Set(input, "Fire", fire);
-                Set(input, "FirePressed", fire);
+                Set(input, "FirePressed", fire && press);
                 Set(input, "SwitchWeaponPressed", swap);
                 Set(input, "ReloadPressed", reload);
                 now += delta;

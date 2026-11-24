@@ -94,7 +94,8 @@ internal sealed class Market(Catalog catalog, StateStore store)
         _ = Total(command.UnitPrice, command.Quantity);
         var item = Stash.Take(seller.Items, command.TargetId, command.Quantity);
         string id = Stash.NewId();
-        state.Listings.Add(id, new(id, name, command.UnitPrice, item));
+        if (item.Area == ItemStack.RecoveryArea) state.RecoveryListingIds.Add(id);
+        state.Listings.Add(id, new(id, name, command.UnitPrice, item with { Area = ItemStack.MainArea }));
         Record(seller, item.ItemId, item.Quantity, command.UnitPrice, "Listed", DateTime.UtcNow);
     }
 
@@ -108,7 +109,11 @@ internal sealed class Market(Catalog catalog, StateStore store)
         var seller = state.Accounts[listing.Seller];
         Credit(seller, price);
         new Stash(catalog, buyer.Items).Insert(Stash.Extract(listing.Item, command.Quantity));
-        if (command.Quantity == listing.Item.Quantity) state.Listings.Remove(listing.Id);
+        if (command.Quantity == listing.Item.Quantity)
+        {
+            state.Listings.Remove(listing.Id);
+            state.RecoveryListingIds.Remove(listing.Id);
+        }
         else state.Listings[listing.Id] = listing with { Item = listing.Item with { Quantity = listing.Item.Quantity - command.Quantity } };
         var now = DateTime.UtcNow;
         Record(buyer, listing.Item.ItemId, command.Quantity, listing.UnitPrice, "Bought", now);
@@ -119,7 +124,8 @@ internal sealed class Market(Catalog catalog, StateStore store)
     {
         var listing = FindListing(state, command.TargetId);
         if (listing.Seller != name) throw new MarketError(StatusCodes.Status403Forbidden, "ListingNotOwned");
-        new Stash(catalog, seller.Items).Insert(listing.Item);
+        bool returnToRecovery = state.RecoveryListingIds.Remove(listing.Id);
+        new Stash(catalog, seller.Items).Insert(listing.Item, returnToRecovery);
         state.Listings.Remove(listing.Id);
         Record(seller, listing.Item.ItemId, listing.Item.Quantity, listing.UnitPrice, "Cancelled", DateTime.UtcNow);
     }

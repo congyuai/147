@@ -30,20 +30,22 @@ namespace Dustline
 
         void BuildGround()
         {
-            const int cols = 284;
             var terrain = PortMesh.Child(root, "North Cape terrain");
             terrain.isStatic = true;
             for (int z = 0; z < PortTerrain.Cells; z += TileCells)
-                for (int x = 0; x < cols; x += TileCells)
+                for (int x = 0; x < PortTerrain.SeaColumn; x += TileCells)
                 {
-                    int nx = Mathf.Min(TileCells, cols - x), nz = Mathf.Min(TileCells, PortTerrain.Cells - z);
+                    int nx = Mathf.Min(TileCells, PortTerrain.SeaColumn - x), nz = Mathf.Min(TileCells, PortTerrain.Cells - z);
                     var tile = PortMesh.Child(terrain.transform, "Grade " + x + " " + z);
                     tile.isStatic = true;
                     BuildGrade(tile, x, z, nx, nz);
                 }
+            var seabed = PortMesh.Child(terrain.transform, "Tidal basin seabed");
+            seabed.isStatic = true;
+            BuildGrade(seabed, PortTerrain.SeaColumn, 0, 1, 1, PortTerrain.Cells - PortTerrain.SeaColumn, PortTerrain.Cells);
         }
 
-        void BuildGrade(GameObject tile, int x, int z, int nx, int nz)
+        void BuildGrade(GameObject tile, int x, int z, int nx, int nz, int strideX = 1, int strideZ = 1)
         {
             int width = nx + 1;
             var vertices = new Vector3[width * (nz + 1)];
@@ -56,11 +58,10 @@ namespace Dustline
             for (int dz = 0; dz <= nz; dz++)
                 for (int dx = 0; dx <= nx; dx++)
                 {
-                    int i = x + dx, j = z + dz, v = dz * width + dx;
-                    float y = PortTerrain.VertexHeight(i, j);
-                    vertices[v] = new Vector3(i * s - HalfSize, y, j * s - HalfSize);
+                    int i = x + dx * strideX, j = z + dz * strideZ, v = dz * width + dx;
+                    vertices[v] = GradePoint(i, j);
                     uv[v] = new Vector2(i * s / Size, j * s / Size);
-                    float west = PortTerrain.VertexHeight(Mathf.Max(0, i - 1), j);
+                    float west = strideX > 1 ? vertices[v].y : PortTerrain.VertexHeight(Mathf.Max(0, i - 1), j);
                     float east = PortTerrain.VertexHeight(Mathf.Min(PortTerrain.Cells, i + 1), j);
                     float south = PortTerrain.VertexHeight(i, Mathf.Max(0, j - 1));
                     float north = PortTerrain.VertexHeight(i, Mathf.Min(PortTerrain.Cells, j + 1));
@@ -89,27 +90,52 @@ namespace Dustline
 
         void BuildWater()
         {
+            materials.Sea.SetFloat("_Cull", (float)CullMode.Off);
+            for (int start = 0; start < PortTerrain.SeaColumn; start += TileCells)
+            {
+                var water = new PortMesh();
+                int end = Mathf.Min(PortTerrain.SeaColumn, start + TileCells);
+                for (int x = start; x < end; x++)
+                    for (int z = 0; z < PortTerrain.Cells; z++)
+                    {
+                        Vector3 a = GradePoint(x, z), b = GradePoint(x, z + 1);
+                        Vector3 c = GradePoint(x + 1, z + 1), d = GradePoint(x + 1, z);
+                        // The same diagonal as the collider keeps each waterline on the bare grade.
+                        WetTriangle(water, a, b, c);
+                        WetTriangle(water, a, c, d);
+                    }
+                water.Bake(root, "Tideline water " + start, materials.Sea, keep, false);
+            }
             for (int i = 0; i < 6; i++)
             {
                 var sea = new PortMesh();
                 float z = -HalfSize + i * 160;
-                sea.Floor(354, z, HalfSize + 96, z + 160, PortTerrain.SeaY, PortTone.Water);
+                sea.Floor(PortTerrain.SeaBedStart, z, HalfSize + 96, z + 160, PortTerrain.SeaY, PortTone.Water);
                 sea.Bake(root, "Tidal basin " + i, materials.Sea, keep, false);
             }
-            for (int i = 0; i < 7; i++)
+        }
+
+        static Vector3 GradePoint(int x, int z) => new Vector3(x * PortTerrain.Step - HalfSize,
+            PortTerrain.VertexHeight(x, z), z * PortTerrain.Step - HalfSize);
+
+        static void WetTriangle(PortMesh water, Vector3 a, Vector3 b, Vector3 c)
+        {
+            const float level = PortTerrain.SeaY;
+            if (a.y >= level && b.y >= level && c.y >= level) return;
+            if (a.y >= level)
+                (a, b, c) = b.y < level ? (b, c, a) : (c, a, b);
+
+            bool wetB = b.y <= level, wetC = c.y <= level;
+            Vector3 p = wetB ? b : Waterline(a, b), q = wetC ? c : Waterline(c, a);
+            a.y = p.y = q.y = level;
+            if (wetB == wetC || b.y == level || c.y == level) water.Tri(a, p, q, PortTone.Water);
+            else water.Quad(a, p, Waterline(b, c), q, PortTone.Water);
+
+            static Vector3 Waterline(Vector3 from, Vector3 to)
             {
-                var stream = new PortMesh();
-                float a = -HalfSize + i * 120;
-                float end = Mathf.Min(a + 120, 354);
-                for (float x = a; x < end; x += 6)
-                {
-                    float next = Mathf.Min(x + 6, end);
-                    float b = PortTerrain.RiverZ(x), c = PortTerrain.RiverZ(next);
-                    stream.Quad(new Vector3(x, PortTerrain.SeaY, b - 18), new Vector3(x, PortTerrain.SeaY, b + 18),
-                        new Vector3(next, PortTerrain.SeaY, c + 18), new Vector3(next, PortTerrain.SeaY, c - 18),
-                        i == 6 ? PortTone.Water : PortTone.WaterDark);
-                }
-                stream.Bake(root, "Tideline water " + i, materials.Sea, keep, false);
+                var point = Vector3.LerpUnclamped(from, to, (PortTerrain.SeaY - from.y) / (to.y - from.y));
+                point.y = PortTerrain.SeaY;
+                return point;
             }
         }
 
@@ -119,8 +145,9 @@ namespace Dustline
             {
                 const float halfWidth = PortTerrain.Bridge.HalfWidth;
                 var c = new PortChunk(root, "Service bridge " + span.X, materials, keep);
-                Vector3 deckCenter = new Vector3(span.X, span.DeckY - .29f, span.Z);
-                Vector3 deckSize = new Vector3(halfWidth * 2, .58f, span.HalfLength * 2);
+                const float thickness = PortTerrain.Bridge.DeckThickness;
+                Vector3 deckCenter = new Vector3(span.X, span.DeckY - thickness * .5f, span.Z);
+                Vector3 deckSize = new Vector3(halfWidth * 2, thickness, span.HalfLength * 2);
                 c.Structures.Box(deckCenter, deckSize, PortTone.Slate);
                 var surface = PortMesh.Child(c.Root.transform, "Bridge steel deck");
                 surface.isStatic = true;
@@ -134,9 +161,13 @@ namespace Dustline
                     float x = span.X + side * (halfWidth - .19f);
                     c.Block(new Vector3(x, span.DeckY + .75f, span.Z), new Vector3(.37f, 1.50f, span.HalfLength * 2), PortTone.Concrete);
                     c.Block(new Vector3(x, span.DeckY + 1.59f, span.Z), new Vector3(.43f, .18f, span.HalfLength * 2), PortTone.Ochre);
-                    for (int z = -1; z <= 1; z++)
-                        c.Structures.Box(new Vector3(x, span.DeckY - 2.2f, span.Z + z * span.HalfLength * .71f),
-                            new Vector3(1.6f, 6.3f, 2.1f), PortTone.Concrete);
+                    for (int pier = -1; pier <= 1; pier++)
+                    {
+                        float z = span.Z + pier * span.HalfLength * .71f;
+                        float top = span.DeckY - thickness;
+                        float bottom = Mathf.Min(top - .4f, PortTerrain.Ground(x, z) - .7f);
+                        c.Block(new Vector3(x, (top + bottom) * .5f, z), new Vector3(1.6f, top - bottom, 2.1f), PortTone.Concrete);
+                    }
                     float paint = span.X + side * (halfWidth - 1.02f);
                     c.Deck.Floor(paint - .23f, span.Z - span.HalfLength + .7f, paint + .23f, span.Z + span.HalfLength - .7f,
                         span.DeckY + .045f, PortTone.Paint);
@@ -147,31 +178,16 @@ namespace Dustline
                 nodes.Add(At(span.X, span.Z - span.HalfLength - 2));
                 c.Bake();
             }
-            for (int i = 0; i < 7; i++)
+            for (int side = -1; side <= 1; side += 2)
             {
-                var bank = new PortChunk(root, "Canal retaining wall " + i, materials, keep);
-                float end = Mathf.Min(354, -469 + (i + 1) * 120);
-                for (float x = -469 + i * 120; x < end; x += 6)
+                var bank = new PortChunk(root, "Canal retaining wall " + side, materials, keep);
+                for (float from = PortTerrain.RetainingWallStart(side); from < PortTerrain.QuayEdge; from += 6)
                 {
-                    float next = Mathf.Min(end, x + 6);
-                    float from = x, to = next;
-                    foreach (var span in PortTerrain.Bridges)
-                    {
-                        float left = span.X - PortTerrain.Bridge.HalfWidth, right = span.X + PortTerrain.Bridge.HalfWidth;
-                        if (from < right && to > left)
-                        {
-                            if (from < left) to = left;
-                            else from = right;
-                            break;
-                        }
-                    }
-                    if (to - from < .04f) continue;
-                    for (int side = -1; side <= 1; side += 2)
-                    {
-                        float z0 = PortTerrain.RiverZ(from) + side * PortTerrain.RiverRail;
-                        float z1 = PortTerrain.RiverZ(to) + side * PortTerrain.RiverRail;
-                        Wall(bank, from, z0, to, z1, 1.67f, .49f, PortTone.Concrete, bankSide: side);
-                    }
+                    float to = Mathf.Min(PortTerrain.QuayEdge, from + 6);
+                    float z0 = PortTerrain.RiverZ(from) + side * PortTerrain.RiverRail;
+                    float z1 = PortTerrain.RiverZ(to) + side * PortTerrain.RiverRail;
+                    Wall(bank, from, z0, to, z1, 1.67f, .49f, PortTone.Concrete, bankSide: side,
+                        minimumBase: PortTerrain.SeaBedY - .8f);
                 }
                 bank.Bake();
             }
@@ -179,38 +195,56 @@ namespace Dustline
 
         void BuildBoundary()
         {
+            const float edge = PortTerrain.Boundary, quay = PortTerrain.QuayEdge;
+            const float deepBase = PortTerrain.SeaBedY - .8f;
+            const float parapet = 1.67f, quayTop = PortTerrain.QuayY + parapet;
+            const float width = edge / 4;
+            float mouth = PortTerrain.RiverZ(quay);
             for (int i = 0; i < 8; i++)
             {
                 var c = new PortChunk(root, "Breakwater and ridge wall " + i, materials, keep);
-                float a = -469 + i * 117.25f;
-                float mouth = PortTerrain.RiverZ(354);
-                for (float p = a; p < a + 117.25f; p += 9)
+                float a = -edge + i * width;
+                for (float p = a; p < a + width; p += 9)
                 {
-                    float next = Mathf.Min(p + 9, a + 117.25f);
-                    Wall(c, -469, p, -469, next, 2.8f, 1.2f, PortTone.Concrete);
+                    float next = Mathf.Min(p + 9, a + width);
+                    Wall(c, -edge, p, -edge, next, 2.8f, 1.2f, PortTone.Concrete, deepBase,
+                        minimumTop: PortTerrain.SeaY + 2.1f);
+                    // Cover the entire sloped mesh cell under the vertical quay face.
                     if (p < mouth - PortTerrain.RiverRail)
-                        Wall(c, 354, p, 354, Mathf.Min(next, mouth - PortTerrain.RiverRail), 1.67f, 1.12f, PortTone.ConcreteLight, -4.8f);
+                        Wall(c, quay, p, quay, Mathf.Min(next, mouth - PortTerrain.RiverRail), parapet, PortTerrain.Step,
+                            PortTone.ConcreteLight, deepBase, minimumTop: quayTop);
                     if (next > mouth + PortTerrain.RiverRail)
-                        Wall(c, 354, Mathf.Max(p, mouth + PortTerrain.RiverRail), 354, next, 1.67f, 1.12f, PortTone.ConcreteLight, -4.8f);
-                    if (p < 354)
+                        Wall(c, quay, Mathf.Max(p, mouth + PortTerrain.RiverRail), quay, next, parapet, PortTerrain.Step,
+                            PortTone.ConcreteLight, deepBase, minimumTop: quayTop);
+                    if (p < quay)
                     {
-                        float end = Mathf.Min(next, 354);
-                        Wall(c, p, -469, end, -469, 2.8f, 1.23f, PortTone.Concrete);
-                        Wall(c, p, 469, end, 469, 2.8f, 1.23f, PortTone.Concrete);
+                        float end = Mathf.Min(next, quay);
+                        Wall(c, p, -edge, end, -edge, 2.8f, 1.23f, PortTone.Concrete);
+                        Wall(c, p, edge, end, edge, 2.8f, 1.23f, PortTone.Concrete);
                     }
                 }
                 c.Bake();
             }
+            var basin = new PortChunk(root, "Tidal basin breakwater", materials, keep);
+            const float rise = PortTerrain.SeaY - PortTerrain.SeaBedY + 1.6f;
+            Wall(basin, PortTerrain.SeaBedStart, -edge, edge, -edge, rise, 1.23f, PortTone.Concrete);
+            Wall(basin, PortTerrain.SeaBedStart, edge, edge, edge, rise, 1.23f, PortTone.Concrete);
+            Wall(basin, edge, -edge, edge, edge, rise, 1.23f, PortTone.Concrete);
+            // The quay toe is shallower than the flat seabed; close the two corners beneath the waterline.
+            Wall(basin, quay, -edge, PortTerrain.SeaBedStart, -edge, 1.6f, 1.23f, PortTone.Concrete, deepBase, minimumTop: .2f);
+            Wall(basin, quay, edge, PortTerrain.SeaBedStart, edge, 1.6f, 1.23f, PortTone.Concrete, deepBase, minimumTop: .2f);
+            basin.Bake();
         }
 
         static void Wall(PortChunk c, float x0, float z0, float x1, float z1, float height, float width, PortTone tone,
-            float minimumBase = float.PositiveInfinity, int bankSide = 0)
+            float minimumBase = float.PositiveInfinity, int bankSide = 0, float minimumTop = float.NegativeInfinity)
         {
             Vector3 a = At(x0, z0), b = At(x1, z1);
             Vector3 line = b - a; line.y = 0;
             Vector3 side = Vector3.Cross(line.normalized, Vector3.up) * (width * .5f);
             Vector3 lo = Vector3.up * .65f;
             Vector3 topA = a + Vector3.up * height, topB = b + Vector3.up * height;
+            topA.y = Mathf.Max(topA.y, minimumTop); topB.y = Mathf.Max(topB.y, minimumTop);
             if (bankSide != 0)
             {
                 topA.y = Mathf.Max(topA.y, PortTerrain.Ground(x0, z0 + bankSide * 2.1f) + height);

@@ -61,12 +61,16 @@ namespace Dustline.Tests
                 body.Damage(part, body.Maximum(part) * (1f - fractions[i]), false);
             }
             RefreshHud();
-            var stamina = Node(vitals, "Stamina display");
+            var strip = Node(Safe, "Weapon bar/Weapon slots");
+            var stamina = Node(strip, "Stamina display");
+            Assert.That(ScreenPoint(stamina).x, Is.EqualTo(ScreenPoint(strip).x).Within(1f));
+            Assert.That(ScreenPoint(stamina).y, Is.GreaterThan(ScreenPoint(strip).y));
             var staminaGroup = stamina.GetComponent<CanvasGroup>();
             Assert.That(staminaGroup.alpha, Is.Zero);
             Assert.That(staminaGroup.blocksRaycasts, Is.False);
             Assert.That(LabelAt(stamina, "Stamina value"), Is.EqualTo("体力  100 / 100"));
-            Assert.That(vitals.GetComponentsInChildren<RectTransform>().Count(node => node.name == "Bar track"), Is.EqualTo(1));
+            Assert.That(vitals.GetComponentsInChildren<RectTransform>().Any(node => node.name == "Bar track"), Is.False);
+            Assert.That(Node(stamina, "Bar track"), Is.Not.Null);
             var setStamina = typeof(PlayerController).GetProperty(nameof(PlayerController.Stamina)).GetSetMethod(true);
             setStamina.Invoke(session.Player, new object[] { 64f });
             RefreshHud();
@@ -78,6 +82,9 @@ namespace Dustline.Tests
             Assert.That(vitals.GetComponentsInChildren<Text>().Any(text => text.text.StartsWith("总健康") || text.name.StartsWith("Region health / ")), Is.False);
             var sidearm = Slot(Node(Safe, "Weapon bar/Weapon slots"), EquipmentSlot.Sidearm);
             Assert.That(sidearm.GetComponent<Button>().interactable, Is.False);
+            var emptySlotHits = Hits(ScreenPoint(sidearm));
+            Assert.That(emptySlotHits.Any(hit => hit.gameObject == sidearm.gameObject), Is.False);
+            Assert.That(emptySlotHits.Any(hit => hit.gameObject == Node(Safe, "Touch controls/Look pad").gameObject), Is.True);
             Assert.That(LabelAt(sidearm, "Weapon ammunition"), Is.Empty);
             Assert.That(Node(vitals, "Injury summary/Injury / Destroyed").gameObject.activeInHierarchy, Is.True);
             AssertBodyMesh(figure.GetComponent<Graphic>());
@@ -97,6 +104,7 @@ namespace Dustline.Tests
                 var part = (BodyPart)i;
                 Assert.That(LabelAt(map, "Region / " + part + "/Region health / " + part), Is.EqualTo(Values(body.Current(part), body.Maximum(part))));
             }
+            yield return null;
             Click(Node(detail, "‹ 返回"));
             Assert.That(session.UI.BlocksGameplay, Is.False);
             Assert.That(figure.gameObject.activeInHierarchy, Is.True);
@@ -113,13 +121,16 @@ namespace Dustline.Tests
             var summary = Node(Safe, VitalsPath + "/Injury summary");
             var fracture = Node(summary, "Injury / Fracture");
             Assert.That(LabelAt(fracture, "Injury count"), Is.EqualTo("2"));
+            yield return null;
             Click(fracture);
+            yield return null;
             var detail = Node(Safe, DetailPath);
             Assert.That(LabelAt(detail, "Treatment options/Treatment target"), Is.EqualTo("治疗目标 / 左腿 · 骨折"));
             var right = Node(detail, "Condition map/Region / RightLeg/Injury / Fracture");
             Assert.That(Node(right, "Injury glyph").GetComponent<Graphic>().GetType(), Is.EqualTo(Node(fracture, "Injury glyph").GetComponent<Graphic>().GetType()));
             Click(right);
             Assert.That(LabelAt(detail, "Treatment options/Treatment target"), Is.EqualTo("治疗目标 / 右腿 · 骨折"));
+            yield return null;
             var options = Node(detail, "Treatment options/Available treatments");
             Assert.That(Node(options, "Treatment / bandage").gameObject.activeSelf, Is.False);
             var splint = Node(options, "Treatment / splint/开始");
@@ -141,6 +152,7 @@ namespace Dustline.Tests
             Assert.That(fracture.gameObject.activeInHierarchy, Is.True);
             Assert.That(LabelAt(fracture, "Injury count"), Is.Empty);
 
+            yield return null;
             Click(fracture);
             detail = Node(Safe, DetailPath);
             Assert.That(Node(detail, "Condition map/Region / RightLeg/Injury / Fracture").gameObject.activeSelf, Is.False);
@@ -234,6 +246,72 @@ namespace Dustline.Tests
             CollectionAssert.AreEqual(savedProfile, File.ReadAllBytes(store.Path));
         }
 
+        [UnityTest]
+        public IEnumerator HipReticleMarksProjectedSpreadWithFixedStrokeSizes()
+        {
+            yield return OpenPractice();
+            var center = Node(Safe, "HUD/Screen centre");
+            var view = session.Player.View;
+            var arms = Enumerable.Range(0, 4).Select(i => Node(center, "Hip spread arm " + i)).ToArray();
+            var spread = typeof(WeaponController).GetProperty("CurrentShotSpread", Instance).GetSetMethod(true);
+            foreach (float value in new[] { .008f, .02f, .045f })
+            {
+                spread.Invoke(session.Player.Weapon, new object[] { value });
+                RefreshHud();
+                Assert.That(Vector2.Distance(ScreenPoint(center), view.pixelRect.center), Is.LessThan(1f));
+                var expected = FieldHandling.ScreenRadius(value, view.pixelRect, view.projectionMatrix);
+                for (int i = 0; i < arms.Length; i++)
+                {
+                    var line = arms[i];
+                    Assert.That(line.GetComponent<Image>().enabled, Is.True);
+                    bool horizontal = i < 2;
+                    Assert.That(line.sizeDelta, Is.EqualTo(horizontal ? new Vector2(12, 2) : new Vector2(2, 12)));
+                    float sign = (i & 1) == 0 ? 1f : -1f;
+                    Vector2 inner = horizontal ? new Vector2(-sign * line.rect.width / 2f, 0f)
+                        : new Vector2(0f, -sign * line.rect.height / 2f);
+                    var actual = RectTransformUtility.WorldToScreenPoint(null, line.TransformPoint(inner)) - view.pixelRect.center;
+                    Assert.That(Vector2.Distance(actual, horizontal ? new Vector2(sign * expected.x, 0f) : new Vector2(0f, sign * expected.y)), Is.LessThan(1f));
+                }
+            }
+            typeof(PlayerInputReader).GetProperty(nameof(PlayerInputReader.Aim)).GetSetMethod(true).Invoke(session.Input, new object[] { true });
+            RefreshHud();
+            Assert.That(arms.All(arm => !arm.GetComponent<Image>().enabled), Is.True);
+        }
+
+        [UnityTest]
+        public IEnumerator OnlyDraggingIntoTheSprintIconLocksTheStick()
+        {
+            yield return OpenPractice();
+            var move = Node(Safe, "Touch controls/Move");
+            var control = move.GetComponent<TouchControl>();
+            var icon = Node(move, "Sprint lock");
+            var input = session.Input;
+            var e = new PointerEventData(EventSystem.current) { pointerId = 31, button = PointerEventData.InputButton.Left, position = ScreenPoint(move) };
+            control.OnPointerDown(e);
+            e.position = RectTransformUtility.WorldToScreenPoint(null, move.TransformPoint(Vector2.up * move.rect.width * .32f));
+            control.OnDrag(e);
+            Invoke(input, "Update");
+            Assert.That(input.Move.y, Is.EqualTo(1f).Within(.001f));
+            Assert.That(input.Sprint, Is.False);
+            RefreshHud();
+            Canvas.ForceUpdateCanvases();
+            Assert.That(icon.gameObject.activeInHierarchy, Is.True);
+            e.position = ScreenPoint(icon);
+            control.OnDrag(e);
+            control.OnPointerUp(e);
+            Invoke(input, "Update");
+            Assert.That(input.Sprint && input.SprintHeld, Is.True);
+            Assert.That(input.Move, Is.EqualTo(Vector2.up));
+            e.position = ScreenPoint(move);
+            control.OnPointerDown(e);
+            e.position = RectTransformUtility.WorldToScreenPoint(null, move.TransformPoint(Vector2.down * move.rect.width * .31f));
+            control.OnDrag(e);
+            Invoke(input, "Update");
+            Assert.That(input.SprintHeld, Is.False);
+            Assert.That(input.Move.y, Is.EqualTo(-1f).Within(.001f));
+            control.OnPointerUp(e);
+        }
+
         IEnumerator OpenPractice(bool allFirearms = false)
         {
             if (Screen.width < Screen.height || Screen.height < 1) Assert.Ignore("Requires a landscape Game view.");
@@ -283,10 +361,12 @@ namespace Dustline.Tests
                 for (int i = 0; i < BodyCondition.Count; i++)
                 {
                     mesh.PopulateUIVertex(ref vertex, offset);
-                    var rim = i == (int)BodyPart.RightLeg ? new Color32(239, 240, 229, 255) : new Color32(52, 73, 79, 255);
+                    var rim = i == (int)BodyPart.RightLeg ? new Color32(239, 240, 229, 191) : new Color32(52, 73, 79, 191);
                     Assert.That(vertex.color, Is.EqualTo(rim), (BodyPart)i + " outline");
                     mesh.PopulateUIVertex(ref vertex, offset + shapes[i].Length);
-                    Assert.That(vertex.color, Is.EqualTo(fills[i]), (BodyPart)i + " fill");
+                    var fill = fills[i];
+                    fill.a = 191;
+                    Assert.That(vertex.color, Is.EqualTo(fill), (BodyPart)i + " fill");
                     offset += 2 * shapes[i].Length;
                 }
             }

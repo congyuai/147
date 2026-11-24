@@ -6,53 +6,106 @@ namespace Dustline
     public sealed class BotController : MonoBehaviour
     {
         enum State { Patrol, Search, Attack }
+        internal const int FactionTeam = 1;
         public BotRank Rank { get; private set; }
+        internal GridInventory Equipment { get; private set; }
         GameSession session;
         BotTuning tuning;
         Health health, target;
         CharacterController motor;
         OperatorVisual operatorVisual;
         WeaponVisual weapon;
+        ItemStack firearm;
+        string ammoId;
+        int capacity;
         StepCadence steps;
         State state;
         Vector3 goal, lastKnown;
         List<Vector3> path = new List<Vector3>();
-        const int MagazineSize = 20;
         // The player's controller is on Ignore Raycast to exclude it from the player's own casts.
         const int CombatLayers = Physics.AllLayers;
-        int waypoint, magazine = MagazineSize;
+        int waypoint;
         float thinkAt, pathAt, shotAt, lostAt, searchUntil, reloadUntil;
         System.Random random;
         bool warnedPlayer;
         bool GuardsZone => Rank != BotRank.Regular;
         Vector3 Eye => transform.position + Vector3.up * 1.5f;
 
-        public void Initialize(GameSession owner, int team, int seed) => Initialize(owner, team, seed, BotRank.Regular);
-
-        public void Initialize(GameSession owner, int team, int seed, BotRank rank = BotRank.Regular)
+        internal void Initialize(GameSession owner, int index, BotRank rank, int patrolSeed)
         {
             session = owner;
             Rank = rank;
             tuning = BotTuning.For(rank);
-            random = new System.Random(unchecked((seed + 1) * 486187739 ^ team * 16777619));
+            random = new System.Random(patrolSeed);
+            Equipment = CreateEquipment(owner.Catalog, rank, index);
+            firearm = Equipment.Equipped(EquipmentSlot.Weapon);
+            var rule = owner.Catalog.Find(firearm.ItemId).Weapon;
+            capacity = WeaponRules.Capacity(rule, firearm, owner.Catalog);
+            ammoId = WeaponRules.LoadedType(rule, firearm);
             motor = gameObject.AddComponent<CharacterController>();
             motor.height = 1.8f;
             motor.radius = 0.35f;
             motor.center = Vector3.up * 0.9f;
             health = gameObject.AddComponent<Health>();
-            health.Initialize(tuning.Health, team);
+            health.Initialize(tuning.Health, FactionTeam);
             health.AimHeight = 1.25f;
             health.Hurt += OnHurt;
             health.Died += Die;
             operatorVisual = OperatorVisual.Create(transform,
-                seed % 2 == 0 ? OperatorStyle.Male : OperatorStyle.Female, team, gameObject.layer);
-            var weaponMount = operatorVisual.WeaponMount;
-            weapon = WeaponVisual.Create(weaponMount, false);
-            weapon.SetEquipped(true);
+                index % 2 == 0 ? OperatorStyle.Male : OperatorStyle.Female, FactionTeam, gameObject.layer);
+            operatorVisual.SyncGear(Equipment);
+            health.HitPart = operatorVisual.HitRegion;
+            health.ProtectPart = (part, damage) => Protect(part, damage, 0);
+            health.ProtectAmmoPart = Protect;
+            weapon = WeaponVisual.Create(operatorVisual.WeaponMount, false, rule.Form);
+            weapon.SetConfiguration(firearm, owner.Catalog, rule);
             operatorVisual.PoseArms(weapon.RightGrip, weapon.LeftGrip);
             thinkAt = Time.time + (float)random.NextDouble() * 0.3f;
             CombatNoise.Heard += OnNoise;
             PickPatrol();
+        }
+
+        internal static GridInventory CreateEquipment(ItemCatalog catalog, BotRank rank, int index)
+        {
+            int tier = rank == BotRank.Boss ? 5 : rank == BotRank.Elite ? 3 : 1;
+            var kit = new GridInventory(6, 5, 100, catalog, null, rebuildCatalog: false);
+            Equip(EquipmentSlot.Armor, catalog.Find(tier == 1 ? "armor" : "vest_" + tier) ?? catalog.Find("armor"));
+            Equip(EquipmentSlot.Pack, catalog.Find("pack_" + tier));
+            var rifle = catalog.Find(WeaponDefinition.RifleId);
+            if (rifle == null || rifle.Weapon == null || rifle.Equipment != EquipmentSlot.Weapon)
+                rifle = catalog.Items.Find(item => item.Equipment == EquipmentSlot.Weapon && item.Weapon != null);
+            if (rifle == null) throw new System.InvalidOperationException("A combatant needs a catalog primary weapon.");
+            Equip(EquipmentSlot.Weapon, rifle);
+            Equip(EquipmentSlot.Helmet, catalog.Find("helmet_" + tier));
+            Equip(EquipmentSlot.Rig, catalog.Find("rig_" + tier));
+            return kit;
+
+            void Equip(EquipmentSlot slot, ItemDefinition item)
+            {
+                if (item == null) return;
+                var stack = new ItemStack {
+                    ItemId = item.Id,
+                    InstanceId = System.Guid.NewGuid().ToString("N"),
+                    Wear = item.Durability * (index % 5) / 20
+                };
+                if (slot == EquipmentSlot.Weapon)
+                {
+                    var ammo = catalog.Find(item.Weapon.AmmoId);
+                    if (WeaponRules.CanLoad(item.Weapon, ammo, out _)) stack.LoadedAmmoId = ammo.Id;
+                    stack.LoadedAmmo = WeaponRules.Capacity(item.Weapon, stack, catalog);
+                }
+                if (!kit.TryInsert(stack, out var error) || !kit.TryEquip(stack.InstanceId, slot, out error))
+                    throw new System.InvalidOperationException(error);
+            }
+        }
+
+        float Protect(BodyPart part, float damage, int penetration)
+        {
+            var item = Equipment.Equipped(part == BodyPart.Head ? EquipmentSlot.Helmet : EquipmentSlot.Armor);
+            var def = Equipment.Catalog.Find(item?.ItemId);
+            float remaining = BodyCondition.Protect(part, damage, def, item, penetration);
+            if (remaining < damage) operatorVisual.SyncGear(Equipment);
+            return remaining;
         }
 
         void OnDisable() { CombatNoise.Heard -= OnNoise; }
@@ -97,6 +150,11 @@ namespace Dustline
         void Update()
         {
             if (health == null || !health.Alive || session.Phase != SessionPhase.Raid) return;
+            if (reloadUntil > 0f && Time.time >= reloadUntil)
+            {
+                firearm.LoadedAmmo = capacity;
+                reloadUntil = 0f;
+            }
             if (state == State.Attack && !CanEngage(target)) PickPatrol();
             if (state == State.Search && GuardsZone && (!PortLayout.InHighValueArea(goal) || !PortLayout.InHighValueArea(transform.position))) PickPatrol();
             if (Time.time >= thinkAt)
@@ -204,14 +262,13 @@ namespace Dustline
 
         void Shoot()
         {
-            if (magazine <= 0)
+            if (firearm.LoadedAmmo <= 0)
             {
                 reloadUntil = Time.time + tuning.ReloadSeconds;
-                magazine = MagazineSize;
                 weapon.BeginReload(tuning.ReloadSeconds);
                 return;
             }
-            magazine--;
+            firearm.LoadedAmmo--;
             shotAt = Time.time + tuning.ShotInterval + (float)random.NextDouble() * 0.20f;
             Vector3 eye = Eye;
             Vector3 delta = target.AimPoint - eye;
@@ -240,12 +297,28 @@ namespace Dustline
             CombatNoise.Heard -= OnNoise;
             motor.enabled = false;
             weapon.SetEquipped(false);
-            operatorVisual.Fall();
             string title = Rank == BotRank.Boss ? "首领物资" : Rank == BotRank.Elite ? "精英守卫物资" : "阵亡者物资";
-            var loot = session.World.CreateLoot(transform.position + transform.right * 0.8f, title);
-            session.LootTable.Fill(loot.Inventory, random);
-            loot.Inventory.TryAdd("ammo", random.Next(12, 31), out _);
-            if (killer == session.Player.Health) session.Kills++;
+            var point = transform.position + transform.right * .8f;
+            var loot = session.World.CreateLoot(point, title);
+            var kitDrop = loot.Inventory;
+            foreach (var item in Equipment.Snapshot())
+                if (!Equipment.TryTransferTo(item.InstanceId, kitDrop, out var error)) Debug.LogError(error, this);
+            operatorVisual.SyncGear(Equipment);
+            operatorVisual.Fall();
+
+            // Roll into the original space budget so the worn kit cannot crowd out a rare roll.
+            var supplies = new GridInventory(kitDrop.Width, kitDrop.Height, kitDrop.MaxWeight, kitDrop.Catalog, null, rebuildCatalog: false);
+            session.LootTable.Fill(supplies, random);
+            supplies.TryAdd(ammoId, random.Next(12, 31), out _);
+            GridInventory overflow = null;
+            foreach (var item in supplies.Snapshot())
+            {
+                if (supplies.TryTransferTo(item.InstanceId, kitDrop, out _)) continue;
+                overflow ??= session.World.CreateLoot(point + transform.forward * 1.1f, title + " · 补给").Inventory;
+                if (!supplies.TryTransferAt(item.InstanceId, overflow, item.Area, item.X, item.Y, item.Rotated, out var error))
+                    Debug.LogError(error, this);
+            }
+            if (killer != null && killer == session.Player?.Health) session.Kills++;
             enabled = false;
         }
     }

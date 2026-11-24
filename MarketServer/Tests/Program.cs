@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 if (args.Length != 2)
 {
@@ -17,9 +18,10 @@ try
     await Integration.Trade(host, scratch.FullName);
     await Integration.ProductQuotes(host, scratch.FullName);
     await Integration.Capacity(host, scratch.FullName);
+    await Integration.Migration(host, scratch.FullName);
     await Integration.PersistenceFailure(host, scratch.FullName);
     await Integration.Transport(host, scratch.FullName);
-    Console.WriteLine("PASS: 5/5 integration scenarios.");
+    Console.WriteLine("PASS: 6/6 integration scenarios.");
     return 0;
 }
 catch (Exception error)
@@ -32,6 +34,7 @@ finally { scratch.Delete(recursive: true); }
 internal static class Integration
 {
     private const string Cake = "birthday_cake";
+    private const int RecoveryArea = 3;
     private const long StartingCredits = 1_000_000L;
     private const long CakeResale = 52_013_140L;
     private static readonly string TestPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
@@ -40,7 +43,7 @@ internal static class Integration
     public static async Task Trade(IntegrationHost host, string root)
     {
         string catalog = SaveCatalog(root, "trade", [
-            Def(Cake, 1, 1, 3, 111, 9, true, 3), Def("ammo", 1, 1, 10, 50, 19, true, 8),
+            Def(Cake, 3, 4, 3, 111, 9, true, 3), Def("ammo", 1, 1, 10, 50, 19, true, 8),
             Def("rifle", 4, 2), Def("sight", 1, 1), Def("grip", 1, 1), Def("stock", 1, 1),
             Def("muzzle", 1, 1), Def("magazine", 1, 1), Def("kit", 2, 1)
         ], [
@@ -204,7 +207,7 @@ internal static class Integration
     {
         const string id = "market-only";
         const long oldValue = 45, oldResale = 17, newValue = 71, newResale = 4_000_000_000L;
-        string catalog = SaveCatalog(root, "quotes", [Def(Cake, 1, 1), Def(id, 1, 1, 4, oldValue, oldResale, true, 2),
+        string catalog = SaveCatalog(root, "quotes", [Def(Cake, 3, 4), Def(id, 1, 1, 4, oldValue, oldResale, true, 2),
             Def("gift", 1, 1, 1, 0, 0)]);
         string state = Path.Combine(root, "quotes.state.json");
         var paid = Shop("paid", id, 2, oldValue);
@@ -241,7 +244,7 @@ internal static class Integration
         }
 
         string beforeRestart = File.ReadAllText(state);
-        catalog = SaveCatalog(root, "quotes-new", [Def(Cake, 1, 1), Def(id, 1, 1, 4, newValue, newResale, true, 2),
+        catalog = SaveCatalog(root, "quotes-new", [Def(Cake, 3, 4), Def(id, 1, 1, 4, newValue, newResale, true, 2),
             Def("gift", 1, 1, 1, 0, 0)]);
         await using (var running = await host.Start(catalog, state))
         using (var api = running.Client())
@@ -271,8 +274,8 @@ internal static class Integration
 
     public static async Task Capacity(IntegrationHost host, string root)
     {
-        string catalog = SaveCatalog(root, "capacity", [Def(Cake, 1, 1), Def("ammo", 1, 1, 10, 50, 19, true, 8),
-            Def("spacer", 1, 1, 1, 11, 4_000_000_000L, true, 357), Def("token", 1, 1, 1, 1, 1, false, 1)]);
+        string catalog = SaveCatalog(root, "capacity", [Def(Cake, 3, 4), Def("ammo", 1, 1, 10, 50, 19, true, 8),
+            Def("spacer", 1, 1, 1, 11, 4_000_000_000L, true, 346), Def("token", 1, 1, 1, 1, 1, false, 1)]);
         string state = Path.Combine(root, "capacity.state.json");
         await using var running = await host.Start(catalog, state);
         using var api = running.Client();
@@ -282,11 +285,7 @@ internal static class Integration
         var a = await api.Good("state", token: alice);
         var b = await api.Good("state", token: bob);
         foreach (var account in new[] { a, b })
-        {
-            var cells = Items(account).Select(item => (Number(item, "X"), Number(item, "Y"))).ToHashSet();
-            Check(Items(account).Length == 360 && cells.Count == 360 && cells.All(cell => cell.Item1 is >= 0 and < 12 && cell.Item2 is >= 0 and < 30),
-                "Online stash does not cover exactly 12x30 unique cells.");
-        }
+            Check(MainCells(account) == 360, "Online stash does not cover exactly 12x30 unique cells.");
         a = await api.Good("list", List("overflow-ammo-list", OneItem(a, "ammo"), 5, 25), alice);
         b = await api.Good("state", token: bob);
         string listing = Id(OnlyListing(a));
@@ -321,9 +320,163 @@ internal static class Integration
         Console.WriteLine("PASS capacity: 12x30 layout, seller/buyer rollback on failed buy, shop/cancel rollback, retry after freeing space, long credits and trusted shop pricing.");
     }
 
+    public static async Task Migration(IntegrationHost host, string root)
+    {
+        const string filler = "cell";
+        const long resale = 9;
+        string catalog = SaveCatalog(root, "migration", [Def(Cake, 3, 4), Def(filler, 1, 1, 1, 21, resale)]);
+        string state = Path.Combine(root, "migration.state.json");
+        string listingId, escrowId;
+        object v1List;
+        JsonElement v1History;
+        await using (var running = await host.Start(catalog, state))
+        using (var api = running.Client())
+        {
+            var alice = await Register(api, "alice");
+            await Register(api, "bob");
+            await Register(api, "carol");
+            var escrow = OneItem(alice, Cake);
+            escrowId = Instance(escrow);
+            v1List = List("v1-list", escrow, 1, 137);
+            alice = await api.Good("list", v1List, await Login(api, "alice"));
+            listingId = Id(OnlyListing(alice));
+            v1History = alice.GetProperty("History");
+        }
+
+        var v1 = JsonNode.Parse(File.ReadAllText(state))!.AsObject();
+        v1["Version"] = 1;
+        v1.Remove("RecoveryListingIds");
+        var escrowItem = v1["Listings"]![listingId]!["Item"]!;
+        escrowItem["X"] = 10;
+        escrowItem["Y"] = 28;
+        escrowItem["Rotated"] = true;
+        var accounts = v1["Accounts"]!;
+        accounts["alice"]!["Items"] = FullOldStash("a", ("a-recovery", 10, 28, true), ("a-recycle", 8, 28, false));
+        accounts["bob"]!["Items"] = FullOldStash("b", ("b-recovery", 10, 28, true));
+        accounts["carol"]!["Items"] = new JsonArray(OldItem(Cake, "c-fixed", 1, 0, true),
+            OldItem(Cake, "c-relocate", 10, 28), OldItem(filler, "c-ordinary", 5, 2));
+        accounts["alice"]!["Credits"] = StartingCredits + 17;
+        byte[] legacy = JsonSerializer.SerializeToUtf8Bytes(v1, CatalogJson);
+        File.WriteAllBytes(state, legacy);
+        string oldCatalog = SaveCatalog(root, "legacy-catalog", [Def(Cake, 2, 2), Def(filler, 1, 1)]);
+        await host.MustReject(oldCatalog, state, "3x4 birthday_cake");
+        Check(File.ReadAllBytes(state).SequenceEqual(legacy), "An invalid catalog touched the legacy state.");
+
+        string corruptPath = Path.Combine(root, "migration-overlap.state.json");
+        var corrupt = v1.DeepClone();
+        corrupt["Accounts"]!["carol"]!["Items"]![1]!["X"] = 1;
+        corrupt["Accounts"]!["carol"]!["Items"]![1]!["Y"] = 0;
+        string bad = corrupt.ToJsonString();
+        File.WriteAllText(corruptPath, bad);
+        await host.MustReject(catalog, corruptPath, "Invalid stash layout");
+        Check(File.ReadAllText(corruptPath) == bad, "An invalid v1 layout was rewritten.");
+
+        JsonElement a, b;
+        await using (var running = await host.Start(catalog, state))
+        using (var api = running.Client())
+        {
+            using var upgraded = JsonDocument.Parse(File.ReadAllBytes(state));
+            Check(Number(upgraded.RootElement, "Version") == 2, "Market did not commit the v2 upgrade on startup.");
+            string alice = await Login(api, "alice"), bob = await Login(api, "bob"), carol = await Login(api, "carol");
+            a = await api.Good("state", token: alice);
+            b = await api.Good("state", token: bob);
+            var c = await api.Good("state", token: carol);
+            Quote(a, filler, true, 1, 21, resale);
+            Same(v1History, a.GetProperty("History"), "V1 history migration");
+            Same(a, await api.Good("list", v1List, alice), "V1 mutation receipt replay");
+            var listing = OnlyListing(a);
+            Check(Id(listing) == listingId && Text(listing, "Seller") == "alice" && Price(listing) == 137 &&
+                Layout(Item(listing)) == (0, 10, 28, true) && Instance(Item(listing)) == escrowId && Qty(Item(listing)) == 1,
+                "Legacy escrow identity, direction, coordinates or price changed.");
+            Check(Credits(a) == StartingCredits + 17 && Credits(b) == StartingCredits && Credits(c) == StartingCredits,
+                "Migration changed a balance.");
+            Check(Layout(ById(a, "a-recovery")) == (RecoveryArea, 0, 0, true) && Layout(ById(a, "a-recycle")) == (RecoveryArea, 0, 0, false) &&
+                Layout(ById(b, "b-recovery")) == (RecoveryArea, 0, 0, true), "Full stash did not preserve cakes in recovery.");
+            Check(Layout(ById(c, "c-fixed")) == (0, 1, 0, true) && Layout(ById(c, "c-relocate")) == (0, 6, 0, false) &&
+                Layout(ById(c, "c-ordinary")) == (0, 5, 2, false), "Migration moved ordinary stock or did not place a cake into available space.");
+            Check(MainCells(a) == 352 && MainCells(b) == 356 && MainCells(c) == 25, "Migrated stock did not have valid 3x4 footprints.");
+
+            a = await api.Good("cancel", Cancel("legacy-cancel", listingId), alice);
+            Check(Layout(ById(a, escrowId)) == (RecoveryArea, 0, 0, true), "Old escrow could not be cancelled into recovery.");
+            Latest(a, Cake, 1, 137, "Cancelled");
+            a = await api.Good("list", List("from-recovery", ById(a, "a-recovery"), 1, 70), alice);
+            Check(!Items(a).Any(item => Instance(item) == "a-recovery") && Number(Item(OnlyListing(a)), "Area") == 0,
+                "Listing a recovery cake did not take it out of recovery into escrow.");
+            a = await api.Good("cancel", Cancel("recovery-cancel", Id(OnlyListing(a))), alice);
+            Check(Layout(ById(a, "a-recovery")) == (RecoveryArea, 0, 0, true), "Recovery cancellation changed the item.");
+            a = await api.Good("list", List("relist-recovery", ById(a, "a-recovery"), 1, 70), alice);
+            var buy = Buy("buy-recovery", Id(OnlyListing(a)), 1);
+            b = await api.Good("state", token: bob);
+            string unchanged = File.ReadAllText(state);
+            (await api.Send("buy", buy, bob)).Reject(409, "StashFull");
+            Same(a, await api.Good("state", token: alice), "Full buyer changed recovery escrow or seller balance");
+            Same(b, await api.Good("state", token: bob), "Full buyer gained recovery space or spent credits");
+            Check(File.ReadAllText(state) == unchanged, "A failed recovery purchase wrote to disk.");
+            foreach (var cell in Items(b).Where(item => ItemId(item) == filler && Number(item, "X") < 4 && Number(item, "Y") < 3))
+                b = await api.Good("recycle", Recycle("free-" + Instance(cell), cell, 1, resale), bob);
+            b = await api.Good("buy", buy, bob);
+            Check(Layout(ById(b, "a-recovery")) == (0, 0, 0, true) && Qty(ById(b, "a-recovery")) == 1 &&
+                Credits(b) == StartingCredits + 12 * resale - 70, "Recovery sale could not settle into real free cells.");
+            b = await api.Good("list", List("as-ordinary-cake", ById(b, "a-recovery"), 1, 70), bob);
+            var cancel = Cancel("ordinary-cake-cancel", Id(OnlyListing(b)));
+            b = await api.Good("shop", Shop("take-the-footprint", filler, 1, 21), bob);
+            unchanged = File.ReadAllText(state);
+            (await api.Send("cancel", cancel, bob)).Reject(409, "StashFull");
+            Same(b, await api.Good("state", token: bob), "Ordinary cake cancellation bypassed real capacity");
+            Check(File.ReadAllText(state) == unchanged, "Failed ordinary cake cancellation wrote to disk.");
+            var block = Items(b).Single(item => ItemId(item) == filler && Number(item, "X") == 0 && Number(item, "Y") == 0);
+            b = await api.Good("recycle", Recycle("unblock-ordinary-cake", block, 1, resale), bob);
+            b = await api.Good("cancel", cancel, bob);
+            Check(Layout(ById(b, "a-recovery")) == (0, 0, 0, true), "Ordinary cake cancellation did not use newly free real cells.");
+            a = await api.Good("state", token: alice);
+            Check(Listings(a).Length == 0 && Credits(a) == StartingCredits + 17 + 70, "Recovery sale did not settle seller side.");
+            var recycle = Recycle("recycle-recovery", ById(a, "a-recycle"), 1, CakeResale);
+            a = await api.Good("recycle", recycle, alice);
+            Check(!Items(a).Any(item => Instance(item) == "a-recycle") && Credits(a) == StartingCredits + 87 + CakeResale,
+                "Recovery resale did not remove or credit exactly once.");
+            Same(a, await api.Good("recycle", recycle, alice), "Recovery recycle replay");
+            a = await api.Good("list", List("recovery-escrow-restart", ById(a, escrowId), 1, 137), alice);
+            b = await api.Good("state", token: bob);
+        }
+
+        byte[] v2Bytes = File.ReadAllBytes(state);
+        await using (var running = await host.Start(catalog, state))
+        using (var api = running.Client())
+        {
+            string alice = await Login(api, "alice");
+            Same(a, await api.Good("state", token: alice), "Recovery/v2 restart for Alice");
+            Same(b, await api.Good("state", token: await Login(api, "bob")), "Recovery/v2 restart for Bob");
+            Check(File.ReadAllBytes(state).SequenceEqual(v2Bytes), "A v2 restart rewrote the state.");
+            a = await api.Good("cancel", Cancel("cancel-after-restart", Id(OnlyListing(a))), alice);
+            Check(Layout(ById(a, escrowId)) == (RecoveryArea, 0, 0, true), "Recovery escrow return right was not persisted.");
+        }
+        var fakeRecovery = JsonNode.Parse(v2Bytes)!;
+        fakeRecovery["Accounts"]!["carol"]!["Items"]![2]!["Area"] = RecoveryArea;
+        bad = fakeRecovery.ToJsonString();
+        File.WriteAllText(corruptPath, bad);
+        await host.MustReject(catalog, corruptPath, "Invalid persisted item");
+        Check(File.ReadAllText(corruptPath) == bad, "A recovery marker on ordinary stock was accepted or rewritten.");
+        Console.WriteLine("PASS migration: 2x2 v1 layout, kept and moved 3x4 cakes, full/no-capacity accounts, escrow/receipt/balance preservation, recovery sale/recycle/cancel, invalid-state rollback and restart.");
+
+        static JsonObject OldItem(string id, string instance, int x, int y, bool rotated = false) => new()
+        {
+            ["ItemId"] = id, ["InstanceId"] = instance, ["Quantity"] = 1, ["X"] = x, ["Y"] = y, ["Rotated"] = rotated
+        };
+
+        static JsonArray FullOldStash(string prefix, params (string Id, int X, int Y, bool Rotated)[] cakes)
+        {
+            var items = new JsonArray(cakes.Select(cake => (JsonNode)OldItem(Cake, cake.Id, cake.X, cake.Y, cake.Rotated)).ToArray());
+            for (int y = 0; y < 30; y++)
+            for (int x = 0; x < 12; x++)
+                if (!cakes.Any(cake => x >= cake.X && x < cake.X + 2 && y >= cake.Y && y < cake.Y + 2))
+                    items.Add(OldItem(filler, $"{prefix}-cell-{x}-{y}", x, y));
+            return items;
+        }
+    }
+
     public static async Task PersistenceFailure(IntegrationHost host, string root)
     {
-        string catalog = SaveCatalog(root, "save-failure", [Def(Cake, 1, 1)]);
+        string catalog = SaveCatalog(root, "save-failure", [Def(Cake, 3, 4)]);
         string state = Path.Combine(root, "save-failure.state.json");
         await using var running = await host.Start(catalog, state);
         using var api = running.Client();
@@ -339,7 +492,7 @@ internal static class Integration
 
     public static async Task Transport(IntegrationHost host, string root)
     {
-        string catalog = SaveCatalog(root, "transport", [Def(Cake, 1, 1)]);
+        string catalog = SaveCatalog(root, "transport", [Def(Cake, 3, 4)]);
         string state = Path.Combine(root, "transport.state.json");
         await host.MustReject(catalog, state, "Non-loopback endpoints require HTTPS", "--listen", "0.0.0.0");
         using var key = RSA.Create(2048);
@@ -401,6 +554,25 @@ internal static class Integration
     private static JsonElement Item(JsonElement listing) => listing.GetProperty("Item");
     private static JsonElement OneItem(JsonElement json, string item) => Items(json).Single(x => ItemId(x) == item);
     private static JsonElement OnlyListing(JsonElement json) => Listings(json).Single();
+    private static JsonElement ById(JsonElement state, string id) => Items(state).Single(item => Instance(item) == id);
+    private static (long Area, long X, long Y, bool Rotated) Layout(JsonElement item) =>
+        (Number(item, "Area"), Number(item, "X"), Number(item, "Y"), item.GetProperty("Rotated").GetBoolean());
+
+    private static int MainCells(JsonElement state)
+    {
+        var cells = new HashSet<(long, long)>();
+        foreach (var item in Items(state))
+        {
+            var (area, x, y, rotated) = Layout(item);
+            if (area != 0) continue;
+            var (width, height) = ItemId(item) == Cake ? rotated ? (4, 3) : (3, 4) : (1, 1);
+            for (long row = y; row < y + height; row++)
+            for (long col = x; col < x + width; col++)
+                Check(col is >= 0 and < 12 && row is >= 0 and < 30 && cells.Add((col, row)), "Invalid online stash footprint.");
+        }
+        return cells.Count;
+    }
+
     private static long Count(JsonElement json, string item) => Items(json).Where(x => ItemId(x) == item).Sum(Qty);
     private static long Reference(JsonElement json, string item) => Price(Fields(json, "References").Single(x => ItemId(x) == item));
 
@@ -433,7 +605,12 @@ internal static class Integration
         Shape(json, expected.ToArray());
         Check(Text(json, "Account") == account && Credits(json) >= 0, "Account leaked or wrong credit shape.");
         foreach (var item in Items(json)) ItemShape(item);
-        foreach (var listing in Listings(json)) { Shape(listing, "Id", "Seller", "UnitPrice", "Item"); ItemShape(Item(listing)); }
+        foreach (var listing in Listings(json))
+        {
+            Shape(listing, "Id", "Seller", "UnitPrice", "Item");
+            ItemShape(Item(listing));
+            Check(Number(Item(listing), "Area") == 0, "Escrow exposed a stash recovery marker.");
+        }
         foreach (var record in Fields(json, "History"))
         {
             Shape(record, "Id", "ItemId", "Quantity", "UnitPrice", "Status", "Utc");
@@ -446,7 +623,9 @@ internal static class Integration
     private static void ItemShape(JsonElement item)
     {
         Shape(item, "InstanceId", "ItemId", "Quantity", "X", "Y", "Rotated", "Area", "Slot", "LoadedAmmo", "Mods", "Parts", "LoadedAmmoId", "UsesSpent", "Wear");
-        Check(Number(item, "Area") == 0 && Number(item, "Slot") == 0 && Qty(item) > 0, "Item is outside online stash.");
+        Check((Number(item, "Area") == 0 || Number(item, "Area") == RecoveryArea && ItemId(item) == Cake &&
+            Number(item, "X") == 0 && Number(item, "Y") == 0) && Number(item, "Slot") == 0 && Qty(item) > 0,
+            "Item is outside online stash or recovery.");
         _ = item.GetProperty("Rotated").GetBoolean();
         Shape(item.GetProperty("Mods"), "Sight", "Grip", "Stock", "OwnedSight", "OwnedGrip", "OwnedStock");
         var parts = item.GetProperty("Parts");

@@ -47,34 +47,39 @@ namespace Dustline.Tests
         }
 
         [UnityTest]
-        public IEnumerator WeaponTreeStartsUnselectedAndFiltersAllEightBranchesBeforePaging()
+        public IEnumerator CategoriesExpandInPlaceAndShowEveryMatchingItemInQualityOrder()
         {
             OpenSession();
-            var catalog = ScriptableObject.CreateInstance<ItemCatalog>();
-            fixtures.Add(catalog);
-            catalog.Items.AddRange(session.Catalog.Items);
-            var rifle = session.Catalog.Find(WeaponDefinition.RifleId);
-            for (int i = 0; i < 10; i++) AddRifle("shop-test-rifle-" + i, i % 3 + 1, 120 - i * 3, false);
-            AddRifle("shop-test-ungraded", 0, 10, false);
-            AddRifle("shop-test-not-for-sale", 1, 1, true);
-            catalog.RebuildIndex();
-            typeof(GameSession).GetProperty(nameof(GameSession.Catalog)).GetSetMethod(true).Invoke(session, new object[] { catalog });
-
+            AddExtraRifles();
             var shop = OpenShop();
             yield return null;
-            var gear = new[] { (ItemKind.Rig, "弹挂"), (ItemKind.Pack, "背包"), (ItemKind.Armor, "护甲"), (ItemKind.Helmet, "头盔") };
-            foreach (var entry in gear)
+            AssertStock(shop, Ordered(ItemKind.Rig));
+            Click(shop, "Category / 背包");
+            AssertStock(shop, Ordered(ItemKind.Pack));
+            foreach (var (kind, label) in new[] { (ItemKind.Armor, "护甲"), (ItemKind.Helmet, "头盔") })
             {
-                Click(Node(shop, "Shop categories"), "Category / " + entry.Item2);
-                Assert.That(TextOf(shop, "Shop selection"), Is.EqualTo(entry.Item2));
-                var stock = Ordered(entry.Item1, _ => true);
-                Assert.That(stock, Is.Not.Empty);
-                AssertPage(shop, stock, 0);
+                Click(shop, "Category / " + label);
+                Assert.That(Cards(shop), Is.Empty);
+                for (int tier = 1; tier <= 6; tier++)
+                {
+                    Click(shop, kind + " tier / " + tier);
+                    Assert.That(TextOf(shop, "Shop selection"), Is.EqualTo(label + " / " + tier + " 级"));
+                    AssertStock(shop, Ordered(kind, item => item.Tier == tier));
+                }
+            }
+            Click(shop, "Category / 弹药");
+            Assert.That(TextOf(shop, "Shop empty state"), Is.EqualTo("请选择口径"));
+            foreach (var (family, label) in new[] { (AmmoFamily.Amber, "5.56 毫米"), (AmmoFamily.Copper, "9 毫米"),
+                (AmmoFamily.Silver, "7.62 毫米"), (AmmoFamily.Slate, "12 号") })
+            {
+                Click(shop, "Ammo category / " + family);
+                Assert.That(TextOf(shop, "Shop selection"), Is.EqualTo("弹药 / " + label));
+                AssertStock(shop, Ordered(ItemKind.Ammo, item => item.AmmoFamily == family));
             }
 
             Assert.That(WeaponRows(shop), Is.Empty);
             Click(shop, WeaponRow);
-            Assert.That(Cards(shop), Is.Empty, "Expanding the branch is not a weapon filter selection.");
+            Assert.That(Cards(shop), Is.Empty, "Expanding the branch does not select a weapon subtype.");
             Assert.That(TextOf(shop, "Shop empty state"), Is.EqualTo("请选择武器类型"));
             var types = new (WeaponForm? form, string label)[]
             {
@@ -89,23 +94,211 @@ namespace Dustline.Tests
                 Click(shop, WeaponNode(entry.form));
                 var stock = Ordered(ItemKind.Weapon, item => item.Weapon != null && (entry.form.HasValue
                     ? !item.Weapon.Melee && item.Weapon.Form == entry.form.Value : item.Weapon.Melee));
-                Assert.That(stock, Is.Not.Empty, entry.label);
                 Assert.That(TextOf(shop, "Shop selection"), Is.EqualTo("武器 / " + entry.label));
-                AssertPage(shop, stock, 0);
-                if (entry.form == WeaponForm.Rifle)
-                {
-                    Click(shop, "下一页");
-                    AssertPage(shop, stock, 1);
-                    Click(shop, WeaponRow);
-                    Assert.That(WeaponRows(shop), Is.Empty);
-                    AssertPage(shop, stock, 1);
-                    Click(shop, WeaponRow);
-                    AssertPage(shop, stock, 1);
-                }
+                AssertStock(shop, stock);
+                if (entry.form != WeaponForm.Rifle) continue;
+                Assert.That(stock.Length, Is.GreaterThan(8));
+                Click(shop, WeaponRow);
+                Assert.That(WeaponRows(shop), Is.Empty);
+                AssertStock(shop, stock);
+                Click(shop, WeaponRow);
+                AssertStock(shop, stock);
             }
             Assert.That(Cards(shop), Does.Contain(StockPrefix + WeaponDefinition.BatonId));
+            Assert.That(shop.GetComponentsInChildren<Button>().Any(button => button.name == "上一页" || button.name == "下一页"), Is.False);
+        }
 
-            void AddRifle(string id, int tier, int value, bool notForSale)
+        [UnityTest]
+        public IEnumerator LeftAndRightScrollStayIndependentAcrossGesturesReflowAndBack()
+        {
+            OpenSession();
+            AddExtraRifles();
+            session.UI.ShowStash();
+            var shop = OpenShop();
+            yield return null;
+            var retiredCard = Node(shop, Cards(shop)[0]).GetComponent<Button>();
+            retiredCard.onClick.Invoke();
+            var retiredBuy = Details(shop).GetComponentsInChildren<Button>().Single(button => button.name.StartsWith("购买 ", StringComparison.Ordinal));
+            int credits = session.Profile.Credits;
+            Click(shop, WeaponRow);
+            retiredBuy.onClick.Invoke();
+            retiredCard.onClick.Invoke();
+            Assert.That(Details(shop), Is.Null);
+            Assert.That(session.Profile.Credits, Is.EqualTo(credits));
+
+            var rail = Vertical(shop, "Shop categories");
+            Canvas.ForceUpdateCanvases();
+            var drag = Press(rail.viewport, 62);
+            rail.OnBeginDrag(drag);
+            drag.position += Vector2.up * 100;
+            rail.OnDrag(drag);
+            Assert.That(rail.content.anchoredPosition.y, Is.GreaterThan(0f));
+            Click(shop, WeaponNode(WeaponForm.Rifle));
+            Assert.That(Cards(shop), Is.Empty, "Category selection is blocked while a finger owns the scroll.");
+            rail.OnEndDrag(drag);
+            rail.verticalNormalizedPosition = .65f;
+            float leftOffset = rail.content.anchoredPosition.y;
+            yield return null;
+            Click(shop, WeaponNode(WeaponForm.Rifle));
+            Canvas.ForceUpdateCanvases();
+            var stock = Vertical(shop, "Shop stock viewport");
+            var tile = Node(stock.content, Cards(shop)[0]);
+            var swipe = Press(tile, 63);
+            ExecuteEvents.Execute(tile.gameObject, swipe, ExecuteEvents.beginDragHandler);
+            swipe.position += Vector2.up * 100;
+            ExecuteEvents.Execute(tile.gameObject, swipe, ExecuteEvents.dragHandler);
+            ExecuteEvents.Execute(tile.gameObject, swipe, ExecuteEvents.pointerUpHandler);
+            ExecuteEvents.Execute(tile.gameObject, swipe, ExecuteEvents.pointerClickHandler);
+            Assert.That(Details(shop), Is.Null, "A swipe starting on a product may not open it on release.");
+            Assert.That(stock.content.anchoredPosition.y, Is.GreaterThan(0f));
+            Assert.That(Vertical(shop, "Shop categories").content.anchoredPosition.y, Is.EqualTo(leftOffset).Within(.05f));
+            stock.verticalNormalizedPosition = .33f;
+            float rightOffset = stock.content.anchoredPosition.y;
+            yield return null;
+
+            Click(shop, "Category / 配件");
+            Click(shop, WeaponNode(WeaponForm.Rifle));
+            AssertOffsets();
+            Click(shop, Cards(shop)[4]);
+            Assert.That(Details(shop), Is.Not.Null);
+            ((Action)typeof(GameUI).GetField("reflowWidePage", Instance).GetValue(session.UI)).Invoke();
+            Assert.That(Details(shop), Is.Null);
+            AssertOffsets();
+            session.UI.ShowStash();
+            session.UI.BackOrSettings();
+            shop = Panel("Supply store");
+            AssertOffsets();
+            yield return null;
+            string card = Cards(shop)[4];
+            Click(shop, card);
+            session.UI.BackOrSettings();
+            Click(shop, card);
+            Assert.That(Details(shop), Is.Null, "The release that dismisses details may not open another product.");
+            AssertOffsets();
+            yield return null;
+            Click(shop, "‹ 返回");
+            Assert.That(Panel("Stash"), Is.Not.Null);
+
+            void AssertOffsets()
+            {
+                Assert.That(TextOf(shop, "Shop selection"), Is.EqualTo("武器 / 突击步枪"));
+                Assert.That(Vertical(shop, "Shop categories").content.anchoredPosition.y, Is.EqualTo(leftOffset).Within(.05f));
+                Assert.That(Vertical(shop, "Shop stock viewport").content.anchoredPosition.y, Is.EqualTo(rightOffset).Within(.05f));
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator AmmoStartsAtOneAndPurchasesOneNineteenAndTwentyOneExactlyOnce()
+        {
+            OpenSession();
+            var item = session.Catalog.Find("ammo_slate");
+            var shop = OpenShop(ItemKind.Ammo);
+            yield return null;
+            Click(shop, "Ammo category / Slate");
+            int additions = 0, purchases = 0, total = 0;
+            session.Stash.Changed += () => additions++;
+            int credits = session.Profile.Credits;
+            foreach (int units in new[] { 1, 19, 21 })
+            {
+                byte[] before = File.ReadAllBytes(store.Path);
+                Click(shop, StockPrefix + item.Id);
+                var popup = Details(shop);
+                var slider = Node(popup, "Ammo quantity").GetComponent<Slider>();
+                Assert.That(slider.wholeNumbers, Is.True);
+                Assert.That(slider.value, Is.EqualTo(1f));
+                Assert.That(slider.minValue, Is.EqualTo(1f));
+                Assert.That(Node(popup, "Ammo minus").GetComponent<Button>().interactable, Is.False);
+                if (units == 19)
+                {
+                    var confirm = Node(popup, "Ammo confirm");
+                    var oldPress = Press(confirm, 64);
+                    slider.value = 18.9f;
+                    ExecuteEvents.Execute(confirm.gameObject, oldPress, ExecuteEvents.pointerUpHandler);
+                    ExecuteEvents.Execute(confirm.gameObject, oldPress, ExecuteEvents.pointerClickHandler);
+                    Assert.That(Details(shop), Is.SameAs(popup), "A confirmation pressed before the quantity changed must not execute.");
+                }
+                if (units == 21)
+                {
+                    slider.value = 21;
+                    Click(popup, "Ammo minus");
+                    Click(popup, "Ammo plus");
+                }
+                Assert.That(slider.value, Is.EqualTo(units));
+                Assert.That(TextOf(popup, "Ammo amount"), Does.StartWith("数量 " + units + " 发"));
+                Assert.That(TextOf(popup, "Ammo unit price"), Does.Contain(item.Value.ToString("N0")));
+                Assert.That(TextOf(popup, "Ammo balance"), Is.EqualTo("余额 " + (credits - total * item.Value).ToString("N0")));
+                Assert.That(TextOf(popup, "Ammo total"), Is.EqualTo("总价 " + (units * item.Value).ToString("N0") + " 信用点"));
+                AssertWithin((RectTransform)popup, shop);
+                Assert.That(additions, Is.EqualTo(purchases));
+                CollectionAssert.AreEqual(before, File.ReadAllBytes(store.Path));
+                var purchase = Node(popup, "Ammo confirm").GetComponent<Button>().onClick;
+                purchase.Invoke();
+                purchase.Invoke();
+                total += units;
+                Assert.That(additions, Is.EqualTo(++purchases));
+                Assert.That(session.Stash.Count(item.Id), Is.EqualTo(total));
+                Assert.That(session.Profile.Credits, Is.EqualTo(credits - total * item.Value));
+                Assert.That(store.Load().Stash.Where(saved => saved.ItemId == item.Id).Sum(saved => saved.Quantity), Is.EqualTo(total));
+                Assert.That(store.Load().Credits, Is.EqualTo(session.Profile.Credits));
+            }
+            Assert.That(additions, Is.EqualTo(3));
+            Assert.That(session.Stash.Items.Count(stack => stack.ItemId == item.Id), Is.EqualTo(2));
+        }
+
+        [UnityTest]
+        public IEnumerator AmmoMaximumUsesActualStackRoomAndRejectsAStaleConfirmationWithoutSaving()
+        {
+            OpenSession();
+            var item = session.Catalog.Find("ammo_slate");
+            var stash = session.Stash;
+            var stock = new List<ItemStack>
+            {
+                new ItemStack { InstanceId = "existing-shells", ItemId = item.Id, Quantity = item.MaxStack - 21 }
+            };
+            for (int i = 1; i < stash.Width * stash.Height; i++)
+                stock.Add(new ItemStack { InstanceId = "occupied-" + i, ItemId = "bandage", X = i % stash.Width, Y = i / stash.Width });
+            stash.Restore(stock);
+            session.Profile.Credits = item.Value * 19;
+            session.PersistSafeState();
+            var shop = OpenShop(ItemKind.Ammo);
+            yield return null;
+            Click(shop, "Ammo category / Slate");
+            Click(shop, StockPrefix + item.Id);
+            var popup = Details(shop);
+            var slider = Node(popup, "Ammo quantity").GetComponent<Slider>();
+            Assert.That(slider.maxValue, Is.EqualTo(19));
+            Click(popup, "Ammo max");
+            Assert.That(slider.value, Is.EqualTo(19));
+
+            session.Profile.Credits = item.Value * 50;
+            Click(popup, "Ammo max");
+            Assert.That(slider.value, Is.EqualTo(21), "The only room is in the existing stack, not a new stack or a protected slot.");
+            Assert.That(stash.TryAdd(item.Id, 1, out var error), Is.True, error);
+            session.PersistSafeState();
+            byte[] baseline = File.ReadAllBytes(store.Path);
+            int previous = stash.Count(item.Id), credits = session.Profile.Credits, commits = 0;
+            stash.Changed += () => commits++;
+            Click(popup, "Ammo confirm");
+            Assert.That(slider.maxValue, Is.EqualTo(20));
+            Assert.That(stash.Count(item.Id), Is.EqualTo(previous));
+            Assert.That(session.Profile.Credits, Is.EqualTo(credits));
+            Assert.That(commits, Is.Zero);
+            CollectionAssert.AreEqual(baseline, File.ReadAllBytes(store.Path));
+        }
+
+        void AddExtraRifles()
+        {
+            var catalog = ScriptableObject.CreateInstance<ItemCatalog>();
+            fixtures.Add(catalog);
+            catalog.Items.AddRange(session.Catalog.Items);
+            var rifle = session.Catalog.Find(WeaponDefinition.RifleId);
+            for (int i = 0; i < 10; i++) Add("shop-test-rifle-" + i, i % 3 + 1, 120 - i * 3, false);
+            Add("shop-test-ungraded", 0, 10, false);
+            Add("shop-test-not-for-sale", 1, 1, true);
+            catalog.RebuildIndex();
+            typeof(GameSession).GetProperty(nameof(GameSession.Catalog)).GetSetMethod(true).Invoke(session, new object[] { catalog });
+
+            void Add(string id, int tier, int value, bool notForSale)
             {
                 var item = Object.Instantiate(rifle);
                 fixtures.Add(item);
@@ -114,105 +307,6 @@ namespace Dustline.Tests
                 item.Value = value;
                 item.NotForSale = notForSale;
                 catalog.Items.Add(item);
-            }
-        }
-
-        [UnityTest]
-        public IEnumerator ShopKeepsFilterPageAndScrollWhileClosingDetailsBeforeBackAndReflow()
-        {
-            OpenSession();
-            session.UI.ShowStash();
-            var shop = OpenShop();
-            yield return null;
-            var retiredCard = Node(shop, Cards(shop)[0]).GetComponent<Button>();
-            retiredCard.onClick.Invoke();
-            var retiredBuy = BuyButton(shop);
-            int credits = session.Profile.Credits;
-            Click(shop, WeaponRow);
-            retiredBuy.onClick.Invoke();
-            retiredCard.onClick.Invoke();
-            Assert.That(Details(shop), Is.Null);
-            Assert.That(session.Profile.Credits, Is.EqualTo(credits));
-
-            var viewport = Node(shop, "Shop categories");
-            var scroll = viewport.GetComponent<ScrollRect>();
-            Assert.That(viewport.GetComponent<RectMask2D>(), Is.Not.Null);
-            Assert.That(scroll.vertical && !scroll.horizontal, Is.True);
-            Canvas.ForceUpdateCanvases();
-            var point = RectTransformUtility.WorldToScreenPoint(null, viewport.TransformPoint(viewport.rect.center));
-            var drag = new PointerEventData(EventSystem.current)
-            {
-                button = PointerEventData.InputButton.Left, pointerId = 62, pressPosition = point, position = point
-            };
-            scroll.OnInitializePotentialDrag(drag);
-            scroll.OnBeginDrag(drag);
-            drag.position += Vector2.up * 100;
-            scroll.OnDrag(drag);
-            Assert.That(scroll.content.anchoredPosition.y, Is.GreaterThan(0f));
-            Click(shop, WeaponNode(WeaponForm.Rifle));
-            Assert.That(Cards(shop), Is.Empty, "A category tap during the scroll must not change the filter.");
-            scroll.OnEndDrag(drag);
-            scroll.verticalNormalizedPosition = .4f;
-            float offset = scroll.content.anchoredPosition.y;
-
-            Click(shop, "Category / 弹药");
-            var ammo = Ordered(ItemKind.Ammo, _ => true);
-            AssertPage(shop, ammo, 0);
-            Click(shop, "下一页");
-            AssertAmmoPage();
-            ItemDefinition item = ammo[8];
-            string card = StockPrefix + item.Id;
-            Click(shop, card);
-            var details = Details(shop);
-            Assert.That(details, Is.Not.Null);
-            var detailsRect = (RectTransform)details;
-            var corners = new Vector3[4];
-            detailsRect.GetWorldCorners(corners);
-            foreach (var corner in corners)
-                Assert.That(shop.rect.Contains((Vector2)shop.InverseTransformPoint(corner)), Is.True);
-            var buy = BuyButton(shop);
-            var specs = details.GetComponentsInChildren<Text>().First(text => text.text.Contains("占格 ")).rectTransform;
-            Assert.That(((RectTransform)buy.transform).anchoredPosition.y, Is.EqualTo(-164f));
-            Assert.That(-specs.anchoredPosition.y + specs.rect.height, Is.LessThanOrEqualTo(164f));
-            ((Action)typeof(GameUI).GetField("reflowWidePage", Instance).GetValue(session.UI)).Invoke();
-            buy.onClick.Invoke();
-            Assert.That(session.Profile.Credits, Is.EqualTo(credits));
-            Assert.That(Details(shop), Is.Null);
-            AssertAmmoPage();
-
-            session.UI.ShowStash();
-            session.UI.BackOrSettings();
-            shop = Panel("Supply store");
-            AssertAmmoPage();
-            yield return null;
-            Click(shop, card);
-            buy = BuyButton(shop);
-            var purchase = buy.onClick;
-            int amount = Mathf.Min(20, item.MaxStack);
-            purchase.Invoke();
-            int remaining = credits - item.Value * amount;
-            Assert.That(session.Profile.Credits, Is.EqualTo(remaining));
-            Assert.That(session.Stash.Count(item.Id), Is.EqualTo(amount));
-            Assert.That(store.Load().Credits, Is.EqualTo(remaining));
-            Assert.That(shop.GetComponentsInChildren<Text>().Any(text => text.text == remaining + " 信用点"), Is.True);
-            session.UI.BackOrSettings();
-            purchase.Invoke();
-            Click(shop, card);
-            Assert.That(session.Profile.Credits, Is.EqualTo(remaining));
-            Assert.That(Details(shop), Is.Null);
-            AssertAmmoPage();
-            yield return null;
-            purchase.Invoke();
-            Assert.That(session.Profile.Credits, Is.EqualTo(remaining));
-            Click(shop, "‹ 返回");
-            Assert.That(Panel("Stash"), Is.Not.Null);
-
-            void AssertAmmoPage()
-            {
-                Assert.That(TextOf(shop, "Shop selection"), Is.EqualTo("弹药"));
-                AssertPage(shop, ammo, 1);
-                Assert.That(Node(shop, "Shop categories").GetComponent<ScrollRect>().content.anchoredPosition.y,
-                    Is.EqualTo(offset).Within(.05f));
             }
         }
 
@@ -229,20 +323,21 @@ namespace Dustline.Tests
             Assert.That(session.Phase, Is.EqualTo(SessionPhase.Menu), session.Error);
         }
 
-        RectTransform OpenShop()
+        RectTransform OpenShop(ItemKind kind = ItemKind.Rig)
         {
-            typeof(GameUI).GetMethod("ShowShop", Instance).Invoke(session.UI, new object[] { ItemKind.Rig });
+            typeof(GameUI).GetMethod("ShowShop", Instance).Invoke(session.UI, new object[] { kind });
             return Panel("Supply store");
         }
 
-        ItemDefinition[] Ordered(ItemKind kind, Func<ItemDefinition, bool> filter) => session.Catalog.Items
-            .Where(item => item.Kind == kind && !item.NotForSale && filter(item))
+        ItemDefinition[] Ordered(ItemKind kind, Func<ItemDefinition, bool> filter = null) => session.Catalog.Items
+            .Where(item => item.Kind == kind && !item.NotForSale && (filter == null || filter(item)))
             .OrderBy(item => item.Tier > 0 ? item.Tier : int.MaxValue).ThenBy(item => item.Value).ThenBy(item => item.Id, StringComparer.Ordinal).ToArray();
 
-        static void AssertPage(RectTransform shop, ItemDefinition[] stock, int page)
+        static void AssertStock(RectTransform shop, ItemDefinition[] stock)
         {
-            CollectionAssert.AreEqual(stock.Skip(page * 8).Take(8).Select(item => StockPrefix + item.Id), Cards(shop));
-            Assert.That(TextOf(shop, "Shop page count"), Is.EqualTo((page + 1) + " / " + Math.Max(1, (stock.Length + 7) / 8)));
+            Assert.That(stock, Is.Not.Empty);
+            CollectionAssert.AreEqual(stock.Select(item => StockPrefix + item.Id), Cards(shop));
+            Assert.That(TextOf(shop, "Shop stock count"), Is.EqualTo(stock.Length + " 件商品"));
         }
 
         RectTransform Panel(string name) => Node(session.UI.transform.Find("Dustline UI/Safe area/Pages"), name);
@@ -253,13 +348,39 @@ namespace Dustline.Tests
             return node;
         }
 
+        static ScrollRect Vertical(Transform owner, string name)
+        {
+            var viewport = Node(owner, name);
+            var scroll = viewport.GetComponent<ScrollRect>();
+            Assert.That(viewport.GetComponent<RectMask2D>(), Is.Not.Null);
+            Assert.That(scroll, Is.Not.Null);
+            Assert.That(scroll.vertical && !scroll.horizontal, Is.True);
+            return scroll;
+        }
+
+        static PointerEventData Press(RectTransform tile, int pointer)
+        {
+            var point = RectTransformUtility.WorldToScreenPoint(null, tile.TransformPoint(tile.rect.center));
+            var data = new PointerEventData(EventSystem.current) { button = PointerEventData.InputButton.Left, pointerId = pointer,
+                pressPosition = point, position = point, eligibleForClick = true };
+            ExecuteEvents.Execute(tile.gameObject, data, ExecuteEvents.pointerDownHandler);
+            ExecuteEvents.Execute(tile.gameObject, data, ExecuteEvents.initializePotentialDrag);
+            return data;
+        }
+
+        static void AssertWithin(RectTransform popup, RectTransform shop)
+        {
+            var corners = new Vector3[4];
+            popup.GetWorldCorners(corners);
+            foreach (var corner in corners) Assert.That(shop.rect.Contains((Vector2)shop.InverseTransformPoint(corner)), Is.True);
+        }
+
         static Transform Details(Transform shop) => shop.Cast<Transform>().FirstOrDefault(node => node.name == "Item details" && node.gameObject.activeInHierarchy);
-        static Button BuyButton(Transform shop) => Details(shop).GetComponentsInChildren<Button>().Single(button => button.name.StartsWith("购买 ", StringComparison.Ordinal));
         static string WeaponNode(WeaponForm? form) => WeaponPrefix + (form?.ToString() ?? "Melee");
         static Button[] WeaponRows(Transform shop) => Node(shop, "Shop categories").GetComponentsInChildren<Button>()
             .Where(button => button.name.StartsWith(WeaponPrefix, StringComparison.Ordinal)).ToArray();
-        static string[] Cards(Transform shop) => shop.Cast<Transform>().Where(node => node.gameObject.activeInHierarchy && node.name.StartsWith(StockPrefix, StringComparison.Ordinal))
-            .Select(node => node.name).ToArray();
+        static string[] Cards(Transform shop) => Node(shop, "Shop stock content").GetComponentsInChildren<Button>()
+            .Where(button => button.name.StartsWith(StockPrefix, StringComparison.Ordinal)).Select(button => button.name).ToArray();
         static string TextOf(Transform owner, string name) => Node(owner, name).GetComponent<Text>().text;
         static void Click(Transform owner, string name)
         {

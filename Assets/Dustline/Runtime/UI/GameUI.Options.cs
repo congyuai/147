@@ -37,22 +37,19 @@ namespace Dustline
             Label(body, input.HasGyroscope ? "仅在局内操作时读取传感器。" : "未检测到陀螺仪，仍可正常拖屏。", 16, 24, 267, 539, 26, color: Muted);
             Label(body, "混合：短按切换；长按松手后回到按下前的状态。", 16, 610, 267, 539, 26, color: Muted);
             Fill(At("Touch divider", body, 24, 302, 1122, 1), Border);
-            var threshold = Label(body, "前推 " + input.SprintThreshold + "%", 20, 658, 313, 177, 29, TextAnchor.UpperRight, Amber);
-            SettingsSlider(body, "摇杆冲刺阈值", 24, 309, 811, PlayerInputReader.MinSprintThreshold, PlayerInputReader.MaxSprintThreshold, input.SprintThreshold, value =>
-            {
-                session.SelectSprintThreshold(Mathf.RoundToInt(value));
-                threshold.text = "前推 " + input.SprintThreshold + "%";
-            });
-            Label(body, "前推到阈值即锁定奔跑，向后拉或体力耗尽解除。", 16, 24, 389, 800, 27, color: Muted);
+            Label(body, "探头方式", 21, 24, 307, 170, 37);
+            var lean = new[] { "点击探头", "混合探头" };
+            MakeOptions(lean, 24, (int)input.LeanBehavior, value => session.SelectLeanMode((LeanMode)value), true, 346);
+            Label(body, "混合：短点锁定，长按松手回正。\n拖入摇杆上方的图标锁跑，向后拉解除。", 16, 398, 338, 435, 70, color: Muted);
             Button(body, "自定义键位", 866, 339, 279, 56, () => ShowTouchLayout(field), true);
 
-            void MakeOptions(string[] labels, float x, int selected, Action<int> select, bool enabled)
+            void MakeOptions(string[] labels, float x, int selected, Action<int> select, bool enabled, float y = 221)
             {
                 var buttons = new Button[labels.Length];
                 for (int i = 0; i < labels.Length; i++)
                 {
                     int index = i;
-                    buttons[i] = Button(body, labels[i], x + 183 * i, 221, 170, 41, () =>
+                    buttons[i] = Button(body, labels[i], x + 183 * i, y, 170, 41, () =>
                     {
                         select(index);
                         for (int j = 0; j < buttons.Length; j++) StyleButton(buttons[j], j == index, null);

@@ -94,12 +94,14 @@ namespace Dustline.Tests
 
             var lobby = Panel("Operations desk");
             Assert.That(FindButton(lobby, "石脊采石场 / 常规"), Is.Not.Null);
+            Assert.That(lobby.GetComponentsInChildren<Text>().Any(label => label.text == "30:00 · 可空装"), Is.True);
             AssertNotDeployed(original);
             Click(lobby, "出发");
             Assert.That(session.Phase, Is.EqualTo(SessionPhase.Loading), session.Error);
             Assert.That(Panel("Loading district").GetComponentsInChildren<Text>().Any(label => label.text == "石脊采石场"), Is.True);
             for (int i = 0; i < 60 && session.Phase == SessionPhase.Loading; i++) yield return null;
             Assert.That(session.Phase, Is.EqualTo(SessionPhase.Raid), session.Error);
+            Assert.That(session.RaidRemaining, Is.InRange(1798f, 1800f));
             Assert.That(store.Load().RaidInProgress, Is.True);
         }
 
@@ -179,6 +181,7 @@ namespace Dustline.Tests
             Assert.That(session.Phase, Is.EqualTo(SessionPhase.Loading), session.Error);
             for (int i = 0; i < 60 && session.Phase == SessionPhase.Loading; i++) yield return null;
             Assert.That(session.Phase, Is.EqualTo(SessionPhase.Raid), session.Error);
+            Assert.That(session.RaidRemaining, Is.InRange(1798f, 1800f));
             Assert.That(store.Load().RaidInProgress, Is.True);
         }
 

@@ -6,8 +6,8 @@ PlayerSettings:
   serializedVersion: 26
   companyName: Dustline
   productName: Dustline Extraction
-  bundleVersion: 0.6.0
-  AndroidBundleVersionCode: 11
+  bundleVersion: 0.6.1
+  AndroidBundleVersionCode: 12
   defaultScreenWidth: 1280
   defaultScreenHeight: 720
   defaultIsNativeResolution: 1

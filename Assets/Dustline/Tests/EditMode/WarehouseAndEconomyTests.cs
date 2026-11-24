@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -80,7 +81,7 @@ namespace Dustline.Tests
                 store.Save(old);
                 var bytes = File.ReadAllBytes(store.Path);
                 var next = store.Load();
-                next.Version = ProfileData.CurrentVersion;
+                next.Version = 4;
                 next.RaidInProgress = true;
                 next.Loadout.Add(new ItemStack { ItemId = "medkit", InstanceId = "secured-medical", Area = CargoArea.Secure, X = 1, UsesSpent = 1 });
                 store.Save(next);
@@ -98,10 +99,92 @@ namespace Dustline.Tests
         }
 
         [Test]
+        public void SchemaFiveKeepsFittingCakeCoordinatesAndRelocatesOnlyTheDisplacedCake()
+        {
+            var stash = GridInventory.Warehouse(catalog);
+            var old = new List<ItemStack>
+            {
+                new ItemStack { InstanceId = "kept", ItemId = LootTable.BirthdayCake, X = 1, Rotated = true },
+                new ItemStack { InstanceId = "edge", ItemId = LootTable.BirthdayCake, X = 10, Y = 28 },
+                new ItemStack { InstanceId = "untouched", ItemId = "ammo", X = 5, Y = 2, Quantity = 3, Rotated = true }
+            };
+            var migrated = MigrateCake(stash, old);
+            Assert.That(stash.Items, Is.Empty, "Migration stages the snapshot before Restore.");
+            Assert.That(old[1].Y, Is.EqualTo(28));
+            stash.Restore(migrated);
+            Assert.That(Position(stash.Find("kept")), Is.EqualTo((CargoArea.Main, 1, 0, true)));
+            Assert.That(Position(stash.Find("edge")), Is.EqualTo((CargoArea.Main, 6, 0, false)));
+            Assert.That(Position(stash.Find("untouched")), Is.EqualTo((CargoArea.Main, 5, 2, true)));
+            Assert.That(stash.Find("untouched").Quantity, Is.EqualTo(3));
+            Assert.That(stash.OccupiedCells(CargoArea.Main), Is.EqualTo(25));
+        }
+
+        [Test]
+        public void FullWarehouseMigratesCakeToOneWayRecoveryWithoutDisplacingNormalItems()
+        {
+            var stash = GridInventory.Warehouse(catalog);
+            var cake = new ItemStack { InstanceId = "overflow", ItemId = LootTable.BirthdayCake, X = 10, Y = 28, Rotated = true };
+            var old = Cells(CargoArea.Main, GridInventory.StashColumns, GridInventory.StashRows);
+            old.RemoveAll(item => item.X >= 10 && item.Y >= 28);
+            old.Insert(0, cake);
+            stash.Restore(MigrateCake(stash, old));
+            Assert.That(stash.Items.Count, Is.EqualTo(old.Count));
+            Assert.That(stash.Find(cake.InstanceId).Area, Is.EqualTo(CargoArea.Legacy));
+            Assert.That(stash.Find(cake.InstanceId).Rotated, Is.True);
+            Assert.That(stash.Find(cake.InstanceId).Quantity, Is.EqualTo(1));
+            Assert.That(stash.OccupiedCells(CargoArea.Legacy), Is.EqualTo(12));
+            foreach (var item in old.Skip(1)) Assert.That(Position(stash.Find(item.InstanceId)), Is.EqualTo(Position(item)));
+            var recovery = stash.Find(cake.InstanceId);
+            Assert.That(stash.TryMove(cake.InstanceId, CargoArea.Legacy, recovery.X, recovery.Y, false, out _), Is.False);
+            Assert.That(stash.TryMove(cake.InstanceId, CargoArea.Main, 0, 0, true, out _), Is.False);
+            var room = GridInventory.Warehouse(catalog);
+            Assert.That(stash.TryTransferTo(cake.InstanceId, room, out var error), Is.True, error);
+            Assert.That(stash.Find(cake.InstanceId), Is.Null);
+            Assert.That(room.Find(cake.InstanceId).Area, Is.EqualTo(CargoArea.Main));
+            Assert.That(room.TryTransferAt(cake.InstanceId, stash, CargoArea.Legacy, recovery.X, recovery.Y, true, out _), Is.False);
+        }
+
+        [Test]
+        public void InterruptedRaidMovesOversizedSecureCakePastAFullLegacyAreaAndKeepsAllOtherPositions()
+        {
+            var carried = GridInventory.Carried(catalog);
+            var old = Cells(CargoArea.Legacy, 12, 12);
+            old.Add(new ItemStack { InstanceId = "protected-cake", ItemId = LootTable.BirthdayCake, Area = CargoArea.Secure, Rotated = true });
+            carried.Restore(MigrateCake(carried, old, true));
+            Assert.That(carried.Items.Count, Is.EqualTo(145));
+            Assert.That(carried.Layout(CargoArea.Legacy).Rows, Is.EqualTo(15));
+            Assert.That(Position(carried.Find("protected-cake")), Is.EqualTo((CargoArea.Legacy, 0, 12, true)));
+            foreach (var item in old.Take(144)) Assert.That(Position(carried.Find(item.InstanceId)), Is.EqualTo(Position(item)));
+            Assert.That(carried.OccupiedCells(CargoArea.Secure), Is.Zero);
+            Assert.That(carried.Weight, Is.Zero);
+            Assert.That(carried.Consume(LootTable.BirthdayCake, 1), Is.False);
+            Assert.That(carried.TryAdd(LootTable.BirthdayCake, 1, out _), Is.False);
+            var field = GridInventory.Carried(catalog);
+            field.Restore(carried.Snapshot().FindAll(item => item.Area != CargoArea.Legacy));
+            Assert.That(field.Items, Is.Empty);
+        }
+
+        static List<ItemStack> Cells(CargoArea area, int width, int height)
+        {
+            var items = new List<ItemStack>();
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    items.Add(new ItemStack { InstanceId = $"{area}-{x}-{y}", ItemId = "ammo", X = x, Y = y, Area = area });
+            return items;
+        }
+
+        static List<ItemStack> MigrateCake(GridInventory bag, List<ItemStack> old, bool retainedOnly = false)
+            => (List<ItemStack>)typeof(GridInventory).GetMethod("MigrateCake", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(bag, new object[] { old, retainedOnly });
+
+        static (CargoArea, int, int, bool) Position(ItemStack item) => (item.Area, item.X, item.Y, item.Rotated);
+
+        [Test]
         public void BirthdayCakeHasAnIndependentRareRollAndFixedResaleOutsideOrdinaryEconomy()
         {
             var cake = catalog.Find(LootTable.BirthdayCake);
             Assert.That(cake.DisplayName, Is.EqualTo("生日蛋糕"));
+            Assert.That((cake.Width, cake.Height), Is.EqualTo((3, 4)));
             Assert.That(cake.Special && cake.NotForSale, Is.True);
             Assert.That(cake.Value, Is.Zero);
             Assert.That(cake.ResaleValue, Is.EqualTo(52_013_140));
@@ -129,15 +212,35 @@ namespace Dustline.Tests
         }
 
         [TestCase(0, 0, 0L, 1, true)]
-        [TestCase(1, 1, 75000L, 2, true)]
-        [TestCase(1, 1, 74999L, 2, false)]
-        [TestCase(1, 1, 75000L, 1, false)]
+        [TestCase(1, 0, 0L, 1, true)]
+        [TestCase(0, 1, 200_000L, 2, true)]
+        [TestCase(0, 1, 199_999L, 2, false)]
+        [TestCase(0, 1, 200_000L, 1, false)]
+        [TestCase(1, 1, 200_000L, 2, true)]
+        [TestCase(1, 1, 199_999L, 2, false)]
+        [TestCase(1, 1, 200_000L, 1, false)]
         [TestCase(2, 0, 999999L, 99, false)]
         public void DeploymentChecksBothRequirementsAndRejectsTheClosedSite(int site, int tier, long value, int level, bool allowed)
         {
             var rules = typeof(GameSession).Assembly.GetType("Dustline.Deployment", true);
             var error = rules.GetMethod("EntryError", BindingFlags.Static | BindingFlags.NonPublic);
             Assert.That(error.Invoke(null, new object[] { site, tier, value, level }) == null, Is.EqualTo(allowed));
+        }
+
+        [TestCase(0, 0)]
+        [TestCase(0, 1)]
+        [TestCase(1, 0)]
+        [TestCase(1, 1)]
+        public void EveryOpenMapAndDifficultyUsesHalfAnHour(int site, int tier)
+        {
+            const BindingFlags Fields = BindingFlags.Instance | BindingFlags.NonPublic;
+            var rules = typeof(GameSession).Assembly.GetType("Dustline.Deployment", true);
+            var lookup = rules.GetMethod("TryDifficulty", BindingFlags.Static | BindingFlags.NonPublic);
+            var args = new object[] { site, tier, null };
+            Assert.That(lookup.Invoke(null, args), Is.EqualTo(true));
+            var difficulty = args[2];
+            Assert.That(difficulty.GetType().GetField("Seconds", Fields).GetValue(difficulty), Is.EqualTo(1800));
+            Assert.That(difficulty.GetType().GetField("Name", Fields).GetValue(difficulty), Is.EqualTo(tier == 0 ? "常规" : "中风险"));
         }
 
         sealed class CakeRoll : System.Random

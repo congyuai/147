@@ -75,7 +75,7 @@ namespace Dustline
             {
                 int x = -287 + i * 48;
                 Barrier(c, x, -72);
-                Pole(c.Structures, x, -66, 9, 1);
+                Pole(c.Structures, x, -66, 9, 1, PortTerrain.Ground(x, -66) - c.Root.transform.localPosition.y);
             }
             Arrow(c.Deck, -301, -188, 0, 1, 6, PortTone.Yellow);
             Arrow(c.Deck, -83, -139, 0, -1, 6, PortTone.Yellow);
@@ -227,7 +227,11 @@ namespace Dustline
             Node(243, 116); Node(245.2f, 121); Node(246, 126); Node(260, 116); Node(262, 125);
             c.Bake();
             var vessel = new PortMesh();
-            Vessel(vessel);
+            var hull = Vessel(vessel);
+            keep(hull);
+            var shell = PortMesh.Child(root, "Pilot vessel hull");
+            shell.isStatic = true;
+            shell.AddComponent<MeshCollider>().sharedMesh = hull;
             vessel.Bake(root, "North Cape pilot vessel", materials.Structure, keep, true);
         }
 
@@ -564,20 +568,43 @@ namespace Dustline
             m.Box(V(tip - 13, 12.84f, z), V(4.4f, .44f, 1.34f), PortTone.Ochre);
         }
 
-        static void Vessel(PortMesh m)
+        static Mesh Vessel(PortMesh m)
         {
             Vector3[] deck = { V(404, 2.9f, 113), V(415, 2.9f, 105), V(417, 2.9f, 21), V(411, 2.9f, 14),
                 V(392, 2.9f, 14), V(388, 2.9f, 22), V(389, 2.9f, 98), V(396, 2.9f, 108) };
             var center = V(403, 2.9f, 58);
-            for (int i = 0; i < deck.Length; i++)
+            int count = deck.Length;
+            var vertices = new Vector3[count * 3 + 2];
+            var triangles = new List<int>(count * 18);
+            vertices[count * 3] = center;
+            vertices[count * 3 + 1] = V(center.x, -2.45f, center.z);
+            for (int i = 0; i < count; i++)
             {
-                Vector3 a = deck[i], b = deck[(i + 1) % deck.Length];
-                Vector3 aa = Vector3.Lerp(a, center, .12f), bb = Vector3.Lerp(b, center, .12f);
-                aa.y = bb.y = -.25f;
-                m.Quad(aa, bb, b, a, PortTone.DeepBlue);
-                m.Quad(aa - V(0, 2.2f, 0), bb - V(0, 2.2f, 0), bb, aa, PortTone.Rust);
-                m.Tri(center, a, b, PortTone.Slate);
-                m.Beam(a + V(0, .34f, 0), b + V(0, .34f, 0), .26f, .26f, PortTone.Zinc);
+                vertices[i] = deck[i];
+                vertices[i + count] = Vector3.Lerp(deck[i], center, .12f);
+                vertices[i + count].y = -.25f;
+                vertices[i + 2 * count] = vertices[i + count] - V(0, 2.2f, 0);
+            }
+            for (int i = 0; i < count; i++)
+            {
+                int j = (i + 1) % count;
+                Band(i + count, j + count, j, i, PortTone.DeepBlue);
+                Band(i + 2 * count, j + 2 * count, j + count, i + count, PortTone.Rust);
+                Face(count * 3, i, j, PortTone.Slate);
+                Face(count * 3 + 1, j + 2 * count, i + 2 * count, PortTone.Rust);
+                m.Beam(deck[i] + V(0, .34f, 0), deck[j] + V(0, .34f, 0), .26f, .26f, PortTone.Zinc);
+            }
+
+            void Band(int a, int b, int c, int d, PortTone tone)
+            {
+                m.Quad(vertices[a], vertices[b], vertices[c], vertices[d], tone);
+                triangles.Add(a); triangles.Add(b); triangles.Add(c);
+                triangles.Add(a); triangles.Add(c); triangles.Add(d);
+            }
+            void Face(int a, int b, int c, PortTone tone)
+            {
+                m.Tri(vertices[a], vertices[b], vertices[c], tone);
+                triangles.Add(a); triangles.Add(b); triangles.Add(c);
             }
             m.Box(V(403, 4.6f, 31), V(19.8f, 3.4f, 16), PortTone.Plaster);
             m.Box(V(403, 8.1f, 32), V(17.3f, 3.3f, 11), PortTone.Plaster);
@@ -591,6 +618,9 @@ namespace Dustline
                 m.Box(V(399, 4.23f, 53 + i * 16), V(7.1f, 2.66f, 10.5f), PortTone.Teal);
                 m.Box(V(408, 4.23f, 53 + i * 16), V(7.35f, 2.66f, 10.5f), PortTone.Terra);
             }
+            var hull = new Mesh { name = "Pilot vessel hull", vertices = vertices };
+            hull.SetTriangles(triangles, 0);
+            return hull;
         }
     }
 }

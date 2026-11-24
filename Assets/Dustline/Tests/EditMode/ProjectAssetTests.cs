@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -120,13 +121,45 @@ namespace Dustline.Tests
         [Test]
         public void BuildVersionAdvancesWithoutChangingSaveIdentity()
         {
-            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.6.0"));
-            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(11));
+            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.6.1"));
+            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(12));
             Assert.That(PlayerSettings.Android.forceInternetPermission, Is.True);
+            Assert.That(PlayerSettings.Android.renderOutsideSafeArea, Is.True);
             Assert.That(LayerMask.NameToLayer("DustlineStrategicMap"), Is.EqualTo(27));
             Assert.That(PlayerSettings.companyName, Is.EqualTo("Dustline"));
             Assert.That(PlayerSettings.productName, Is.EqualTo("Dustline Extraction"));
             Assert.That(PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android), Is.EqualTo("com.dustline.extraction"));
+        }
+
+        [TestCase("Adaptive", 432, "AdaptiveBackground", "AdaptiveForeground")]
+        [TestCase("Round", 192, "Round", null)]
+        [TestCase("Legacy", 192, "Legacy", null)]
+        public void AndroidLauncherSlotsUseTheImportedArtwork(string name, int size, string first, string second)
+        {
+            var front = Load(first);
+            var overlay = second == null ? null : Load(second);
+            var platform = NamedBuildTarget.Android;
+            var kinds = PlayerSettings.GetSupportedIconKinds(platform);
+            if (kinds.Length == 0) Assert.Ignore("Android Build Support required to read launcher slots.");
+            var kind = System.Array.Find(kinds, x => x.ToString().StartsWith(name, System.StringComparison.OrdinalIgnoreCase));
+            Assert.That(kind, Is.Not.Null, name);
+            var slots = PlayerSettings.GetPlatformIcons(platform, kind);
+            Assert.That(slots, Is.Not.Empty, name);
+            foreach (var slot in slots)
+            {
+                Assert.That(slot.GetTexture(0), Is.SameAs(front));
+                Assert.That(slot.layerCount, Is.EqualTo(second == null ? 1 : 2));
+                if (second != null) Assert.That(slot.GetTexture(1), Is.SameAs(overlay));
+            }
+
+            Texture2D Load(string asset)
+            {
+                const string folder = "Assets/Dustline/Branding/";
+                var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + asset + ".png");
+                Assert.That(texture, Is.Not.Null, asset);
+                Assert.That((texture.width, texture.height, texture.mipmapCount), Is.EqualTo((size, size, 1)), asset);
+                return texture;
+            }
         }
 
         [TestCase("com.unity.render-pipelines.core")]
@@ -140,7 +173,7 @@ namespace Dustline.Tests
         }
 
         [TestCase("rifle", "AR-20突击步枪")]
-        [TestCase("ammo", "5.56毫米弹药")]
+        [TestCase("ammo", "5.56 毫米标准弹")]
         [TestCase("medkit", "战地医疗包")]
         [TestCase("bandage", "急救绷带")]
         [TestCase("trauma_case", "创伤急救盒")]

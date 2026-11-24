@@ -17,12 +17,12 @@ namespace Dustline.Editor
         const string PipelinePath = "Assets/Dustline/Settings/MobilePipeline.asset";
         const string RendererPath = "Assets/Dustline/Settings/MobileRenderer.asset";
         const string RenderingRoot = Root + "/Rendering";
-        const string Version = "0.6.0";
-        const int AndroidVersionCode = 11;
+        const string Version = "0.6.1";
+        const int AndroidVersionCode = 12;
         const int RaidRendererLayers = FirstPersonView.Mask | (1 << 27) | (1 << 29) | (1 << 30) | (1 << 2) | 1;
         static readonly string[] LitVariantAssets = { "LitBase", "LitMetal", "LitEmission", "LitMetalEmission" };
         static readonly Dictionary<string, string> ItemNames = new Dictionary<string, string> {
-            { "rifle", "AR-20突击步枪" }, { "ammo", "5.56毫米弹药" },
+            { "rifle", "AR-20突击步枪" },
             { "medkit", "战地医疗包" }, { "bandage", "急救绷带" }, { "trauma_case", "创伤急救盒" },
             { "armor", "战术防弹衣" },
             { "circuit", "电路板" }, { "relic", "勘测模块" },
@@ -40,6 +40,7 @@ namespace Dustline.Editor
             var renderer = AssetDatabase.LoadAssetAtPath<UniversalRendererData>(RendererPath);
             var pipeline = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(PipelinePath);
             if (catalog == null
+                || !StoreItemsPrepared(catalog)
                 || renderer == null || renderer.renderingMode != RenderingMode.Forward
                 || (renderer.opaqueLayerMask.value & RaidRendererLayers) != RaidRendererLayers
                 || (renderer.transparentLayerMask.value & RaidRendererLayers) != RaidRendererLayers
@@ -64,6 +65,8 @@ namespace Dustline.Editor
                 || PlayerSettings.bundleVersion != Version
                 || PlayerSettings.Android.bundleVersionCode != AndroidVersionCode
                 || !PlayerSettings.Android.forceInternetPermission
+                || !PlayerSettings.Android.renderOutsideSafeArea
+                || !PlayerSettings.Android.startInFullscreen
                 || PlayerSettings.defaultInterfaceOrientation != UIOrientation.LandscapeLeft
                 || PlayerSettings.colorSpace != ColorSpace.Linear)
             {
@@ -76,6 +79,7 @@ namespace Dustline.Editor
                     Prepare();
                     return;
                 }
+            ConfigureLauncherIcons(required: false);
         }
 
         [MenuItem("Dustline/Prepare Project")]
@@ -154,7 +158,7 @@ namespace Dustline.Editor
                 catalog = ScriptableObject.CreateInstance<ItemCatalog>();
                 catalog.Items = new List<ItemDefinition> {
                     Item("rifle", ItemNames["rifle"], ItemKind.Weapon, 3, 2, 1, 3.2f, 240, new Color(0.28f,0.43f,0.52f)),
-                    Item("ammo", ItemNames["ammo"], ItemKind.Ammo, 1, 1, 60, 0.012f, 2, new Color(0.68f,0.55f,0.24f)),
+                    Item("ammo", AmmoProductName(AmmoFamily.Amber, 2), ItemKind.Ammo, 1, 1, 60, 0.012f, 2, new Color(0.68f,0.55f,0.24f)),
                     Item("medkit", ItemNames["medkit"], ItemKind.Medicine, 1, 2, 3, 0.4f, 40, new Color(0.58f,0.25f,0.24f)),
                     Item("armor", ItemNames["armor"], ItemKind.Armor, 2, 3, 1, 4.5f, 160, new Color(0.32f,0.45f,0.29f)),
                     Item("circuit", ItemNames["circuit"], ItemKind.Valuable, 2, 1, 2, 0.3f, 120, new Color(0.2f,0.55f,0.48f)),
@@ -207,6 +211,11 @@ namespace Dustline.Editor
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
             PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel26;
             PlayerSettings.Android.forceInternetPermission = true;
+            PlayerSettings.Android.renderOutsideSafeArea = true;
+            PlayerSettings.Android.startInFullscreen = true;
+            PlayerSettings.Android.fullscreenMode = FullScreenMode.FullScreenWindow;
+            PlayerSettings.Android.maxAspectRatio = 3f;
+            ConfigureLauncherIcons(required: false);
             PlayerSettings.colorSpace = ColorSpace.Linear;
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(Scene, true) };
             AssetDatabase.SaveAssets();
@@ -446,12 +455,21 @@ namespace Dustline.Editor
             EditorUserBuildSettings.buildAppBundle = false;
             Build(BuildTarget.Android, "Builds/Android/dustline-extraction-v" + Version + ".apk");
         }
-        static void Build(BuildTarget target, string output)
+        [MenuItem("Dustline/Build Android Demo")]
+        public static void BuildAndroidDemo()
+        {
+            EditorUserBuildSettings.buildAppBundle = false;
+            Build(BuildTarget.Android, "Builds/Android/dustline-extraction-v" + Version + "-demo.apk", demo: true);
+        }
+
+        static void Build(BuildTarget target, string output, bool demo = false)
         {
             Prepare();
+            if (target == BuildTarget.Android) ConfigureLauncherIcons(required: true);
             Directory.CreateDirectory(Path.GetDirectoryName(output));
             var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions {
-                scenes = new[] { Scene }, locationPathName = output, target = target, options = BuildOptions.None
+                scenes = new[] { Scene }, locationPathName = output, target = target, options = BuildOptions.None,
+                extraScriptingDefines = demo ? new[] { "DUSTLINE_DEMO_GM" } : System.Array.Empty<string>()
             });
             if (report.summary.result != BuildResult.Succeeded) throw new BuildFailedException(report.summary.result.ToString());
         }

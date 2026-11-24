@@ -6,8 +6,10 @@ namespace Dustline
     public sealed partial class GameUI
     {
         RectTransform reticleAnchor;
-        TouchControl lookControl;
-        Image reticle, staminaBar, progressBar, fireGlyph, interactGlyph, sprintRing;
+        TouchControl lookControl, moveControl, quietControl;
+        Image reticle, staminaBar, progressBar, fireGlyph, interactGlyph, sprintLockGlyph;
+        readonly Image[] spreadArms = new Image[4];
+        Text swimUpLabel, swimDownLabel;
         GameObject aimButton, reloadButton, switchButton, interactButton;
         readonly DamageCue[] damageCues = new DamageCue[4];
         int damageCursor;
@@ -55,6 +57,7 @@ namespace Dustline
             var sheet = Button(vitals, "", 2, 0, 137, 137, () => { if (!BlocksGameplay) ShowHealth(); }, false, Color.clear);
             sheet.name = "Open body condition";
             sheet.transition = Selectable.Transition.None;
+            sheet.targetGraphic.canvasRenderer.cullTransparentMesh = false;
             bodyHud = CreateBodyFigure(vitals, "Body diagram", 38, 4, 63, 131);
             bodyHud.Initialize(part => { if (!BlocksGameplay) ShowHealth(part); }, .75f);
             var summary = At("Injury summary", vitals, 90, 102, DisplayedInjuries.Length * 38, 30);
@@ -69,15 +72,6 @@ namespace Dustline
                 injuryCounts[i] = count;
                 badge.gameObject.SetActive(false);
             }
-            var stamina = At("Stamina display", vitals, 0, 136, 139, 36);
-            staminaHud = stamina.gameObject.AddComponent<CanvasGroup>();
-            staminaHud.alpha = 0;
-            staminaHud.blocksRaycasts = false;
-            Fill(stamina, new Color32(12, 21, 26, 164));
-            staminaReadout = Label(stamina, "", 14, 8, 2, 123, 21, TextAnchor.MiddleLeft, Pale);
-            staminaReadout.name = "Stamina value";
-            staminaBar = Bar(stamina, 8, 27, 123, 4, Aqua);
-
             var upperRight = Anchor("Right HUD anchor", hud, 1, 1);
             miniMap = CreateMap(upperRight, -197, 18, 179, true, false);
             var status = HudCard(upperRight, "Raid status", -471, 18, 262, 120);
@@ -85,6 +79,16 @@ namespace Dustline
             reticleAnchor = Anchor("Screen centre", hud, 0.5f, 0.5f);
             reticle = Fill(At("Reticle", reticleAnchor, -22, -22, 44, 44), Pale);
             reticle.sprite = icons[RaidIcon.Reticle];
+            for (int i = 0; i < spreadArms.Length; i++)
+            {
+                bool horizontal = i < 2;
+                var arm = Anchor("Hip spread arm " + i, reticleAnchor, .5f, .5f);
+                arm.sizeDelta = horizontal ? new Vector2(12, 2) : new Vector2(2, 12);
+                spreadArms[i] = Fill(arm, Pale);
+                var edge = arm.gameObject.AddComponent<Outline>();
+                edge.effectDistance = new Vector2(1, -1);
+                edge.effectColor = new Color32(9, 18, 22, 190);
+            }
             for (int i = 0; i < damageCues.Length; i++)
             {
                 var cue = Anchor("Incoming damage", reticleAnchor, 0.5f, 0.5f);
@@ -112,6 +116,14 @@ namespace Dustline
             weaponMode = Label(weaponStrip, "", 13, 0, -22, WeaponBarWidth, 20, TextAnchor.MiddleCenter, Pale);
             weaponMode.name = "Weapon mode";
             weaponMode.gameObject.AddComponent<Outline>().effectColor = Ink;
+            var stamina = At("Stamina display", weaponStrip, (WeaponBarWidth - 176) * .5f, -57, 176, 32);
+            staminaHud = stamina.gameObject.AddComponent<CanvasGroup>();
+            staminaHud.alpha = 0;
+            staminaHud.blocksRaycasts = false;
+            Fill(stamina, new Color32(12, 21, 26, 164));
+            staminaReadout = Label(stamina, "", 14, 7, 1, 162, 20, TextAnchor.MiddleCenter, Pale);
+            staminaReadout.name = "Stamina value";
+            staminaBar = Bar(stamina, 8, 24, 160, 4, Aqua);
             for (int i = 0; i < FieldWeapons.Length; i++)
             {
                 var entry = FieldWeapons[i];
@@ -152,6 +164,7 @@ namespace Dustline
                 if (available) selectable++;
                 if (active) activeName = definition?.DisplayName ?? session.BoundBladeName;
                 view.Button.interactable = available;
+                view.Button.targetGraphic.raycastTarget = available;
                 view.Button.targetGraphic.color = active ? new Color32(82, 64, 37, 247)
                     : available ? new Color32(24, 37, 42, 235) : new Color32(15, 24, 28, 196);
                 SetActive(view.Highlight.gameObject, active);
@@ -233,17 +246,16 @@ namespace Dustline
                 SetActive(interactButton, session.Phase == SessionPhase.Raid);
                 var interactionIcon = icons[player.LookingAtDoor ? RaidIcon.InteractDoor : RaidIcon.Search];
                 if (interactGlyph.sprite != interactionIcon) interactGlyph.sprite = interactionIcon;
-                SetActive(sprintRing.gameObject, session.Input.TouchSprintLocked);
+                var input = session.Input;
+                bool locked = input.TouchSprintLocked;
+                SetActive(moveControl.SprintTarget.gameObject, !player.IsSwimming && (locked || input.StickMoving));
+                sprintLockGlyph.color = locked ? Amber : input.SprintAllowed ? Pale : Muted;
+                quietControl.ShowLatched(input.QuietWalk);
+                SetActive(swimUpLabel.gameObject, player.IsSwimming);
+                SetActive(swimDownLabel.gameObject, player.IsSwimming);
             }
-            bool marker = Time.unscaledTime < hitUntil;
-            reticle.enabled = !player.WeaponView.MedicineBusy && !MedicineWheelOpen && (marker || !session.Input.Aim && player.AimProgress < 0.08f);
+            UpdateFieldReticle(player);
             UpdateDamageCues(player.transform);
-            var sprite = icons[marker ? RaidIcon.Hit : RaidIcon.Reticle];
-            if (reticle.sprite != sprite)
-            {
-                reticle.sprite = sprite;
-                reticle.color = marker ? Amber : Pale;
-            }
             if (session.Input.TouchMode) medicineDialProgress.fillAmount = player.TreatmentProgress;
             if (player.Stamina < 99.99f || player.SprintExhausted) staminaHud.alpha = 1f;
             else staminaHud.alpha = force ? 0f : Mathf.MoveTowards(staminaHud.alpha, 0f, 6f * Time.unscaledDeltaTime);
@@ -306,6 +318,36 @@ namespace Dustline
             }
             else prompt.text = player.InteractionHint;
             SetFieldPrompt(prompt.text, inZone != null || player.IsTreating || player.SearchingLoot != null, progress);
+        }
+
+        void UpdateFieldReticle(PlayerController player)
+        {
+            Rect pixels = player.View.pixelRect;
+            float scale = Mathf.Max(.01f, uiCanvas.scaleFactor);
+            reticleAnchor.anchoredPosition = (pixels.center - lastSafe.center) / scale;
+            bool marker = Time.unscaledTime < hitUntil;
+            bool visible = !player.WeaponView.MedicineBusy && !MedicineWheelOpen;
+            bool hip = visible && !session.Input.Aim && player.AimProgress < .08f;
+            bool firearm = player.Weapon.Magazine != null;
+            reticle.enabled = visible && (marker || hip && !firearm);
+            var sprite = icons[marker ? RaidIcon.Hit : RaidIcon.Reticle];
+            if (reticle.sprite != sprite)
+            {
+                reticle.sprite = sprite;
+                reticle.color = marker ? Amber : Pale;
+            }
+            var radius = FieldHandling.ScreenRadius(player.Weapon.CurrentShotSpread, pixels, player.View.projectionMatrix) / scale;
+            for (int i = 0; i < spreadArms.Length; i++)
+            {
+                var arm = spreadArms[i];
+                arm.enabled = hip && firearm;
+                if (!arm.enabled) continue;
+                var rect = arm.rectTransform;
+                float sign = (i & 1) == 0 ? 1f : -1f;
+                // The inner edge marks the projection of the ray cone, not the stroke centre.
+                rect.anchoredPosition = i < 2 ? new Vector2(sign * (radius.x + rect.rect.width * .5f), 0)
+                    : new Vector2(0, sign * (radius.y + rect.rect.height * .5f));
+            }
         }
 
         void UpdateBodyHud(BodyCondition body)
@@ -398,7 +440,7 @@ namespace Dustline
             var look = Stretch("Look pad", touch);
             look.anchorMin = new Vector2(0.34f, 0f);
             look.anchorMax = new Vector2(1f, 0.90f);
-            Fill(look, Color.clear, true);
+            Fill(look, Color.clear, true).canvasRenderer.cullTransparentMesh = false;
             lookControl = AttachControl(look, "Look");
             AddTouchSlot("Move", "移动摇杆", RaidIcon.Knob, 0.094f, 0.170f, 155f);
             AddTouchSlot("Fire", "开火或挥击", RaidIcon.Fire, 0.925f, 0.265f, 107f, true);
@@ -406,6 +448,7 @@ namespace Dustline
             AddTouchSlot("Reload", "换弹", RaidIcon.Reload, 0.922f, 0.104f, 74f);
             AddTouchSlot("Crouch", "蹲下", RaidIcon.Crouch, 0.720f, 0.111f, 72f);
             AddTouchSlot("Prone", "趴下", RaidIcon.Prone, 0.645f, 0.111f, 72f);
+            AddTouchSlot("Quiet", "静步", RaidIcon.Quiet, .228f, .193f, 72f);
             AddTouchSlot("Jump", "跳跃", RaidIcon.Jump, 0.925f, 0.431f, 76f);
             AddTouchSlot("Interact", "搜索或开关门", RaidIcon.Search, 0.811f, 0.184f, 78f);
             AddTouchSlot("Heal", "快捷用药 / 长按选药", RaidIcon.Heal, 0.722f, 0.259f, 72f);

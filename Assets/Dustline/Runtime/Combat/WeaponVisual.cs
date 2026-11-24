@@ -314,9 +314,10 @@ namespace Dustline
         {
             if (!isActiveAndEnabled) return;
             float impulse = Mathf.Clamp(strength * 0.74f, 0, 1.4f);
-            kick = Mathf.Min(1.5f, kick + impulse * 0.26f);
+            kick = Mathf.Min(1.5f, kick + impulse * (firstPerson ? .78f : .26f));
             kickImpulse = Mathf.Min(2.1f, kickImpulse + impulse);
-            if (!firstPerson) ApplyPose();
+            if (firstPerson) shotPose = 0f;
+            ApplyPose();
         }
 
         internal bool AlignShot(Vector3 direction, Vector3 end)
@@ -502,9 +503,9 @@ namespace Dustline
                 float strain = player?.Health?.Body != null ? player.Health.Body.Handling - 1f : 0f;
                 float carry = run * (1 - aim);
                 position = Vector3.Lerp(hip, ads, aim) + new Vector3(0.013f * horizontal - 0.074f * reload + 0.047f * carry,
-                    0.011f * vertical + 0.002f * idle + 0.072f * reload - 0.064f * carry - 0.018f * prone * (1 - aim),
-                    -0.045f * kick + 0.087f * reload - 0.032f * carry);
-                rotation = Quaternion.Euler(0.92f * vertical - Mathf.Lerp(3.2f, 1.15f, aim) * kick + 13 * reload + 16 * carry,
+                    0.011f * vertical + 0.002f * idle + 0.072f * reload - 0.064f * carry - 0.018f * prone * (1 - aim) + .014f * kick,
+                    -0.078f * kick + 0.087f * reload - 0.032f * carry);
+                rotation = Quaternion.Euler(0.92f * vertical - Mathf.Lerp(6.8f, 3.6f, aim) * kick + 13 * reload + 16 * carry,
                     -7 * (1 - aim) + 1.45f * horizontal + 5 * reload - 17 * carry + Mathf.Sin(breath * 2) * strain * 5f,
                     -8 * (1 - aim) - 1.8f * horizontal + 23 * reload + 9 * roll - 16 * carry);
             }

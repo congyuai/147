@@ -13,12 +13,17 @@ namespace Dustline
                 FillLegacyAmmunition(data.Stash);
                 FillLegacyAmmunition(data.Loadout);
             }
+            var stash = Stash.MigrateCake(data.Stash);
+            List<ItemStack> loadout;
             if (data.Version < 3)
             {
-                var carried = GridInventory.Carried(Catalog);
+                var carried = Loadout.Draft();
                 carried.MigrateCarried(data.Loadout);
-                data.Loadout = carried.Snapshot();
+                loadout = carried.Snapshot();
             }
+            else loadout = Loadout.MigrateCake(data.Loadout, data.RaidInProgress);
+            data.Stash = stash;
+            data.Loadout = loadout;
             data.Version = ProfileData.CurrentVersion;
         }
 
@@ -141,7 +146,20 @@ namespace Dustline
         {
             if (Phase != SessionPhase.Menu) { error = "只能在整备时整理仓库。"; return false; }
             var stash = Stash.Draft();
-            return stash.TrySortStash(out error) && SaveMenuInventory(stash, Loadout, Profile.Credits);
+            if (stash.OccupiedCells(CargoArea.Legacy) == 0)
+                return stash.TrySortStash(out error) && SaveMenuInventory(stash, Loadout, Profile.Credits);
+
+            var snapshot = stash.Snapshot();
+            try
+            {
+                stash.Restore(snapshot.FindAll(item => item.Area != CargoArea.Legacy));
+                if (!stash.TrySortStash(out error)) return false;
+                var sorted = stash.Snapshot();
+                sorted.AddRange(snapshot.FindAll(item => item.Area == CargoArea.Legacy));
+                stash.Restore(sorted);
+            }
+            catch (InvalidDataException ex) { error = ex.Message; return false; }
+            return SaveMenuInventory(stash, Loadout, Profile.Credits);
         }
 
         internal bool TryPrepareSlot(EquipmentSlot slot, string id, bool buy, int quote, out string error)

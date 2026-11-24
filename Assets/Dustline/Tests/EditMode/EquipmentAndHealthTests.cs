@@ -41,6 +41,123 @@ namespace Dustline.Tests
             Assert.That(WeaponRules.CanLoad(rifle, build, alternate, out _), Is.True);
         }
 
+        [TestCase(AmmoFamily.Amber, "ammo", "5.56 毫米")]
+        [TestCase(AmmoFamily.Copper, "ammo_copper", "9 毫米")]
+        [TestCase(AmmoFamily.Silver, "ammo_silver", "7.62 毫米")]
+        [TestCase(AmmoFamily.Slate, "ammo_slate", "12 号")]
+        public void UpdatedCaliberNamesKeepTheirIdsAndFamilies(AmmoFamily family, string id, string label)
+        {
+            Assert.That(ItemDefinition.CaliberName(family), Is.EqualTo(label));
+            Assert.That(catalog.Find(id).AmmoFamily, Is.EqualTo(family));
+            var stock = catalog.Stock(ItemKind.Ammo).Where(item => item.AmmoFamily == family).ToArray();
+            Assert.That(stock.Select(item => item.Tier), Is.EqualTo(Enumerable.Range(1, WeaponRules.AmmoTierCount)));
+            Assert.That(stock.All(item => item.DisplayName.StartsWith(label, System.StringComparison.Ordinal)), Is.True);
+        }
+
+        [TestCase(6, 80_000)]
+        [TestCase(8, 100_000)]
+        [TestCase(12, 180_000)]
+        [TestCase(15, 240_000)]
+        public void HighMagnificationSystemPriceIsExplicit(int magnification, int price)
+        {
+            var item = catalog.Find("part_scope_" + magnification);
+            Assert.That(item.Part.Magnification, Is.EqualTo(magnification));
+            Assert.That(item.Value, Is.EqualTo(price));
+        }
+
+        [Test]
+        public void AmmoCapacityProbeDoesNotUseProtectedCellsOrNotifyListeners()
+        {
+            var bag = GridInventory.Carried(catalog);
+            var ammo = catalog.Find("ammo_slate");
+            var stock = new System.Collections.Generic.List<ItemStack>
+            {
+                new ItemStack { InstanceId = "loose", ItemId = ammo.Id, Area = CargoArea.Pockets, Quantity = ammo.MaxStack - 19 },
+                new ItemStack { InstanceId = "protected", ItemId = ammo.Id, Area = CargoArea.Secure, Quantity = 1 },
+                new ItemStack { InstanceId = "recovered", ItemId = ammo.Id, Area = CargoArea.Legacy, Quantity = 1 }
+            };
+            for (int x = 1; x < 5; x++)
+                stock.Add(new ItemStack { InstanceId = "pocket-" + x, ItemId = "bandage", Area = CargoArea.Pockets, X = x });
+            bag.Restore(stock);
+            var probe = typeof(GridInventory).GetMethod("MaxAddable", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            var before = bag.Items.Select(item => (item.InstanceId, item.Area, item.Quantity)).ToArray();
+            int events = 0;
+            bag.Changed += () => events++;
+            Assert.That(probe.Invoke(bag, new object[] { ammo.Id, 100 }), Is.EqualTo(19));
+            Assert.That(probe.Invoke(bag, new object[] { ammo.Id, 1 }), Is.EqualTo(1));
+            CollectionAssert.AreEqual(before, bag.Items.Select(item => (item.InstanceId, item.Area, item.Quantity)));
+            Assert.That(events, Is.Zero);
+
+            var weightLimited = new GridInventory(3, 3, ammo.UnitWeight * 21, catalog);
+            Assert.That(probe.Invoke(weightLimited, new object[] { ammo.Id, 100 }), Is.EqualTo(21));
+            Assert.That(weightLimited.Items, Is.Empty);
+        }
+
+        [Test]
+        public void BulkWarehouseAmmoFillsOnlyOpenCellsAndRejectsOverflowAtomically()
+        {
+            var bag = GridInventory.Warehouse(catalog);
+            var ammo = catalog.Find("ammo_slate");
+            var item = new ItemStack { ItemId = "rifle", InstanceId = "rotated-rifle", Rotated = true };
+            Assert.That(bag.TryInsert(item, out var error), Is.True, error);
+            Assert.That(bag.TryInsert(new ItemStack { ItemId = ammo.Id, InstanceId = "partial", Quantity = ammo.MaxStack - 1 }, out error), Is.True, error);
+            int limit = 1 + (GridInventory.StashColumns * GridInventory.StashRows - bag.OccupiedCells(CargoArea.Main)) * ammo.MaxStack;
+            var probe = typeof(GridInventory).GetMethod("MaxAddable", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            Assert.That(probe.Invoke(bag, new object[] { ammo.Id, int.MaxValue }), Is.EqualTo(limit));
+            var before = bag.Snapshot();
+            int notifications = 0;
+            bag.Changed += () => notifications++;
+            Assert.That(bag.TryAdd(ammo.Id, limit + 1, out _), Is.False);
+            Assert.That(bag.Items.Count, Is.EqualTo(before.Count));
+            Assert.That(bag.Find("partial").Quantity, Is.EqualTo(ammo.MaxStack - 1));
+            Assert.That(notifications, Is.Zero);
+            Assert.That(bag.TryAdd(ammo.Id, limit, out error), Is.True, error);
+            Assert.That(bag.OccupiedCells(CargoArea.Main), Is.EqualTo(GridInventory.StashColumns * GridInventory.StashRows));
+            var rifle = bag.Find(item.InstanceId);
+            Assert.That((rifle.X, rifle.Y, rifle.Rotated), Is.EqualTo((before[0].X, before[0].Y, before[0].Rotated)));
+            Assert.That(bag.Find("partial").Quantity, Is.EqualTo(ammo.MaxStack));
+            Assert.That(notifications, Is.EqualTo(1));
+            Assert.DoesNotThrow(() => GridInventory.Warehouse(catalog).Restore(bag.Snapshot()));
+        }
+
+        [Test]
+        public void AmmoCapacityRespectsAnEquippedBagsOwnWeightLimit()
+        {
+            var testCatalog = ScriptableObject.CreateInstance<ItemCatalog>();
+            var ammo = ScriptableObject.CreateInstance<ItemDefinition>();
+            var pack = ScriptableObject.CreateInstance<ItemDefinition>();
+            try
+            {
+                ammo.Id = "weighted-ammo";
+                ammo.Kind = ItemKind.Ammo;
+                ammo.MaxStack = 10;
+                ammo.UnitWeight = 1;
+                pack.Id = "restricted-pack";
+                pack.Kind = ItemKind.Pack;
+                pack.Storage = new StorageSpec { Columns = 2, Rows = 1, Split = 1, WeightLimit = 2.5f };
+                testCatalog.Items.AddRange(new[] { ammo, pack, catalog.Find("bandage") });
+                var bag = GridInventory.Carried(testCatalog);
+                var items = new System.Collections.Generic.List<ItemStack>
+                {
+                    new ItemStack { InstanceId = "pack", ItemId = pack.Id, Slot = EquipmentSlot.Pack }
+                };
+                for (int x = 0; x < 5; x++)
+                    items.Add(new ItemStack { InstanceId = "occupied-" + x, ItemId = "bandage", Area = CargoArea.Pockets, X = x });
+                bag.Restore(items);
+                var probe = typeof(GridInventory).GetMethod("MaxAddable", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                Assert.That(probe.Invoke(bag, new object[] { ammo.Id, 100 }), Is.EqualTo(2));
+                Assert.That(bag.Count(ammo.Id), Is.Zero);
+                Assert.That(bag.TryAdd(ammo.Id, 3, out _), Is.False);
+                Assert.That(bag.TryAdd(ammo.Id, 2, out _), Is.True);
+            }
+            finally
+            {
+                Object.DestroyImmediate(pack);
+                Object.DestroyImmediate(ammo);
+                Object.DestroyImmediate(testCatalog);
+            }
+        }
+
         [TestCase(ItemKind.Rig, 5)]
         [TestCase(ItemKind.Pack, 6)]
         [TestCase(ItemKind.Armor, 6)]

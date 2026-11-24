@@ -11,7 +11,10 @@ namespace Dustline
         private readonly Predicate<ItemDefinition> accepts;
         readonly int baseWidth, baseHeight;
         readonly float baseWeight;
-        readonly bool adaptive;
+        readonly bool adaptive, warehouse;
+        const int RecoveryBaseRows = 12;
+        // A valid old inventory has far fewer rows; bound corrupt coordinates before exposing them to the UI.
+        const int RecoveryMaxRows = 1024;
 
         static readonly CargoArea[] CarryAreas = { CargoArea.Main, CargoArea.Rig, CargoArea.Pockets };
         static readonly StorageSpec PersonalPockets = new StorageSpec
@@ -23,13 +26,13 @@ namespace Dustline
 
         public const int StashColumns = 12, StashRows = 30;
         public const string DefaultSecureCase = "secure_2x2";
-        public static GridInventory Warehouse(ItemCatalog catalog) => new GridInventory(StashColumns, StashRows, 900, catalog);
+        public static GridInventory Warehouse(ItemCatalog catalog) => new GridInventory(StashColumns, StashRows, 900, catalog, null, warehouse: true);
         public static GridInventory Carried(ItemCatalog catalog) => new GridInventory(1, 1, 30, catalog, null, true);
 
         public GridInventory(int width, int height, float maxWeight, ItemCatalog catalog) : this(width, height, maxWeight, catalog, null) { }
 
         internal GridInventory(int width, int height, float maxWeight, ItemCatalog catalog, Predicate<ItemDefinition> accepts, bool adaptive = false,
-            bool rebuildCatalog = true)
+            bool rebuildCatalog = true, bool warehouse = false)
         {
             if (width < 1)
                 throw new ArgumentOutOfRangeException(nameof(width));
@@ -45,6 +48,7 @@ namespace Dustline
             baseHeight = height;
             baseWeight = maxWeight;
             this.adaptive = adaptive;
+            this.warehouse = warehouse;
             Catalog = catalog;
             this.accepts = accepts;
             view = items.AsReadOnly();
@@ -98,13 +102,30 @@ namespace Dustline
             return weight;
         }
 
+        bool HasRecovery => adaptive || warehouse;
+
+        static StorageSpec RecoveryLayout(int rows) => new StorageSpec { Columns = StashColumns, Rows = rows, WeightLimit = float.MaxValue };
+
+        int RecoveryRows(List<ItemStack> load)
+        {
+            int rows = RecoveryBaseRows;
+            foreach (var item in load)
+            {
+                if (item.Area != CargoArea.Legacy || item.Slot != EquipmentSlot.None) continue;
+                var definition = Catalog.Find(item.ItemId);
+                int height = item.Rotated ? definition.Width : definition.Height;
+                rows = (int)Math.Min(RecoveryMaxRows, Math.Max(rows, (long)item.Y + height));
+            }
+            return rows;
+        }
+
         StorageSpec Dimensions(CargoArea area, List<ItemStack> load)
         {
+            if (area == CargoArea.Legacy && HasRecovery) return RecoveryLayout(RecoveryRows(load));
             if (!adaptive) return area == CargoArea.Main ? new StorageSpec { Columns = baseWidth, Rows = baseHeight } : default;
             if (area == CargoArea.Pockets) return PersonalPockets;
             if (area == CargoArea.Secure)
                 return Catalog.Find(DefaultSecureCase)?.Storage ?? new StorageSpec { Columns = 2, Rows = 2, WeightLimit = 30 };
-            if (area == CargoArea.Legacy) return new StorageSpec { Columns = 12, Rows = 12, WeightLimit = float.MaxValue };
             if (area != CargoArea.Main && area != CargoArea.Rig) return default;
             return Gear(area == CargoArea.Main ? EquipmentSlot.Pack : EquipmentSlot.Rig, load)?.Storage ?? default;
         }
@@ -165,6 +186,16 @@ namespace Dustline
                 remaining -= added;
                 if (remaining == 0)
                     break;
+            }
+
+            if (remaining > 0 && warehouse && definition.Kind == ItemKind.Ammo && definition.Width == 1 && definition.Height == 1)
+            {
+                if (!TryStageWarehouseAmmo(definition, staged, limit, remaining))
+                {
+                    error = "背包空间不足。";
+                    return false;
+                }
+                remaining = 0;
             }
 
             while (remaining > 0)
@@ -282,7 +313,7 @@ namespace Dustline
                 return false;
             }
 
-            if (adaptive && (CapacitySlot(slot) || stack.Area == CargoArea.Legacy || stack.Area == CargoArea.Secure))
+            if (stack.Area == CargoArea.Legacy || adaptive && (CapacitySlot(slot) || stack.Area == CargoArea.Secure))
             {
                 var next = Snapshot();
                 var staged = next.Find(item => item.InstanceId == instanceId);
@@ -487,7 +518,7 @@ namespace Dustline
 
         internal GridInventory Draft()
         {
-            var draft = new GridInventory(baseWidth, baseHeight, baseWeight, Catalog, accepts, adaptive, rebuildCatalog: false);
+            var draft = new GridInventory(baseWidth, baseHeight, baseWeight, Catalog, accepts, adaptive, rebuildCatalog: false, warehouse: warehouse);
             draft.items.AddRange(Snapshot());
             return draft;
         }
@@ -604,6 +635,12 @@ namespace Dustline
 
         public void Restore(List<ItemStack> items)
         {
+            Commit(ValidatedLayout(items));
+            Touch();
+        }
+
+        List<ItemStack> ValidatedLayout(List<ItemStack> items, bool oldCakeLayout = false)
+        {
             if (items == null)
                 throw new ArgumentNullException(nameof(items));
 
@@ -622,7 +659,8 @@ namespace Dustline
                     var link = input.Parts.Get(part);
                     if (!link.Empty && !ids.Add(link.InstanceId)) throw new InvalidDataException("配件实例 ID 重复。");
                 }
-                if (input.X < 0 || input.Y < 0 || !Enum.IsDefined(typeof(CargoArea), input.Area))
+                if (input.X < 0 || input.Y < 0 || !Enum.IsDefined(typeof(CargoArea), input.Area)
+                    || oldCakeLayout && warehouse && input.Area == CargoArea.Legacy)
                     throw new InvalidDataException("物品位置坐标无效。");
 
                 ItemStack stack = input.Clone();
@@ -642,14 +680,13 @@ namespace Dustline
 
             foreach (var stack in restored)
             {
-                if (stack.Slot == EquipmentSlot.None && !Fits(stack, Catalog.Find(stack.ItemId), restored, stack.InstanceId))
+                if (stack.Slot == EquipmentSlot.None && !Fits(stack, Catalog.Find(stack.ItemId), restored, stack.InstanceId, oldCakeLayout: oldCakeLayout))
                     throw new InvalidDataException("物品相互重叠或超出背包范围。");
             }
             if ((float)CalculateWeight(restored) > Limit(restored))
                 throw new InvalidDataException("已超出负重上限。");
 
-            Commit(restored);
-            Touch();
+            return restored;
         }
 
         public void Touch()
@@ -788,7 +825,7 @@ namespace Dustline
             return false;
         }
 
-        bool PlaceIn(ItemStack stack, ItemDefinition definition, List<ItemStack> occupied, CargoArea area)
+        bool PlaceIn(ItemStack stack, ItemDefinition definition, List<ItemStack> occupied, CargoArea area, bool keepRotation = false)
         {
             bool preferred = stack.Rotated;
             stack.Area = area;
@@ -804,7 +841,7 @@ namespace Dustline
                         stack.X = x; stack.Y = y;
                         if (Fits(stack, definition, occupied, null)) return true;
                     }
-                if (definition.Width == definition.Height) break;
+                if (keepRotation || definition.Width == definition.Height) break;
             }
             stack.Rotated = preferred;
             return false;
@@ -826,6 +863,7 @@ namespace Dustline
             {
                 if (item.Slot != EquipmentSlot.None) continue;
                 if (!ValidateStack(item, out var definition, out string error)) throw new InvalidDataException(error);
+                if (item.ItemId == LootTable.BirthdayCake) continue;
                 if (Fits(item, definition, placed, null)) placed.Add(item);
                 else displaced.Add(item);
             }
@@ -837,20 +875,70 @@ namespace Dustline
                 {
                     item.Area = CargoArea.Legacy;
                     item.X = x; item.Y = y;
-                    if (!Fits(item, definition, placed, null) && !PlaceIn(item, definition, placed, CargoArea.Legacy))
-                        throw new InvalidDataException("无法在保留物品的前提下升级随身栏。");
+                    if (!Fits(item, definition, placed, null)) PlaceInRecovery(item, definition, placed);
                 }
                 placed.Add(item);
             }
+            RelayoutCakes(incoming, retainedOnly: false);
             Restore(incoming);
         }
 
-        private bool Fits(ItemStack candidate, ItemDefinition definition, List<ItemStack> occupied,
-            string ignoredInstanceId, bool checkCargoWeight = true)
+        internal List<ItemStack> MigrateCake(List<ItemStack> previous, bool retainedOnly = false)
         {
-            int width = candidate.Rotated ? definition.Height : definition.Width;
-            int height = candidate.Rotated ? definition.Width : definition.Height;
-            var shape = Dimensions(candidate.Area, occupied);
+            var migrated = ValidatedLayout(previous, oldCakeLayout: true);
+            RelayoutCakes(migrated, retainedOnly);
+            return ValidatedLayout(migrated);
+        }
+
+        void RelayoutCakes(List<ItemStack> incoming, bool retainedOnly)
+        {
+            var cakes = incoming.FindAll(item => item.ItemId == LootTable.BirthdayCake);
+            if (cakes.Count == 0) return;
+            var definition = Catalog.Find(LootTable.BirthdayCake);
+            if (definition.Width != 3 || definition.Height != 4)
+                throw new InvalidDataException("生日蛋糕目录规格无效，请重新准备游戏资源。");
+
+            // First reserve unchanged items and every cake that can keep its position before looking for new space.
+            var placed = incoming.FindAll(item => item.ItemId != LootTable.BirthdayCake);
+            var displaced = new List<ItemStack>();
+            foreach (var item in cakes)
+            {
+                if (Fits(item, definition, placed, null)) placed.Add(item);
+                else displaced.Add(item);
+            }
+            foreach (var item in displaced)
+            {
+                if (retainedOnly || item.Area == CargoArea.Secure || item.Area == CargoArea.Legacy || !TryPlace(item, definition, placed))
+                    PlaceInRecovery(item, definition, placed);
+                placed.Add(item);
+            }
+        }
+
+        void PlaceInRecovery(ItemStack item, ItemDefinition definition, List<ItemStack> placed)
+        {
+            if (PlaceIn(item, definition, placed, CargoArea.Legacy, keepRotation: item.ItemId == LootTable.BirthdayCake)) return;
+            item.X = 0;
+            item.Y = RecoveryRows(placed);
+            if (Fits(item, definition, placed, null)) return;
+            if (item.ItemId != LootTable.BirthdayCake && definition.Width != definition.Height)
+            {
+                item.Rotated = !item.Rotated;
+                if (Fits(item, definition, placed, null)) return;
+            }
+            throw new InvalidDataException("无法在保留物品的前提下升级恢复区。");
+        }
+
+        static (int Width, int Height) Footprint(ItemStack item, ItemDefinition definition, bool oldCakeLayout)
+            => oldCakeLayout && item.ItemId == LootTable.BirthdayCake ? (2, 2)
+                : item.Rotated ? (definition.Height, definition.Width) : (definition.Width, definition.Height);
+
+        private bool Fits(ItemStack candidate, ItemDefinition definition, List<ItemStack> occupied,
+            string ignoredInstanceId, bool checkCargoWeight = true, bool oldCakeLayout = false)
+        {
+            var (width, height) = Footprint(candidate, definition, oldCakeLayout);
+            var shape = candidate.Area == CargoArea.Legacy && HasRecovery
+                ? RecoveryLayout(oldCakeLayout ? RecoveryBaseRows : RecoveryMaxRows)
+                : Dimensions(candidate.Area, occupied);
             if (!shape.Fits(candidate.X, candidate.Y, width, height)) return false;
 
             double mass = checkCargoWeight ? StackWeight(candidate) : 0d;
@@ -860,9 +948,7 @@ namespace Dustline
                     continue;
 
                 if (checkCargoWeight) mass += StackWeight(other);
-                ItemDefinition otherDefinition = Catalog.Find(other.ItemId);
-                int otherWidth = other.Rotated ? otherDefinition.Height : otherDefinition.Width;
-                int otherHeight = other.Rotated ? otherDefinition.Width : otherDefinition.Height;
+                var (otherWidth, otherHeight) = Footprint(other, Catalog.Find(other.ItemId), oldCakeLayout);
                 if (candidate.X < (long)other.X + otherWidth && (long)candidate.X + width > other.X
                     && candidate.Y < (long)other.Y + otherHeight && (long)candidate.Y + height > other.Y)
                     return false;

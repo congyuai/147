@@ -47,7 +47,7 @@ namespace Dustline
         public float ResolutionScale { get; private set; }
         public OperatorStyle SelectedOperator { get; private set; }
         public float RaidRemaining { get; private set; }
-        internal float RaidDuration { get; private set; } = 900f;
+        internal float RaidDuration { get; private set; } = Deployment.RaidSeconds;
         internal float RaidThreat { get; private set; } = 1f;
         internal int ActiveSite { get; private set; }
         internal int ActiveTier { get; private set; }
@@ -59,7 +59,7 @@ namespace Dustline
         public string Error { get; private set; }
         public string Notice { get; private set; }
         const string OperatorPreference = "Dustline.OperatorStyle.v1";
-        const string SprintPreference = "Dustline.TouchSprintThreshold.v1";
+        const string LeanPreference = "Dustline.LeanGesture.v1";
         const string QualityPreference = "Dustline.QualityLevel.v1";
         const string ResolutionPreference = "Dustline.ResolutionScale.v1";
         const string LookPreference = "Dustline.ViewSensitivity.v1";
@@ -79,7 +79,7 @@ namespace Dustline
             RaidFrameRate.Apply(FrameRate);
             SelectedOperator = PlayerPrefs.GetInt(OperatorPreference, 0) == 1 ? OperatorStyle.Female : OperatorStyle.Male;
             Input = gameObject.AddComponent<PlayerInputReader>();
-            Input.SprintThreshold = PlayerInputReader.ClampSprintThreshold(PlayerPrefs.GetInt(SprintPreference, PlayerInputReader.DefaultSprintThreshold));
+            Input.SetLeanMode((LeanMode)Mathf.Clamp(PlayerPrefs.GetInt(LeanPreference, (int)LeanMode.Hybrid), 0, 1));
             Input.LookSensitivity = Sensitivity(PlayerPrefs.GetFloat(LookPreference, 1f));
             Input.GyroSensitivity = Sensitivity(PlayerPrefs.GetFloat(GyroPreference, 1f));
             Input.GyroUsage = (GyroMode)Mathf.Clamp(PlayerPrefs.GetInt(GyroUsagePreference, 0), 0, 2);
@@ -107,7 +107,7 @@ namespace Dustline
                 Catalog.RebuildIndex();
                 Stash = GridInventory.Warehouse(Catalog);
                 Loadout = GridInventory.Carried(Catalog);
-                store ??= new ProfileStore(Path.Combine(Application.persistentDataPath, "dustline-profile-v1.json"));
+                store ??= new ProfileStore(Path.Combine(Application.persistentDataPath, ProfileFileName));
                 Profile = store.Load();
                 if (Profile == null)
                 {
@@ -120,7 +120,8 @@ namespace Dustline
                 else
                 {
                     bool upgrade = Profile.Version < ProfileData.CurrentVersion;
-                    if (Profile.RaidInProgress && Profile.Version < 3) Profile.Loadout.Clear();
+                    if (Profile.RaidInProgress && Profile.Version < 3)
+                        Profile.Loadout.RemoveAll(item => item.ItemId != Dustline.LootTable.BirthdayCake);
                     if (upgrade) UpgradeInventory(Profile);
                     Stash.Restore(Profile.Stash);
                     Loadout.Restore(Profile.Loadout);
@@ -235,12 +236,10 @@ namespace Dustline
             preferencesDirty = true;
         }
 
-        internal void SelectSprintThreshold(int value)
+        internal void SelectLeanMode(LeanMode mode)
         {
-            value = PlayerInputReader.ClampSprintThreshold(value);
-            if (Input.SprintThreshold == value) return;
-            Input.SprintThreshold = value;
-            PlayerPrefs.SetInt(SprintPreference, value);
+            Input.SetLeanMode(mode);
+            PlayerPrefs.SetInt(LeanPreference, (int)mode);
             preferencesDirty = true;
         }
 

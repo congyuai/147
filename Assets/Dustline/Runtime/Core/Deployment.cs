@@ -30,13 +30,19 @@ namespace Dustline
     internal static class Deployment
     {
         internal const int Harbor = 0, Quarry = 1;
+        internal const int RaidSeconds = 30 * 60;
+        static RaidDifficulty[] Difficulties(float mediumThreat) => new[]
+        {
+            new RaidDifficulty("常规", 0, 1, RaidSeconds, 1f),
+            new RaidDifficulty("中风险", 200_000, 2, RaidSeconds, mediumThreat)
+        };
         internal static readonly RaidSite[] Sites =
         {
             new RaidSite("北岬货运港", "沿河道和堆场搜索物资。海事检修站由首领及精英守卫。",
-                new[] { new RaidDifficulty("常规", 0, 1, 900, 1f), new RaidDifficulty("高风险", 50000, 2, 720, 1.25f) }, "16:20", "",
+                Difficulties(1.25f), "16:20", "",
                 "搜刮｜海事检修站", "撤离｜铁路西闸或东泊位"),
             new RaidSite("石脊采石场", "穿过破碎站、石料台和输送廊。沿两端的旧道撤离。",
-                new[] { new RaidDifficulty("常规", 0, 1, 720, 1f), new RaidDifficulty("高风险", 75000, 2, 600, 1.35f) }, "", "",
+                Difficulties(1.35f), "", "",
                 "搜刮｜破碎站与值班物资", "撤离｜采场出口"),
             new RaidSite("灰湾水闸", "", Array.Empty<RaidDifficulty>(), "", "该地点尚未开放。")
         };
@@ -49,7 +55,7 @@ namespace Dustline
             return true;
         }
 
-        internal static int Level(ProfileData profile) => 1 + Math.Min(98, profile.Extractions);
+        internal static int Level(ProfileData profile) => 1 + (int)Math.Min(98L, (long)profile.Extractions + profile.GmLevelBonus);
 
         internal static string EntryError(int site, int tier, long value, int level)
         {

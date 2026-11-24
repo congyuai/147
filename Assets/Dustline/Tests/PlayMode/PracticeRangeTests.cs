@@ -48,6 +48,7 @@ namespace Dustline.Tests
                 File.Delete(store.UpgradeBackupPath);
                 File.Delete(store.LoadoutUpgradeBackupPath);
                 File.Delete(store.EconomyUpgradeBackupPath);
+                File.Delete(store.CakeUpgradeBackupPath);
             }
             yield return null;
             QualitySettings.renderPipeline = previousPipeline;
@@ -173,6 +174,7 @@ namespace Dustline.Tests
             Assert.That(File.Exists(store.LegacyBackupPath), Is.False);
             Assert.That(File.Exists(store.UpgradeBackupPath), Is.False);
             Assert.That(File.Exists(store.EconomyUpgradeBackupPath), Is.False);
+            Assert.That(File.Exists(store.CakeUpgradeBackupPath), Is.False);
         }
 
         [UnityTest]
@@ -397,7 +399,7 @@ namespace Dustline.Tests
         public IEnumerator LegacySaveMigratesInPlaceAndKeepsSelectedAndPurchasedUpgrades()
         {
             CreateSession(legacy: true, birthdayGiftClaimed: false);
-            Assert.That(session.Profile.Version, Is.EqualTo(4));
+            Assert.That(session.Profile.Version, Is.EqualTo(ProfileData.CurrentVersion));
             Assert.That(session.Profile.Credits, Is.EqualTo(777));
             Assert.That(session.Profile.Raids, Is.EqualTo(4));
             Assert.That(session.BoundBladeId, Is.EqualTo(BladeCatalog.ShortBladeId));
@@ -408,7 +410,9 @@ namespace Dustline.Tests
             Assert.That(rifle.Mods.OwnedGrip, Is.EqualTo(2));
             Assert.That(rifle.Mods.Sight, Is.EqualTo(1));
             Assert.That(store.EconomyUpgradeBackupPath, Is.EqualTo(store.Path + ".pre-v4.bak"));
+            Assert.That(store.CakeUpgradeBackupPath, Is.EqualTo(store.Path + ".pre-v5.bak"));
             CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.EconomyUpgradeBackupPath));
+            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.CakeUpgradeBackupPath));
             Assert.That(File.Exists(store.LoadoutUpgradeBackupPath), Is.False);
             Assert.That(session.Stash.Count("medkit"), Is.EqualTo(1));
             Assert.That(session.Stash.Count(LootTable.BirthdayCake), Is.EqualTo(1));
@@ -423,13 +427,55 @@ namespace Dustline.Tests
         }
 
         [UnityTest]
+        public IEnumerator InterruptedSchemaFourRaidMigratesTheOldSecureCakeWithoutChangingCounters()
+        {
+            var fixture = new ProfileData { Version = 4, Credits = 712, Raids = 3, Extractions = 1,
+                RaidInProgress = true, BirthdayGiftClaimed = true, BoundBladeId = BladeCatalog.ShortBladeId };
+            fixture.Loadout.Add(new ItemStack { ItemId = LootTable.BirthdayCake, InstanceId = "protected-cake", Area = CargoArea.Secure, Rotated = true });
+            fixture.Stash.Add(new ItemStack { ItemId = "ammo", InstanceId = "ordinary-ammo", X = 5, Y = 9, Quantity = 8 });
+            CreateSession(fixture: fixture);
+            var saved = store.Load();
+            Assert.That((saved.Version, saved.Credits, saved.Raids, saved.Extractions, saved.RaidInProgress, saved.BirthdayGiftClaimed),
+                Is.EqualTo((5, 712, 3, 1, false, true)));
+            Assert.That(saved.BoundBladeId, Is.EqualTo(BladeCatalog.ShortBladeId));
+            var cake = session.Loadout.Find("protected-cake");
+            Assert.That((cake.Area, cake.X, cake.Y, cake.Quantity, cake.Rotated), Is.EqualTo((CargoArea.Legacy, 0, 0, 1, true)));
+            Assert.That(saved.Loadout.Single().InstanceId, Is.EqualTo(cake.InstanceId));
+            var ammo = saved.Stash.Single();
+            Assert.That((ammo.InstanceId, ammo.X, ammo.Y, ammo.Quantity), Is.EqualTo(("ordinary-ammo", 5, 9, 8)));
+            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.CakeUpgradeBackupPath));
+            Assert.That(File.Exists(store.EconomyUpgradeBackupPath), Is.False);
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator CorruptSchemaFourCakeLayoutIsNotWrittenBack()
+        {
+            var fixture = new ProfileData { Version = 4, BirthdayGiftClaimed = true };
+            fixture.Stash.Add(new ItemStack { ItemId = LootTable.BirthdayCake, InstanceId = "overlapped-cake" });
+            fixture.Stash.Add(new ItemStack { ItemId = "ammo", InstanceId = "overlapping-item", X = 1, Y = 1 });
+            LogAssert.Expect(LogType.Exception, new Regex("InvalidDataException: 物品相互重叠或超出背包范围"));
+            CreateSession(fixture: fixture, expectedPhase: SessionPhase.Error);
+            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.Path));
+            Assert.That(File.Exists(store.CakeUpgradeBackupPath), Is.False);
+            Assert.That(store.Load().Version, Is.EqualTo(4));
+            yield return null;
+        }
+
+        [UnityTest]
         public IEnumerator MigratedSuppliesStayHomeDuringDeploymentAndSurviveAnUnsuccessfulRaid()
         {
             CreateSession(legacy: true);
             var medicine = new ItemStack { InstanceId = "home-only-medkit", ItemId = "medkit", Area = CargoArea.Legacy, X = 2, Y = 2, UsesSpent = 1 };
+            var cake = new ItemStack { InstanceId = "home-only-cake", ItemId = LootTable.BirthdayCake, Area = CargoArea.Legacy, Y = 12, Rotated = true };
+            var storedCake = new ItemStack { InstanceId = "warehouse-recovery-cake", ItemId = LootTable.BirthdayCake, Area = CargoArea.Legacy };
             var prepared = session.Loadout.Snapshot();
             prepared.Add(medicine);
+            prepared.Add(cake);
             session.Loadout.Restore(prepared);
+            var warehouse = session.Stash.Snapshot();
+            warehouse.Add(storedCake);
+            session.Stash.Restore(warehouse);
             session.PersistSafeState();
             var supplies = session.Loadout.Find(medicine.InstanceId);
             ConfirmDefaultDeployment();
@@ -437,8 +483,12 @@ namespace Dustline.Tests
             for (int i = 0; i < 60 && session.Phase == SessionPhase.Loading; i++) yield return null;
             Assert.That(session.Phase, Is.EqualTo(SessionPhase.Raid), session.Error);
             Assert.That(session.ActiveFieldBag.Find(medicine.InstanceId), Is.Null);
+            Assert.That(session.ActiveFieldBag.Find(cake.InstanceId), Is.Null);
+            Assert.That(session.ActiveFieldBag.Find(storedCake.InstanceId), Is.Null);
             var home = store.Load();
             Assert.That(home.RaidInProgress, Is.True);
+            Assert.That(home.Stash.Single(item => item.InstanceId == storedCake.InstanceId).Area, Is.EqualTo(CargoArea.Legacy));
+            Assert.That(home.Loadout.Single(item => item.InstanceId == cake.InstanceId).Y, Is.EqualTo(12));
             Assert.That(home.Loadout.TrueForAll(item => item.Area == CargoArea.Legacy && item.Slot == EquipmentSlot.None), Is.True);
             var stored = home.Loadout.Find(item => item.InstanceId == medicine.InstanceId);
             Assert.That(stored, Is.Not.Null);
@@ -453,6 +503,9 @@ namespace Dustline.Tests
             Assert.That(recovered, Is.Not.Null);
             Assert.That((recovered.Area, recovered.X, recovered.Y, recovered.UsesSpent),
                 Is.EqualTo((CargoArea.Legacy, medicine.X, medicine.Y, medicine.UsesSpent)));
+            Assert.That(home.Loadout.Single(item => item.InstanceId == cake.InstanceId).Area, Is.EqualTo(CargoArea.Legacy));
+            Assert.That(session.Loadout.Find(cake.InstanceId).Rotated, Is.True);
+            Assert.That(home.Stash.Single(item => item.InstanceId == storedCake.InstanceId).Area, Is.EqualTo(CargoArea.Legacy));
             session.ReturnToMenu();
         }
 
@@ -555,7 +608,8 @@ namespace Dustline.Tests
             Assert.That(Invoke(session, "ConfirmDeployment", 0, 0), Is.EqualTo(true), "Confirm regular harbor deployment.");
         }
 
-        void CreateSession(bool legacy = false, bool birthdayGiftClaimed = true)
+        void CreateSession(bool legacy = false, bool birthdayGiftClaimed = true, ProfileData fixture = null,
+            SessionPhase expectedPhase = SessionPhase.Menu)
         {
             var catalog = Resources.Load<ItemCatalog>("Dustline/Items");
             Assert.That(catalog, Is.Not.Null, "Run Dustline > Prepare Project first.");
@@ -577,7 +631,7 @@ namespace Dustline.Tests
                 rifle,
                 new ItemStack { InstanceId = "raid-ammo", ItemId = "ammo", Quantity = 18, Area = legacy ? CargoArea.Main : CargoArea.Pockets }
             };
-            store.Save(new ProfileData { Version = legacy ? 1 : ProfileData.CurrentVersion, Credits = 777, Raids = 4, Extractions = 2, BoundBladeId = BladeCatalog.ShortBladeId,
+            store.Save(fixture ?? new ProfileData { Version = legacy ? 1 : ProfileData.CurrentVersion, Credits = 777, Raids = 4, Extractions = 2, BoundBladeId = BladeCatalog.ShortBladeId,
                 BirthdayGiftClaimed = birthdayGiftClaimed, Loadout = carried, Stash = stash.Snapshot() });
             originalBytes = File.ReadAllBytes(store.Path);
             host = new GameObject("Isolated practice test session");
@@ -585,7 +639,7 @@ namespace Dustline.Tests
             session = host.AddComponent<GameSession>();
             Field(session, "store").SetValue(session, store);
             host.SetActive(true);
-            Assert.That(session.Phase, Is.EqualTo(SessionPhase.Menu), session.Error);
+            Assert.That(session.Phase, Is.EqualTo(expectedPhase), session.Error);
         }
 
         void ClickPractice(string name)

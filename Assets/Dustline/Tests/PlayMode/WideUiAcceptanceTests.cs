@@ -226,8 +226,9 @@ namespace Dustline.Tests
             Click(stashPage, "Category / 弹挂");
             if (right != null) Assert.That(right.content.anchoredPosition.y, Is.EqualTo(rightY).Within(.01f));
             float leftY = left.content.anchoredPosition.y;
-            Click(stashPage, "更多");
-            Click(stashPage, "补给商店");
+            Assert.That(Active(stashPage, "更多"), Is.False);
+            Assert.That(Active(stashPage, "一键整理"), Is.True);
+            Invoke(session.UI, "ShowShop", ItemKind.Rig);
             yield return null;
             var shop = Panel("Supply store");
             var product = shop.GetComponentsInChildren<Button>().First(button => button.name.StartsWith("Stock / "));
@@ -375,7 +376,7 @@ namespace Dustline.Tests
             Click(Panel("Practice controls"), "模拟受伤");
             Assert.That(session.UI.BlocksGameplay, Is.False);
             Assert.That(session.Input.Gameplay, Is.True);
-            Assert.That(Node(hud, "Stamina display").GetComponent<CanvasGroup>().alpha, Is.Zero);
+            Assert.That(Node(hud.parent, "Stamina display").GetComponent<CanvasGroup>().alpha, Is.Zero);
             Assert.That(Active(hud, "Total health"), Is.False);
             var summary = Node(hud, "Injury summary");
             Assert.That(Active(summary, "Injury / LightBleed"), Is.True);
@@ -429,13 +430,15 @@ namespace Dustline.Tests
             foreach (var (caption, kind) in distinct)
             {
                 Click(tabs, "Category / " + caption);
+                bool tiered = kind == ItemKind.Armor || kind == ItemKind.Helmet;
+                if (tiered) Click(page, kind + " tier / 4");
                 yield return null;
                 tabs = Node(page, "Shop categories");
-                var cards = page.Cast<Transform>().Where(node => node.gameObject.activeInHierarchy && node.name.StartsWith("Stock / ")).ToArray();
-                var expected = session.Catalog.Items.Where(item => item.Kind == kind && !item.NotForSale)
+                var cards = Node(page, "Shop stock content").Cast<Transform>().Where(node => node.gameObject.activeInHierarchy && node.name.StartsWith("Stock / ")).ToArray();
+                var expected = session.Catalog.Items.Where(item => item.Kind == kind && !item.NotForSale && (!tiered || item.Tier == 4))
                     .OrderBy(item => item.Tier > 0 ? item.Tier : int.MaxValue)
-                    .ThenBy(item => item.Value).ThenBy(item => item.Id, StringComparer.Ordinal).Take(8).ToArray();
-                Assert.That(cards.Length, Is.GreaterThanOrEqualTo(6));
+                    .ThenBy(item => item.Value).ThenBy(item => item.Id, StringComparer.Ordinal).ToArray();
+                Assert.That(cards.Length, Is.GreaterThanOrEqualTo(tiered ? 2 : 6));
                 CollectionAssert.AreEqual(expected.Select(item => "Stock / " + item.Id), cards.Select(card => card.name));
                 for (int i = 0; i < cards.Length; i++)
                 {
@@ -449,7 +452,137 @@ namespace Dustline.Tests
             yield return Capture("06-shop-armor", page);
         }
 
-        void OpenSession(int credits, bool hasBackpack = true)
+        [UnityTest]
+        public IEnumerator RecoveredCakeUsesItsTrueFootprintAndTheSameBackdropInPackAndMarket()
+        {
+            RequireLandscape();
+            OpenSession(1000, recoveredCake: true);
+            session.UI.ShowStash();
+            yield return null;
+            var cake = session.Catalog.Find(LootTable.BirthdayCake);
+            Assert.That((cake.Width, cake.Height), Is.EqualTo((3, 4)));
+            Assert.That(cake.ResaleValue, Is.EqualTo(LootTable.BirthdayResale));
+            var stashPage = Panel("Stash");
+            var storage = Node(stashPage, "Stash grid region");
+            Assert.That(Active(storage, cake.DisplayName), Is.False);
+            var normal = Node(storage, "Grid viewport").GetComponent<ScrollRect>();
+            normal.verticalNormalizedPosition = .56f;
+            float normalOffset = normal.content.anchoredPosition.y;
+            Click(storage, "恢复区");
+            storage = Node(stashPage, "Stash grid region");
+            var recovered = Node(storage, "Recovery grid");
+            var cakeTile = Node(recovered, cake.DisplayName);
+            float cell = recovered.rect.width / GridInventory.StashColumns;
+            Assert.That((cakeTile.rect.width + 2f) / cell, Is.EqualTo(4).Within(.01f));
+            Assert.That((cakeTile.rect.height + 2f) / cell, Is.EqualTo(3).Within(.01f));
+            Assert.That(Vector2.Distance(cakeTile.anchoredPosition, new Vector2(cell * 4 + 1, -cell * 2 - 1)), Is.LessThan(.01f));
+            Assert.That(Quaternion.Angle(Node(cakeTile, "Item name").localRotation, Quaternion.identity), Is.LessThan(.01f));
+            var backdrop = Node(cakeTile, "Special item backdrop").GetComponent<Graphic>();
+            Assert.That(backdrop.raycastTarget, Is.False);
+            var before = File.ReadAllBytes(store.Path);
+            Click(recovered, cake.DisplayName);
+            Assert.That(HasText(Node(stashPage, "Item details"), "占格 4 × 3"), Is.True);
+            CollectionAssert.AreEqual(before, File.ReadAllBytes(store.Path));
+            Click(stashPage, "转入随身栏");
+            var item = session.Loadout.Find("recovered-cake");
+            Assert.That((item.Area, item.Rotated), Is.EqualTo((CargoArea.Main, true)));
+            storage = Node(stashPage, "Stash grid region");
+            normal = Node(storage, "Grid viewport").GetComponent<ScrollRect>();
+            Assert.That(normal.content.anchoredPosition.y, Is.EqualTo(normalOffset).Within(.05f));
+            Assert.That(Active(storage, "恢复区"), Is.False);
+            var pack = Node(stashPage, "Carried section / Main");
+            Assert.That(Node(Node(pack, cake.DisplayName), "Special item backdrop").GetComponent<Graphic>().GetType(), Is.EqualTo(backdrop.GetType()));
+
+            session.UI.ShowMarket();
+            InjectMarketFixture();
+            var market = Panel("Account market");
+            Click(market, "出售");
+            Assert.That(HasText(market, cake.DisplayName), Is.False);
+            Click(market, "恢复区 · 1");
+            var card = Node(market, "Market card");
+            Assert.That(HasText(card, cake.DisplayName), Is.True);
+            card.GetComponentInChildren<Button>().onClick.Invoke();
+            var detail = Node(market, "Item details");
+            Assert.That(HasText(detail, "恢复区物品"), Is.True);
+            var marketBackdrop = Node(detail, "Special item backdrop").GetComponent<Graphic>();
+            Assert.That(marketBackdrop.GetType(), Is.EqualTo(backdrop.GetType()));
+            Assert.That(Active(detail, "确认上架"), Is.True);
+            Click(market, "系统回收");
+            Click(market, "恢复区 · 1");
+            Node(market, "Market card").GetComponentInChildren<Button>().onClick.Invoke();
+            Assert.That(Active(Node(market, "Item details"), "确认系统回收"), Is.True);
+            Click(market, "出售");
+            Node(market, "Market card").GetComponentInChildren<Button>().onClick.Invoke();
+            detail = Node(market, "Item details");
+            var price = Node(detail, "Market unit price").GetComponent<InputField>();
+            Assert.That(price.text, Is.EqualTo("80000"));
+            price.text = "1";
+            Assert.That(Node(detail, "确认上架").GetComponent<Button>().interactable, Is.True);
+
+            void InjectMarketFixture()
+            {
+                var client = Field(session.UI, "marketClient");
+                var stateProperty = client.GetType().GetProperty("State", Instance);
+                var state = Activator.CreateInstance(stateProperty.PropertyType, true);
+                var type = state.GetType();
+                type.GetField("Account").SetValue(state, "test-account");
+                type.GetField("Items").SetValue(state, new[]
+                {
+                    new ItemStack { ItemId = cake.Id, InstanceId = "market-recovered", Area = CargoArea.Legacy },
+                    new ItemStack { ItemId = "part_scope_6", InstanceId = "market-optic" }
+                });
+                foreach (var name in new[] { "Products", "References", "Listings", "History" })
+                {
+                    var field = type.GetField(name);
+                    var element = field.FieldType.GetElementType();
+                    var array = Array.CreateInstance(element, name == "Products" ? 1 : 0);
+                    if (name == "Products")
+                    {
+                        var product = Activator.CreateInstance(element, true);
+                        element.GetField("Id").SetValue(product, cake.Id);
+                        element.GetField("Resale").SetValue(product, (long)cake.ResaleValue);
+                        array.SetValue(product, 0);
+                    }
+                    field.SetValue(state, array);
+                }
+                stateProperty.GetSetMethod(true).Invoke(client, new object[] { state });
+                client.GetType().GetField("token", Instance).SetValue(client, "fixture");
+                Invoke(session.UI, "DrawMarket");
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator MeleePreviewAndItsResetPlaceTheGripLeftOfTheTip()
+        {
+            OpenSession(0);
+            var type = typeof(GameUI).Assembly.GetType("Dustline.ItemPreviewStage");
+            var stage = Activator.CreateInstance(type, Instance, null, new object[] { host.transform, 0 }, CultureInfo.InvariantCulture);
+            try
+            {
+                var root = (Transform)Field(stage, "Root");
+                var camera = root.GetComponentInChildren<Camera>();
+                foreach (var blade in new[] { WeaponForm.Tangdao, WeaponForm.ShortBlade, WeaponForm.Baton })
+                {
+                    Invoke(stage, "Set", null, null, session.Catalog, blade, false);
+                    Check();
+                    Invoke(stage, "Rotate", new Vector2(150, 0));
+                    Invoke(stage, "ResetView");
+                    Check();
+                }
+                void Check()
+                {
+                    Invoke(stage, "Frame", 2f);
+                    var view = root.GetComponentInChildren<WeaponVisual>();
+                    float grip = camera.WorldToViewportPoint(view.RightGrip).x;
+                    float tip = camera.WorldToViewportPoint(view.Muzzle.position).x;
+                    Assert.That(tip, Is.GreaterThan(grip + .1f));
+                }
+            }
+            finally { ((IDisposable)stage).Dispose(); }
+            yield return null;
+        }
+
+        void OpenSession(int credits, bool hasBackpack = true, bool recoveredCake = false)
         {
             var catalog = Resources.Load<ItemCatalog>("Dustline/Items");
             Assert.That(catalog, Is.Not.Null, "Run Dustline > Prepare Project first.");
@@ -476,6 +609,12 @@ namespace Dustline.Tests
             {
                 var pack = Add(stash, "pack_compact");
                 Assert.That(stash.TryMove(pack.InstanceId, 9, 0, false, out _), Is.True);
+            }
+            if (recoveredCake)
+            {
+                var saved = stash.Snapshot();
+                saved.Add(new ItemStack { ItemId = LootTable.BirthdayCake, InstanceId = "recovered-cake", Area = CargoArea.Legacy, X = 4, Y = 2, Rotated = true });
+                stash.Restore(saved);
             }
             var bandage = Add(loadout, "bandage");
             Assert.That(loadout.TryMove(bandage.InstanceId, CargoArea.Rig, 0, 0, false, out _), Is.True);

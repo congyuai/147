@@ -19,7 +19,9 @@ namespace Dustline
         GridInventory selectedBag, dragBag;
         string selectedId, dragId;
         bool detailsRequested, placing, rotated, dragRotated;
-        float carryOffset, fieldCarryOffset, stashScroll = 1f, lootScroll = 1f;
+        float carryOffset, fieldCarryOffset, stashScroll = 1f, stashRecoveryScroll = 1f, lootScroll = 1f;
+        bool stashRecovery;
+        CargoArea storageArea;
         PlayerController lastInventoryPlayer;
         LootContainer lastLoot;
         int dragPointer = int.MinValue, grabX, grabY, placementStamp, rotatedByKeyFrame = -1;
@@ -109,7 +111,7 @@ namespace Dustline
             AddMenuBack(root);
             Label(root, title, 24, 116, 4, 256, 40, TextAnchor.MiddleLeft);
             inventoryBody = At(stash ? "Stash contents" : "Field inventory contents", root, 8, 53, w - 16, 620);
-            Button(root, "更多", w - (stash ? 245 : 90), 6, 76, 35, () => ToggleInventoryMore(root, stash));
+            if (!stash) Button(root, "更多", w - 90, 6, 76, 35, () => ToggleInventoryMore(root));
             if (stash)
             {
                 creditsReadout = Label(root, "", 19, w - 164, 4, 150, 40, TextAnchor.MiddleRight, Aqua);
@@ -144,9 +146,19 @@ namespace Dustline
             DrawCarried(rail, gear, carried, left, h, stash);
 
             var target = stash ? session.Stash : loot?.Inventory;
-            Label(storage, stash ? "仓库储备" : loot == null ? "搜刮区" : "容器物资", 20, 9, 2, right * .48f, 32, TextAnchor.MiddleLeft);
+            storageArea = CargoArea.Main;
             if (stash)
             {
+                bool hasRecovery = target.OccupiedCells(CargoArea.Legacy) > 0;
+                if (!hasRecovery) stashRecovery = false;
+                if (stashRecovery) storageArea = CargoArea.Legacy;
+                if (hasRecovery)
+                {
+                    Button(storage, "仓库储备", 6, 3, 105, 31, () => SelectStorage(false), !stashRecovery);
+                    Button(storage, "恢复区", 117, 3, 100, 31, () => SelectStorage(true), stashRecovery);
+                    if (stashRecovery) Label(storage, "只可移出", 15, 226, 3, 112, 31, TextAnchor.MiddleLeft, Aqua);
+                }
+                else Label(storage, "仓库储备", 20, 9, 2, right * .48f, 32, TextAnchor.MiddleLeft);
                 var sort = Button(storage, "", right - 55, 3, 45, 32, () =>
                 {
                     if (!InventoryIdle() || ProcessInventoryBackKey()) return;
@@ -157,21 +169,40 @@ namespace Dustline
                 sort.name = "一键整理";
                 Fill(At("Sort icon", sort.transform, 10, 3, 25, 25), Aqua).sprite = icons[RaidIcon.Sort];
             }
+            else Label(storage, loot == null ? "搜刮区" : "容器物资", 20, 9, 2, right * .48f, 32, TextAnchor.MiddleLeft);
             if (target != null)
             {
                 if (!stash && target.Items.Count == 0)
                     Label(storage, "已搜空", 17, 14, h - 39, right - 28, 31, TextAnchor.MiddleRight, Muted);
-                float cell = Mathf.Min((right - 27f) / target.Width, stash ? 104f : 62f);
-                float height = cell * target.Height;
-                float leftInset = stash ? 6f : Mathf.Max(6f, Mathf.Floor((right - cell * target.Width - 15f) * .5f));
-                var viewport = VerticalInventory(storage, leftInset, 37, right - leftInset - 6f, h - 42f, height,
-                    stash ? stashScroll : lootScroll, value => { if (stash) stashScroll = value; else lootScroll = value; }, out storageView);
-                DrawGrid(viewport, target, CargoArea.Main, 0, 0, cell);
+                var area = storageArea;
+                var layout = target.Layout(area);
+                float cell = Mathf.Min((right - 27f) / layout.Columns, stash ? 104f : 62f);
+                float height = cell * layout.Rows;
+                float leftInset = stash ? 6f : Mathf.Max(6f, Mathf.Floor((right - cell * layout.Columns - 15f) * .5f));
+                float saved = !stash ? lootScroll : area == CargoArea.Legacy ? stashRecoveryScroll : stashScroll;
+                var viewport = VerticalInventory(storage, leftInset, 37, right - leftInset - 6f, h - 42f, height, saved,
+                    value => SaveStorageScroll(stash, area, value), out storageView);
+                DrawGrid(viewport, target, area, 0, 0, cell);
             }
             else Label(storage, "对准容器并搜索后，可在这里查看和转移物品。", 19, 14, 53, right - 28, 70, color: Muted);
             DrawPlacementControls();
             if (detailsRequested && !placing && selectedBag != null && itemAnchors.TryGetValue((selectedBag, selectedId), out var anchor))
                 OpenSelection(anchor, stash);
+
+            void SelectStorage(bool recovery)
+            {
+                if (stashRecovery == recovery || !storage.gameObject.activeInHierarchy || !InventoryIdle() || ProcessInventoryBackKey()) return;
+                CloseItemPopup();
+                stashRecovery = recovery;
+                RefreshInventory();
+            }
+        }
+
+        void SaveStorageScroll(bool stash, CargoArea area, float value)
+        {
+            if (!stash) lootScroll = value;
+            else if (area == CargoArea.Legacy) stashRecoveryScroll = value;
+            else stashScroll = value;
         }
 
         void CaptureInventoryScroll()
@@ -188,7 +219,7 @@ namespace Dustline
                 float overflow = storageView.content.rect.height - storageView.viewport.rect.height;
                 if (overflow <= .01f) return;
                 float position = 1f - Mathf.Clamp01(storageView.content.anchoredPosition.y / overflow);
-                if (stash) stashScroll = position; else lootScroll = position;
+                SaveStorageScroll(stash, storageArea, position);
             }
         }
 
@@ -206,8 +237,8 @@ namespace Dustline
             float inner = width - 10f - trackSpace, iconWidth = Mathf.Min(118f, inner * .27f);
             float gearRow = (h - 48f - 3 * gutter) / 3f;
             float guardTop = 42f + 2 * (gearRow + gutter);
-            bool legacy = carried.OccupiedCells(CargoArea.Legacy) > 0;
-            var sections = new[] { "武器", "防具", "弹挂", "口袋", "背包", "安全箱", "迁移物品" };
+            bool legacy = stash && carried.OccupiedCells(CargoArea.Legacy) > 0;
+            var sections = new[] { "武器", "防具", "弹挂", "口袋", "背包", "安全箱", "恢复区" };
             var symbols = new[] { EquipmentSlot.Weapon, EquipmentSlot.Armor, EquipmentSlot.Rig, EquipmentSlot.None, EquipmentSlot.Pack,
                 EquipmentSlot.None, EquipmentSlot.Pack };
             var area = new[] { CargoArea.Rig, CargoArea.Pockets, CargoArea.Main, CargoArea.Secure, CargoArea.Legacy };
@@ -397,12 +428,13 @@ namespace Dustline
         void DrawGrid(Transform root, GridInventory bag, CargoArea area, float left, float top, float cell)
         {
             var layout = bag.Layout(area);
-            var board = At("Item grid", root, left, top, layout.Columns * cell, layout.Rows * cell);
+            var board = At(area == CargoArea.Legacy ? "Recovery grid" : "Item grid", root, left, top, layout.Columns * cell, layout.Rows * cell);
             board.gameObject.AddComponent<CanvasRenderer>();
             var drops = board.gameObject.AddComponent<InventoryBoard>();
             drops.Bag = bag;
             drops.Area = area;
-            drops.Initialize(layout, cell, () => placing && InventoryIdle() ? placementStamp : -1, (x, y) => PlaceAt(bag, area, x, y));
+            drops.Initialize(layout, cell, () => area != CargoArea.Legacy && placing && InventoryIdle() ? placementStamp : -1,
+                (x, y) => PlaceAt(bag, area, x, y));
             inventoryBoards.Add(drops);
             foreach (var item in bag.Items)
             {
@@ -416,12 +448,14 @@ namespace Dustline
                 w -= 2f * (margin - 1f); h -= 2f * (margin - 1f);
                 var tileRect = At(def.DisplayName, board, item.X * cell + margin, item.Y * cell + margin, w, h);
                 bool graded = def.Tier > 0 || def.Special;
-                var tile = CreateItemTile(tileRect, graded ? Color.Lerp(Plate, grade, .15f) : Plate);
+                var tile = CreateItemTile(tileRect, graded && !def.Special ? Color.Lerp(Plate, grade, .15f) : Plate);
+                DrawSpecialBackdrop(tileRect, def);
                 itemAnchors[(bag, id)] = tileRect;
                 tile.onClick.AddListener(() => SelectItem(bag, id));
                 tile.Place = e =>
                 {
                     if (!placing) return false;
+                    if (area == CargoArea.Legacy) return true;
                     if (drops.TryCell(e.position, e.pressEventCamera, out int x, out int y)) PlaceAt(bag, area, x, y);
                     return true;
                 };
@@ -549,31 +583,23 @@ namespace Dustline
             return true;
         }
 
-        void ToggleInventoryMore(RectTransform root, bool stash)
+        void ToggleInventoryMore(RectTransform root)
         {
             if (!InventoryIdle() || ProcessInventoryBackKey() || CloseInventoryMore()) return;
             CloseItemPopup();
             float width = root.rect.width;
-            inventoryMore = At("Inventory more", root, width - (stash ? 340 : 198), 48, 190, stash ? 92 : 134);
+            inventoryMore = At("Inventory more", root, width - 198, 48, 190, 134);
             Fill(inventoryMore, Ink, true);
             float y = 6;
-            if (stash)
+            Add("分部位健康", () => ShowHealth());
+            Add("设置", () => ShowSettings(true));
+            Add("切换射击模式", () =>
             {
-                Add("补给商店", () => ShowShop());
-                Add("交易市场", ShowMarket);
-            }
-            else
-            {
-                Add("分部位健康", () => ShowHealth());
-                Add("设置", () => ShowSettings(true));
-                Add("切换射击模式", () =>
-                {
-                    var weapon = session.Player?.Weapon;
-                    if (weapon?.Magazine == null) { Notify("当前武器不能切换射击模式。"); return; }
-                    weapon.ToggleFireMode();
-                    Notify(weapon.Automatic ? "已切换为全自动" : "已切换为半自动");
-                });
-            }
+                var weapon = session.Player?.Weapon;
+                if (weapon?.Magazine == null) { Notify("当前武器不能切换射击模式。"); return; }
+                weapon.ToggleFireMode();
+                Notify(weapon.Automatic ? "已切换为全自动" : "已切换为半自动");
+            });
 
             void Add(string title, System.Action action)
             {
@@ -623,6 +649,7 @@ namespace Dustline
             itemPopup = At("Item details", panel, 0, 0, 330, 216);
             popupClosed = closed;
             Fill(itemPopup, new Color32(16, 27, 33, 252), true);
+            DrawSpecialBackdrop(itemPopup, def);
             var border = def != null && (def.Tier > 0 || def.Special) ? def.QualityColor : Aqua;
             Fill(At("Details rule", itemPopup, 0, 0, 330, 2), border);
             DrawItemIcon(itemPopup, def, stack, 8, 11, 87, 61, blade: blade != null ? blade.Form : WeaponForm.Tangdao);
@@ -838,7 +865,8 @@ namespace Dustline
             gear = hit.gameObject.GetComponentInParent<GearDropSlot>();
             if (gear != null) return;
             board = hit.gameObject.GetComponentInParent<InventoryBoard>();
-            if (board == null || !board.TryCell(dragScreenPoint, hit.module.eventCamera, out x, out y)) { board = null; return; }
+            if (board == null || board.Area == CargoArea.Legacy || !board.TryCell(dragScreenPoint, hit.module.eventCamera, out x, out y))
+            { board = null; return; }
             x -= grabX; y -= grabY;
         }
 
@@ -1078,16 +1106,21 @@ namespace Dustline
             return value;
         }
 
-        static string AmmoName(AmmoFamily family) => family switch
+        static string AmmoName(AmmoFamily family) => ItemDefinition.CaliberName(family);
+
+        static void DrawSpecialBackdrop(Transform parent, ItemDefinition item)
         {
-            AmmoFamily.Amber => "琥珀规格", AmmoFamily.Silver => "银标规格", AmmoFamily.Slate => "岩纹规格",
-            AmmoFamily.Copper => "铜线规格", _ => "原装规格"
-        };
+            if (item?.Special != true) return;
+            var region = Stretch("Special item backdrop", parent);
+            region.gameObject.AddComponent<CanvasRenderer>();
+            region.gameObject.AddComponent<SpecialItemBackdrop>().raycastTarget = false;
+        }
 
         RawImage DrawItemIcon(Transform parent, ItemDefinition item, ItemStack stack, float x, float y, float w, float h, bool turn = false,
             WeaponForm blade = WeaponForm.Tangdao)
         {
-            var image = ItemIcon(parent, "Item model / " + (item?.Id ?? blade.ToString()), ItemIconCache.Aspect(item), x, y, w, h, turn);
+            var image = ItemIcon(parent, "Item model / " + (item?.Id ?? blade.ToString()), ItemIconCache.Aspect(item), x, y, w, h,
+                turn && item?.Weapon?.Melee != true);
             itemIcons.Bind(image, item, stack, session.Catalog, blade);
             return image;
         }

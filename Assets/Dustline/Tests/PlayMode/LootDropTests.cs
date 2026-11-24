@@ -152,16 +152,21 @@ namespace Dustline.Tests
                 }
                 Assert.That(named, Is.True);
                 Assert.That(weightLabels, Is.EqualTo(1));
-                var glyphs = new HashSet<string>();
-                RawImage rotated = null;
-                foreach (var image in panel.GetComponentsInChildren<RawImage>())
-                {
-                    if (image.gameObject.name.StartsWith("Item model / ", System.StringComparison.Ordinal)) glyphs.Add(image.gameObject.name);
-                    if (image.gameObject.name == "Item model / medkit") rotated = image;
-                }
-                Assert.That(glyphs, Is.EquivalentTo(new[] { "Item model / medkit", "Item model / bandage" }));
-                Assert.That(rotated, Is.Not.Null);
-                var icon = rotated.rectTransform;
+                Assert.That(panel.Find("更多"), Is.Not.Null);
+                var body = panel.Find("Field inventory contents");
+                var container = body.Find("Loot grid region");
+                var glyphs = container.GetComponentsInChildren<RawImage>();
+                Assert.That(glyphs, Has.Length.EqualTo(1));
+                Assert.That(glyphs[0].name, Is.EqualTo("Item model / medkit"));
+                Transform pockets = null;
+                var carried = body.Find("Carried gear/Grid viewport/Grid content");
+                for (int i = 0; i < carried.childCount && pockets == null; i++)
+                    if (carried.GetChild(i).name == "Carried section / Pockets") pockets = carried.GetChild(i);
+                Assert.That(pockets, Is.Not.Null);
+                var held = pockets.GetComponentsInChildren<RawImage>();
+                Assert.That(held, Has.Length.EqualTo(1));
+                Assert.That(held[0].name, Is.EqualTo("Item model / bandage"));
+                var icon = glyphs[0].rectTransform;
                 var tile = (RectTransform)icon.parent;
                 Assert.That(tile.rect.width, Is.GreaterThan(tile.rect.height));
                 Assert.That(Quaternion.Angle(icon.localRotation, Quaternion.Euler(0, 0, -90f)), Is.LessThan(.01f));

@@ -14,6 +14,8 @@ namespace Dustline
         public int Reserve => Magazine == null ? 0 : AvailableReserve(activeBag, SelectReloadType());
         public bool HasInfiniteReserve => InPractice && ReadyAmmoType != null;
         public WeaponStats Stats => stats;
+        internal float CurrentShotSpread { get; private set; }
+        internal float LastShotSpread { get; private set; }
         public float MoveFactor => IsMelee ? 1.13f : Mathf.Clamp(Definition != null ? Definition.MoveFactor : 1f, .65f, 1.2f);
         public string ReadyAmmoType => Magazine == null ? null : SelectReloadType();
         public bool Automatic => Magazine != null && mainAutomatic;
@@ -172,6 +174,9 @@ namespace Dustline
             // Switching or inventory replacement must run before completing a pending action.
             ReadSwitch(now);
             ResolveEquipment(ActiveSlot, now);
+            bool aiming = input.Gameplay && input.Aim && Magazine != null && !Magazine.Reloading && !player.WeaponView.MedicineBusy;
+            float handling = player.Health.Body?.Handling ?? 1f;
+            CurrentShotSpread = Magazine == null ? 0f : FieldHandling.Spread(stats.Spread(aiming), handling, player.FiringPosture, player.FiringMovement);
             if (!input.Gameplay)
             {
                 CancelActions();
@@ -202,7 +207,7 @@ namespace Dustline
             }
             if (now < nextAttack) return;
             if (Magazine.Rounds == 0 && TryBeginReload()) return;
-            if (Automatic ? input.Fire : input.FirePressed) Fire(now, input.Aim);
+            if (Automatic ? input.Fire : input.FirePressed) Fire(now, aiming);
         }
 
         internal void BeginTreatment()
@@ -339,7 +344,7 @@ namespace Dustline
             var bag = activeBag;
             int penetration = WeaponRules.AmmoPenetration(session.Catalog.Find(WeaponRules.LoadedType(Definition, item)));
             float handling = player.Health.Body?.Handling ?? 1f;
-            float spread = stats.Spread(aiming) * handling;
+            float spread = LastShotSpread = CurrentShotSpread;
             int rays = Mathf.Clamp(Definition.Rays, 1, shotHits.Length);
             Vector3 direction = view.forward;
             // Resolve the whole volley before a hit can remove a dummy or other collider.
@@ -366,8 +371,6 @@ namespace Dustline
             if (hitDummy) practice.RecordHitShot();
             CombatNoise.Emit(transform.position, 65, player.Health);
             float recoil = stats.Recoil * handling * (aiming ? 0.65f : 1f);
-            player.Recoil(recoil);
-            visual.Kick(recoil);
             if (session.Effects != null)
             {
                 Vector3 muzzle = visual.Muzzle.position;
@@ -377,6 +380,8 @@ namespace Dustline
                     && !Physics.Linecast(muzzle, end - visual.Muzzle.forward * 0.025f, mask, triggers);
                 session.Effects.Shot(visual.Muzzle, end, in hit, struckHealth, clearTracer);
             }
+            visual.Kick(recoil);
+            player.Recoil(now, stats.FireInterval, recoil);
             bag.Touch();
         }
 

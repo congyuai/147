@@ -5,8 +5,9 @@ namespace Dustline
     public static class PortRaster
     {
         public const int Resolution = 2048;
-        public const string Chart = "Dustline/Maps/NorthCape_2k";
-        public const string Ground = "Dustline/Maps/NorthCapeGround_2k";
+        const string ShorelineRevision = "_v2_2k";
+        public const string Chart = "Dustline/Maps/NorthCape" + ShorelineRevision;
+        public const string Ground = "Dustline/Maps/NorthCapeGround" + ShorelineRevision;
         public const string SurfaceShader = "Dustline/Harbor Surface";
 
         public enum Finish { Asphalt, Concrete, Steel, Aggregate }

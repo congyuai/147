@@ -7,8 +7,6 @@ namespace Dustline
 {
     public sealed class WorldBuilder : MonoBehaviour
     {
-        const int GuardTeam = 3;
-
         public Material DarkMaterial { get; private set; }
         public NavigationGrid Navigation { get; private set; }
         public ExtractionZone Exit { get; private set; }
@@ -490,7 +488,7 @@ namespace Dustline
 
             var boss = PortLayout.HighValueCenter;
             if (!Navigation.CanStandAt(boss)) boss = PickGuardPoint(boss, random);
-            Register(boss, GuardTeam, BotRank.Boss);
+            Register(boss, 3, BotRank.Boss);
             for (int i = 0; i < 3; i++)
             {
                 candidates.Clear();
@@ -499,7 +497,7 @@ namespace Dustline
                 if (candidates.Count == 0)
                     foreach (var p in guardPoints)
                         if (!NearAny(p, taken, 7) && Navigation.CanStandAt(p)) candidates.Add(p);
-                Register(ChoosePost(), GuardTeam, BotRank.Elite);
+                Register(ChoosePost(), 3, BotRank.Elite);
             }
 
             Vector3 ChoosePost()
@@ -507,10 +505,10 @@ namespace Dustline
                 if (candidates.Count == 0) throw new InvalidOperationException("港区没有足够的安全出生点。");
                 return candidates[random.Next(candidates.Count)];
             }
-            void Register(Vector3 point, int team, BotRank rank)
+            void Register(Vector3 point, int patrolGroup, BotRank rank)
             {
                 taken.Add(point);
-                AddBot(point, team, taken.Count - 1, rank);
+                AddBot(point, patrolGroup, taken.Count - 1, rank);
             }
         }
 
@@ -536,12 +534,14 @@ namespace Dustline
             }
         }
 
-        void AddBot(Vector3 point, int team, int index, BotRank rank)
+        void AddBot(Vector3 point, int patrolGroup, int index, BotRank rank)
         {
             var bot = new GameObject("Local combatant " + (index + 1) + " " + rank);
             bot.transform.SetParent(transform, false);
             bot.transform.position = point + Vector3.up * .035f;
-            bot.AddComponent<BotController>().Initialize(session, team, index, rank);
+            // Preserve each post's patrol random stream independently of the shared faction.
+            int patrolSeed = unchecked((index + 1) * 486187739 ^ patrolGroup * 16777619);
+            bot.AddComponent<BotController>().Initialize(session, index, rank, patrolSeed);
         }
 
         static bool NearAny(Vector3 point, List<Vector3> others, float distance)

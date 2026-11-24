@@ -9,6 +9,10 @@ namespace Dustline
         internal const int Step = 3;
         internal const int Cells = (int)Size / Step;
         internal const float SeaY = -1.4f;
+        internal const float Boundary = 469f, QuayGradeEnd = 354f, SeaBedStart = QuayGradeEnd + Step;
+        internal const int SeaColumn = (int)((SeaBedStart + HalfSize) / Step);
+        internal const float QuayEdge = QuayGradeEnd + Step * .5f;
+        internal const float SeaBedY = -5.6f;
         internal const float GateY = 0, YardY = 2.3f, CustomsY = 8.2f, WorkshopY = 4.3f, RailY = 5.8f, QuayY = 2.1f;
         internal const float RiverRail = 15.5f;
         internal const float WalkGradient = 0.64f;
@@ -16,7 +20,7 @@ namespace Dustline
         internal readonly struct Bridge
         {
             internal readonly float X, Z, HalfLength, DeckY;
-            internal const float HalfWidth = 7.5f;
+            internal const float HalfWidth = 7.5f, DeckThickness = .58f;
             internal Bridge(float x, float y, float halfLength)
             { X = x; Z = RiverZ(x); DeckY = y; HalfLength = halfLength; }
 
@@ -112,6 +116,8 @@ namespace Dustline
 
         static float BankDistance(float x, float z) => Mathf.Abs(z - RiverZ(x));
 
+        internal static float RetainingWallStart(int side) => side > 0 ? 244f : 322f;
+
         internal static float RoadClearance(Vector2 point)
         {
             float d = float.PositiveInfinity;
@@ -135,6 +141,7 @@ namespace Dustline
 
         static float Sculpt(float x, float z)
         {
+            if (x >= SeaBedStart) return SeaBedY;
             float swells = 4.3f + 2.3f * Mathf.Sin((z + x * .37f) * .017f) + 1.55f * Mathf.Cos(x * .026f - z * .009f);
             float y = swells + 6.2f * Mathf.PerlinNoise(x * .014f + 144.7f, z * .014f + 75.9f) - 2.8f;
             y += 48 * Hill(x, z, -443, 64, 106, 203) + 29 * Hill(x, z, -427, -223, 87, 118)
@@ -150,15 +157,20 @@ namespace Dustline
             y = Mathf.Lerp(y, grade, road);
             foreach (var lot in lots) y = Mathf.Lerp(y, lot.Grade, 1 - Ease((lot.Outside(x, z) - 3f) / lot.Shoulder));
 
-            if (x > 345)
-            {
-                y = Mathf.Lerp(y, QuayY, Ease((x - 345) / 9));
-                y = Mathf.Lerp(y, -5.6f, Ease((x - 354) / 3));
-            }
+            y = Mathf.Max(y, SeaY + 1f);
+            if (x > 345) y = Mathf.Lerp(y, QuayY, Ease((x - 345) / (QuayGradeEnd - 345)));
 
-            float bank = BankDistance(x, z);
-            if (x < Shore + 4)
-                y = Mathf.Lerp(-5.8f + .35f * Mathf.Sin(x * .053f), y, Ease((bank - 6.8f) / 14.2f));
+            float offset = z - RiverZ(x), bank = Mathf.Abs(offset);
+            const float shoulder = 23.5f, shelf = SeaY + .85f;
+            float bankGrade = shelf + (bank - shoulder) * .42f;
+            if (bankGrade < y)
+            {
+                float bed = -5.8f + .35f * Mathf.Sin(x * .053f);
+                float soft = bank < shoulder ? Mathf.Lerp(bed, shelf, Ease((bank - 5f) / (shoulder - 5f))) : bankGrade;
+                float hard = Mathf.Lerp(bed, y, Ease((bank - 6.8f) / 14.2f));
+                float wall = RetainingWallStart(offset < 0 ? -1 : 1);
+                y = Mathf.Lerp(soft, hard, Ease((x - (wall - 12)) / 12));
+            }
 
             foreach (var bridge in Bridges)
             {
@@ -187,38 +199,47 @@ namespace Dustline
             return a + u * dx + v * dz;
         }
 
-        internal static float Floor(float x, float z)
+        static bool TryBridge(float x, float z, out Bridge span)
         {
             foreach (var bridge in Bridges)
-                if (bridge.Covers(x, z)) return bridge.DeckY;
-            return Ground(x, z);
+                if (bridge.Covers(x, z)) { span = bridge; return true; }
+            span = default;
+            return false;
         }
+
+        internal static float Floor(float x, float z) => TryBridge(x, z, out var bridge) ? bridge.DeckY : Ground(x, z);
 
         internal static bool TryWalk(float x, float z, out float y)
         {
             y = 0;
-            if (x <= -469 || x >= 354 || Mathf.Abs(z) >= 469) return false;
+            if (x <= -Boundary || x >= QuayGradeEnd || Mathf.Abs(z) >= Boundary) return false;
             foreach (var bridge in Bridges)
                 if (bridge.Covers(x, z, .5f)) { y = bridge.DeckY; return true; }
-            if (BankDistance(x, z) < RiverRail + .45f) return false;
+            float offset = z - RiverZ(x);
+            if (x >= RetainingWallStart(offset < 0 ? -1 : 1) && Mathf.Abs(offset) < RiverRail + .6f) return false;
             y = Sample(x, z, out float gradient);
             return y > SeaY + .45f && gradient <= WalkGradient * WalkGradient;
         }
 
-        internal static bool IsWater(float x, float z) => (x >= 354 || BankDistance(x, z) < 19) && Ground(x, z) < SeaY;
+        internal static bool TryWaterDepth(float x, float z, out float depth)
+        {
+            depth = Mathf.Abs(x) <= HalfSize && Mathf.Abs(z) <= HalfSize ? SeaY - Ground(x, z) : 0;
+            return depth > 0;
+        }
 
         internal static bool IsNatural(float x, float z)
         {
-            if (x >= 344 || RoadClearance(new Vector2(x, z)) < 4 || BankDistance(x, z) < RiverRail + 2) return false;
+            if (x >= 344 || RoadClearance(new Vector2(x, z)) < 4 || BankDistance(x, z) < 26f) return false;
             foreach (var lot in lots)
                 if (lot.Outside(x, z) < 2) return false;
             return true;
         }
 
-        internal static SurfaceKind Surface(float x, float z)
+        internal static SurfaceKind Surface(float x, float z) => Surface(x, z, Ground(x, z));
+
+        static SurfaceKind Surface(float x, float z, float ground)
         {
-            foreach (var bridge in Bridges)
-                if (bridge.Covers(x, z)) return SurfaceKind.Metal;
+            if (ground < SeaY) return SurfaceKind.Dirt;
             Vector2 p = new Vector2(x, z);
             float road = RoadClearance(p);
             if (road <= 0) return SurfaceKind.Asphalt;
@@ -231,7 +252,7 @@ namespace Dustline
             }
             foreach (var lot in lots)
                 if (lot.Area.Contains(p)) return lot.Surface;
-            if (BankDistance(x, z) < 18) return SurfaceKind.Dirt;
+            if (BankDistance(x, z) < 24f) return SurfaceKind.Dirt;
             if (road < 1.7f || x > 342) return SurfaceKind.Gravel;
             float patch = Mathf.PerlinNoise(x * .038f + 163.8f, z * .038f + 13.2f);
             return patch >= .48f ? SurfaceKind.Grass : SurfaceKind.Dirt;
@@ -239,16 +260,15 @@ namespace Dustline
 
         static float TrackDistance(float z) => Mathf.Min(Mathf.Abs(z - 233), Mathf.Min(Mathf.Abs(z - 253), Mathf.Abs(z - 294)));
 
-        internal static Color32 ColorAt(Vector2 p, bool map) => ColorAt(p, map, out _);
+        internal static Color32 ColorAt(Vector2 p, bool map) => ColorAt(p, map, Ground(p.x, p.y), out _);
 
-        static Color32 ColorAt(Vector2 p, bool map, out SurfaceKind surface)
+        static Color32 ColorAt(Vector2 p, bool map, float ground, out SurfaceKind surface)
         {
             float x = p.x, z = p.y;
             surface = SurfaceKind.Dirt;
-            bool bridge = false;
-            foreach (var span in Bridges)
-                if (span.Covers(x, z)) { bridge = true; break; }
-            if (!bridge && IsWater(x, z)) return new Color32(48, 77, 92, 255);
+            bool bridge = map && TryBridge(x, z, out _);
+            if (map && !bridge && ground < SeaY)
+                return Color32.Lerp(new Color32(70, 108, 111, 255), new Color32(48, 77, 92, 255), (SeaY - ground) / 3.4f);
             if (map)
                 foreach (var roof in roofs)
                     if (roof.Contains(p))
@@ -260,7 +280,7 @@ namespace Dustline
             float noise = Mathf.PerlinNoise(x * .27f + 101.1f, z * .27f + 44.2f) - .5f;
             float patch = Mathf.PerlinNoise(x * .038f + 163.8f, z * .038f + 13.2f);
             Color c;
-            surface = Surface(x, z);
+            surface = bridge ? SurfaceKind.Metal : Surface(x, z, ground);
             switch (surface)
             {
                 case SurfaceKind.Asphalt: c = map ? new Color(.24f, .29f, .31f) : new Color(.295f, .315f, .318f); break;
@@ -269,16 +289,17 @@ namespace Dustline
                 case SurfaceKind.Metal: c = new Color(.41f, .45f, .46f); break;
                 case SurfaceKind.Wood: c = new Color(.39f, .33f, .26f); break;
                 default:
-                    float green = Ease((patch - .35f) / .27f) * Ease((BankDistance(x, z) - 14) / 9);
+                    float green = Ease((patch - .35f) / .27f) * Ease((BankDistance(x, z) - 22f) / 9);
                     c = Color.Lerp(new Color(.43f, .366f, .286f), new Color(.29f, .39f, .27f), green);
-                    float rock = Ease((Ground(x, z) - 33f) / 33) * Ease((noise + .31f) / .34f);
+                    float rock = Ease((ground - 33f) / 33) * Ease((noise + .31f) / .34f);
                     c = Color.Lerp(c, new Color(.45f, .455f, .426f), rock);
+                    c = Color.Lerp(new Color(.25f, .29f, .27f), c, Ease((ground - SeaY + .6f) / 1.1f));
                     break;
             }
             float shade = noise * (map ? .035f : .115f) + (patch - .5f) * .105f;
             if (map)
             {
-                float floor = Floor(x, z);
+                float floor = bridge ? Floor(x, z) : ground;
                 shade += Mathf.Clamp(floor * .0015f, -.012f, .12f);
                 if (surface == SurfaceKind.Grass || surface == SurfaceKind.Dirt)
                     shade -= Mathf.Clamp01(1f - Mathf.Abs(Mathf.Repeat(floor + 6f, 12f) - 6f) * 1.9f) * .045f;
@@ -288,7 +309,9 @@ namespace Dustline
 
         internal static Color32 PaintedColor(Vector2 p, float texel, out SurfaceKind surface)
         {
-            Color32 baseColor = ColorAt(p, false, out surface);
+            float ground = Ground(p.x, p.y);
+            Color32 baseColor = ColorAt(p, false, ground, out surface);
+            if (ground < SeaY) return baseColor;
             for (int i = 0; i < Exits.Count; i++)
             {
                 var exit = Exits[i];

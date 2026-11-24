@@ -83,7 +83,12 @@ namespace Dustline.Editor
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
                 var source = PortRaster.Bake(chart);
-                try { File.WriteAllBytes(path, source.EncodeToPNG()); }
+                try
+                {
+                    byte[] bytes = source.EncodeToPNG();
+                    using var destination = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                    destination.Write(bytes, 0, bytes.Length);
+                }
                 finally { UnityEngine.Object.DestroyImmediate(source); }
             }
             Import(path);

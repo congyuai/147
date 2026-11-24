@@ -5,6 +5,9 @@ namespace Dustline.Editor
 {
     public static partial class ProjectSetup
     {
+        static string AmmoProductName(AmmoFamily family, int tier) => ItemDefinition.CaliberName(family) + (tier == 2 ? "标准弹"
+            : tier == 1 && family == AmmoFamily.Amber ? "训练弹" : " · " + tier + " 级弹");
+
         static void PrepareEquipment(ItemCatalog catalog, LootTable ordinary, LootTable high)
         {
             var rifle = catalog.Find("rifle").Weapon;
@@ -12,10 +15,10 @@ namespace Dustline.Editor
             rifle.FrameInterface = "feed-a";
             rifle.MoveFactor = 1f;
             EditorUtility.SetDirty(rifle);
-            AmmoLine("amber", "琥珀", AmmoFamily.Amber, "ammo", "琥珀标准弹", 2, 60);
-            AmmoLine("copper", "铜线", AmmoFamily.Copper, "ammo_copper", "铜线轻型弹", 2, 45);
-            AmmoLine("silver", "银标", AmmoFamily.Silver, "ammo_silver", "银标远程弹", 4, 30);
-            AmmoLine("slate", "岩纹", AmmoFamily.Slate, "ammo_slate", "岩纹散弹", 3, 24);
+            AmmoLine("amber", AmmoFamily.Amber, "ammo", 2, 60);
+            AmmoLine("copper", AmmoFamily.Copper, "ammo_copper", 2, 45);
+            AmmoLine("silver", AmmoFamily.Silver, "ammo_silver", 4, 30);
+            AmmoLine("slate", AmmoFamily.Slate, "ammo_slate", 3, 24);
             Gun("dust_pistol", "潮汐 P-9 手枪", WeaponForm.Pistol, "ammo_copper", AmmoFamily.Copper, "feed-c", 2, 1, 12, 19, .22f, 58, 1.24f, .75f, 1.07f, 1, false, 132, new Color(.40f,.50f,.54f));
             Gun("dust_smg", "浪花 S-12 冲锋枪", WeaponForm.Smg, "ammo_copper", AmmoFamily.Copper, "feed-c", 3, 2, 24, 17, .11f, 72, 1.68f, .88f, 1.03f, 1, true, 218, new Color(.24f,.34f,.36f));
             Gun("dust_shotgun", "堤岸 S-6 霰弹枪", WeaponForm.Shotgun, "ammo_slate", AmmoFamily.Slate, "feed-d", 4, 1, 6, 12, .65f, 55, 2.37f, 1.28f, .94f, 5, false, 238, new Color(.49f,.32f,.22f));
@@ -137,15 +140,16 @@ namespace Dustline.Editor
                 return item;
             }
 
-            void AmmoLine(string key, string familyName, AmmoFamily family, string standardId, string standardTitle, int baseValue, int stack)
+            void AmmoLine(string key, AmmoFamily family, string standardId, int baseValue, int stack)
             {
                 for (int tier = 1; tier <= WeaponRules.AmmoTierCount; tier++)
                 {
                     bool training = tier == 1 && family == AmmoFamily.Amber;
                     string id = tier == 2 ? standardId : training ? "ammo_amber_range" : "ammo_" + key + "_" + tier;
-                    string title = tier == 2 ? standardTitle : training ? "琥珀训练弹" : familyName + " · " + tier + " 级弹";
+                    string title = AmmoProductName(family, tier);
                     var item = Need(id, title, ItemKind.Ammo, 1, 1, stack, .013f, tier == 2 || training ? baseValue : baseValue + (tier * tier - 1) / 2,
                         new Color(.62f,.55f,.33f));
+                    item.DisplayName = title;
                     item.AmmoFamily = family;
                     item.Tier = tier;
                     item.Penetration = WeaponRules.PenetrationForTier(tier);

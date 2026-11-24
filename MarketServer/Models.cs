@@ -26,6 +26,9 @@ internal sealed record MarketRequest
 
 internal sealed record ItemStack
 {
+    public const int MainArea = 0;
+    public const int RecoveryArea = 3; // Matches the client's CargoArea.Legacy.
+
     public required string InstanceId { get; init; }
     public required string ItemId { get; init; }
     public required int Quantity { get; init; }

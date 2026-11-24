@@ -10,9 +10,32 @@ namespace Dustline.Editor
     {
         static readonly int[] ArmorBaseline = { 5000, 10000, 50000, 250000, 500000, 2000000 };
 
+        const int CakeWidth = 3, CakeHeight = 4;
+
+        static int ScopePrice(string id) => id switch
+        {
+            "part_scope_6" => 80_000, "part_scope_8" => 100_000,
+            "part_scope_12" => 180_000, "part_scope_15" => 240_000,
+            _ => 0
+        };
+
+        static bool StoreItemsPrepared(ItemCatalog catalog)
+        {
+            var cake = catalog.Find(LootTable.BirthdayCake);
+            if (cake == null || cake.Width != CakeWidth || cake.Height != CakeHeight) return false;
+            foreach (var id in new[] { "part_scope_6", "part_scope_8", "part_scope_12", "part_scope_15" })
+                if (catalog.Find(id)?.Value != ScopePrice(id)) return false;
+            foreach (var item in catalog.Items)
+                if (item.Kind == ItemKind.Ammo && item.AmmoFamily != AmmoFamily.None
+                    && item.DisplayName != AmmoProductName(item.AmmoFamily, item.Tier)) return false;
+            return true;
+        }
+
         static void PrepareEconomy(ItemCatalog catalog, LootTable ordinary, LootTable high)
         {
-            var cake = EnsureDefinition(LootTable.BirthdayCake, "生日蛋糕", ItemKind.Valuable, 2, 2, .9f, Color.white);
+            var cake = EnsureDefinition(LootTable.BirthdayCake, "生日蛋糕", ItemKind.Valuable, CakeWidth, CakeHeight, .9f, Color.white);
+            cake.Width = CakeWidth;
+            cake.Height = CakeHeight;
             cake.Special = true;
             cake.NotForSale = true;
             cake.FixedResale = LootTable.BirthdayResale;
@@ -67,6 +90,7 @@ namespace Dustline.Editor
                         _ => 1
                     };
                 int baseline = ArmorBaseline[Math.Max(0, Math.Min(item.Tier - 1, 5))];
+                int scopePrice = ScopePrice(item.Id);
                 item.Value = item.Kind switch
                 {
                     ItemKind.Armor => item.Id == "vest_" + item.Tier ? baseline : (int)(baseline * (item.Id == "armor" ? .82 : 1.08)),
@@ -75,6 +99,7 @@ namespace Dustline.Editor
                     ItemKind.Rig => (int)(baseline * (.26 + item.Storage.Capacity / 100d)),
                     ItemKind.Weapon => baseline + (int)(900 * item.UnitWeight) + 200 * (item.Weapon?.MagazineSize ?? 0),
                     ItemKind.Ammo => Math.Max(18, baseline / 750) + 5 * item.Tier,
+                    ItemKind.Part when scopePrice > 0 => scopePrice,
                     ItemKind.Part => (int)(baseline * (.17 + .017 * item.Part.Magnification)) + 14 * item.Part.Capacity,
                     ItemKind.Medicine => baseline / 14 + 85 * item.Uses,
                     ItemKind.Valuable => baseline / (item.Id == "relic" ? 3 : 5),

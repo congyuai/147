@@ -15,6 +15,7 @@ namespace Dustline
         Transform model;
         WeaponVisual weaponView;
         MeshFilter[] geometry;
+        const float BladeYaw = -90f;
         float yaw, pitch, zoom = 1f;
         float referenceAspect, referenceSize;
         readonly bool workshop;
@@ -74,7 +75,7 @@ namespace Dustline
             if (!keepAngle)
             {
                 bool weapon = item == null || item.Weapon != null;
-                yaw = weapon ? (!workshop && item?.Weapon?.Melee == false ? -82f : 82f)
+                yaw = weaponView?.IsMelee == true ? BladeYaw : weapon ? (workshop ? 82f : -82f)
                     : item.Equipment != EquipmentSlot.None ? 151f : item.Kind == ItemKind.Part ? 63f : 42f;
                 pitch = weapon ? 7f : item.Id == "birthday_cake" ? 12f : 22f;
                 zoom = 1f;
@@ -126,7 +127,7 @@ namespace Dustline
 
         internal void ResetView()
         {
-            yaw = 82f;
+            yaw = weaponView?.IsMelee == true ? BladeYaw : 82f;
             pitch = 7f;
             zoom = 1f;
         }
@@ -172,7 +173,7 @@ namespace Dustline
             {
                 if (referenceSize <= 0f || Mathf.Abs(referenceAspect - aspect) > .005f)
                 {
-                    var initial = ProjectedBounds(Quaternion.Euler(7f, 82f, 0f)).extents;
+                    var initial = ProjectedBounds(Quaternion.Euler(7f, weaponView?.IsMelee == true ? BladeYaw : 82f, 0f)).extents;
                     referenceAspect = aspect;
                     referenceSize = Mathf.Max(initial.y / .91f, initial.x / (aspect * .69f));
                 }

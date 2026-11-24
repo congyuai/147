@@ -1,5 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -152,24 +154,21 @@ namespace Dustline.Tests
 
                 world.SpawnBots();
                 int regular = 0, elite = 0, boss = 0;
-                int guardTeam = -1;
-                foreach (var bot in world.GetComponentsInChildren<BotController>())
+                var bots = world.GetComponentsInChildren<BotController>();
+                AssertFaction(bots);
+                foreach (var bot in bots)
                 {
                     Vector3 post = bot.transform.position;
-                    int team = bot.GetComponent<Health>().Team;
                     bool inStation = PortLayout.HighValueArea.Contains(new Vector2(post.x, post.z));
                     Assert.That(inStation, Is.EqualTo(bot.Rank != BotRank.Regular));
                     if (bot.Rank == BotRank.Regular)
                     {
                         regular++;
                         Assert.That((world.Spawn - post).sqrMagnitude, Is.GreaterThan(95 * 95));
-                        Assert.That(team, Is.InRange(1, 2));
                     }
                     else
                     {
                         if (bot.Rank == BotRank.Boss) boss++; else elite++;
-                        if (guardTeam < 0) guardTeam = team;
-                        Assert.That(team, Is.EqualTo(guardTeam).And.GreaterThan(2));
                         var destination = world.PickGuardPoint(post, new System.Random(7));
                         Assert.That(PortLayout.HighValueArea.Contains(new Vector2(destination.x, destination.z)), Is.True);
                     }
@@ -179,6 +178,87 @@ namespace Dustline.Tests
                 Assert.That(boss, Is.EqualTo(1));
             }
             yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator QuarryRetainsFourteenRegularPostsWithTheSameFaction()
+        {
+            using (var built = new PortWorldFixture(quarry: true))
+            {
+                var world = built.World;
+                world.SpawnBots();
+                var bots = world.GetComponentsInChildren<BotController>();
+                Assert.That(bots.Length, Is.EqualTo(14));
+                Assert.That(bots.All(bot => bot.Rank == BotRank.Regular), Is.True);
+                AssertFaction(bots);
+                foreach (var exit in world.Exits)
+                    Assert.That(world.Navigation.Path(world.Spawn, exit.transform.position), Is.Not.Empty);
+            }
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator WornKitProtectsAndTransfersTheSameInstancesOnlyOnce()
+        {
+            using (var built = new PortWorldFixture())
+            {
+                var world = built.World;
+                world.SpawnBots();
+                var bot = world.GetComponentsInChildren<BotController>().Single(actor => actor.Rank == BotRank.Boss);
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var kit = (GridInventory)typeof(BotController).GetProperty("Equipment", flags).GetValue(bot);
+                Assert.That(kit.Items.Count, Is.EqualTo(5));
+                var body = bot.GetComponentInChildren<OperatorVisual>();
+                foreach (var slot in new[] { EquipmentSlot.Helmet, EquipmentSlot.Armor, EquipmentSlot.Rig, EquipmentSlot.Pack })
+                {
+                    var item = kit.Equipped(slot);
+                    var view = body.transform.Find("Worn " + slot + " / " + item.ItemId);
+                    Assert.That(view, Is.Not.Null);
+                    Assert.That(view.GetComponent<SkinnedMeshRenderer>().sharedMesh.vertexCount, Is.GreaterThan(64));
+                }
+                var weapon = kit.Equipped(EquipmentSlot.Weapon);
+                Assert.That(body.WeaponMount.GetComponentInChildren<WeaponVisual>().Form, Is.EqualTo(kit.Catalog.Find(weapon.ItemId).Weapon.Form));
+                Assert.That(weapon.LoadedAmmo, Is.EqualTo(20));
+                weapon.LoadedAmmo = 7;
+                built.ForceLargeSupplyRoll();
+                var armor = kit.Equipped(EquipmentSlot.Armor);
+                var health = bot.GetComponent<Health>();
+                int initialWear = armor.Wear;
+                health.Damage(14f, null);
+                Assert.That(armor.Wear, Is.GreaterThan(initialWear));
+                Assert.That(health.Current, Is.GreaterThan(health.Maximum - 14f));
+                health.Damage(999f, null);
+                health.Damage(999f, null);
+                Assert.That(armor.Wear, Is.EqualTo(kit.Catalog.Find(armor.ItemId).Durability));
+                Assert.That(kit.Items, Is.Empty);
+                Assert.That(bot.GetComponent<CharacterController>().enabled, Is.False);
+                Assert.That(body.WeaponMount.GetComponentInChildren<WeaponVisual>(), Is.Null);
+                Assert.That(body.GetComponentsInChildren<SkinnedMeshRenderer>().Length, Is.EqualTo(1));
+                var drop = world.GetComponentsInChildren<LootContainer>().Single(box => box.DisplayName == "首领物资");
+                Assert.That(drop.Inventory.Find(armor.InstanceId).Wear, Is.EqualTo(armor.Wear));
+                Assert.That(drop.Inventory.Find(weapon.InstanceId).LoadedAmmo, Is.EqualTo(7));
+                Assert.That(drop.Inventory.Find(weapon.InstanceId).LoadedAmmoId, Is.EqualTo(weapon.LoadedAmmoId));
+                Assert.That(drop.Inventory.Find(weapon.InstanceId).Slot, Is.EqualTo(EquipmentSlot.None));
+                var supplies = world.GetComponentsInChildren<LootContainer>().Single(box => box.DisplayName == "首领物资 · 补给");
+                Assert.That(supplies.Inventory.Count("test-large-supply"), Is.EqualTo(1));
+            }
+            yield return null;
+        }
+
+        static void AssertFaction(BotController[] bots)
+        {
+            Assert.That(bots, Is.Not.Empty);
+            var actors = bots.Select(bot => bot.GetComponent<Health>()).ToArray();
+            Assert.That(actors.Select(actor => actor.Team).Distinct().ToArray(), Is.EqualTo(new[] { 1 }));
+            var uniforms = bots.Select(bot => bot.GetComponentInChildren<OperatorVisual>().GetComponent<SkinnedMeshRenderer>().sharedMaterial);
+            Assert.That(uniforms.Distinct().Count(), Is.EqualTo(1));
+            var canEngage = typeof(BotController).GetMethod("CanEngage", BindingFlags.Instance | BindingFlags.NonPublic);
+            for (int i = 0; i < bots.Length; i++)
+                for (int j = 0; j < actors.Length; j++)
+                    Assert.That(canEngage.Invoke(bots[i], new object[] { actors[j] }), Is.EqualTo(false));
+            float remaining = actors[0].Current;
+            actors[0].Damage(13f, actors[actors.Length - 1]);
+            Assert.That(actors[0].Current, Is.EqualTo(remaining));
         }
 
         [UnityTest]
@@ -305,7 +385,7 @@ namespace Dustline.Tests
         readonly LootTable high = ScriptableObject.CreateInstance<LootTable>();
         internal WorldBuilder World { get; }
 
-        internal PortWorldFixture()
+        internal PortWorldFixture(bool quarry = false)
         {
             try
             {
@@ -315,6 +395,18 @@ namespace Dustline.Tests
                 AddItem("medkit", ItemKind.Medicine);
                 AddItem("bandage", ItemKind.Medicine);
                 AddItem("armor", ItemKind.Armor);
+                var rifle = AddItem("rifle", ItemKind.Weapon);
+                rifle.Width = 3;
+                rifle.Height = 2;
+                rifle.Weapon = ScriptableObject.CreateInstance<WeaponDefinition>();
+                rifle.Weapon.AmmoId = "ammo";
+                for (int i = 1; i <= 5; i += 2)
+                {
+                    AddItem("helmet_" + i, ItemKind.Helmet);
+                    AddItem("vest_" + i, ItemKind.Armor);
+                    AddItem("pack_" + i, ItemKind.Pack);
+                    AddItem("rig_" + i, ItemKind.Rig);
+                }
                 AddItem("circuit", ItemKind.Valuable);
                 AddItem(HighItem, ItemKind.Valuable);
                 catalog.RebuildIndex();
@@ -326,9 +418,21 @@ namespace Dustline.Tests
                 Assign(session, "LootTable", regular);
                 Assign(session, "HighValueLootTable", high);
                 Assign(session, "World", World);
-                World.Build(session);
+                if (quarry)
+                    typeof(WorldBuilder).GetMethod("Build", BindingFlags.Instance | BindingFlags.NonPublic)
+                        .Invoke(World, new object[] { session, true });
+                else World.Build(session);
             }
             catch { Dispose(); throw; }
+        }
+
+        internal void ForceLargeSupplyRoll()
+        {
+            var supply = AddItem("test-large-supply", ItemKind.Valuable);
+            supply.Width = 3;
+            supply.Height = 4;
+            catalog.RebuildIndex();
+            regular.Entries = Entries(supply.Id);
         }
 
         internal static Vector3 Floor(float x, float z)
@@ -343,13 +447,24 @@ namespace Dustline.Tests
             return new Vector3(x, y, z);
         }
 
-        void AddItem(string id, ItemKind kind)
+        ItemDefinition AddItem(string id, ItemKind kind)
         {
             var item = ScriptableObject.CreateInstance<ItemDefinition>();
             item.Id = id;
             item.Kind = kind;
-            item.MaxStack = 99;
+            item.MaxStack = item.Equipment == EquipmentSlot.None ? 99 : 1;
+            if (item.Equipment != EquipmentSlot.None) item.Width = item.Height = 2;
+            if (kind == ItemKind.Armor || kind == ItemKind.Pack) item.Height = 3;
+            if (kind == ItemKind.Pack || kind == ItemKind.Rig)
+                item.Storage = new StorageSpec { Columns = 4, Rows = 3 };
+            if (kind == ItemKind.Armor || kind == ItemKind.Helmet)
+            {
+                item.Coverage = kind == ItemKind.Armor ? BodyCoverage.Chest : BodyCoverage.Head;
+                item.Durability = 60;
+                item.Tier = 2;
+            }
             catalog.Items.Add(item);
+            return item;
         }
 
         static List<LootEntry> Entries(params string[] ids)
@@ -367,7 +482,11 @@ namespace Dustline.Tests
             world.SetActive(false);
             Object.Destroy(world);
             Object.Destroy(owner);
-            foreach (var item in catalog.Items) Object.Destroy(item);
+            foreach (var item in catalog.Items)
+            {
+                if (item.Weapon != null) Object.Destroy(item.Weapon);
+                Object.Destroy(item);
+            }
             Object.Destroy(catalog);
             Object.Destroy(regular);
             Object.Destroy(high);

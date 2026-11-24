@@ -31,9 +31,13 @@ namespace Dustline
         CharacterController motor;
         OperatorStyle style;
         int team;
-        bool artBound, externalGrip, fallen, basePoseCaptured;
-        readonly Transform[] gear = new Transform[4];
-        readonly string[] gearIds = new string[4];
+        bool artBound, externalGrip, showcasePose, fallen, basePoseCaptured;
+        Material fabric;
+        Transform backMount;
+        float packDepth;
+        readonly SkinnedMeshRenderer[] gear = new SkinnedMeshRenderer[4];
+        readonly ItemDefinition[] gearItems = new ItemDefinition[4];
+        readonly int[] gearWear = new int[4];
         float speed, run, duck, pronePose, cycle, breath;
         Quaternion baseLocalRotation;
         Vector3 baseLocalPosition;
@@ -46,7 +50,7 @@ namespace Dustline
             var root = new GameObject(style == OperatorStyle.Female ? "Operator | Female" : "Operator | Male") { layer = layer };
             root.transform.SetParent(parent, false);
             var visual = root.AddComponent<OperatorVisual>();
-            visual.Build(style == OperatorStyle.Female ? style : OperatorStyle.Male, Mathf.Clamp(team, 0, 2), layer);
+            visual.Build(style == OperatorStyle.Female ? style : OperatorStyle.Male, team == 0 ? 0 : 1, layer);
             return visual;
         }
 
@@ -82,6 +86,7 @@ namespace Dustline
             skin.quality = SkinQuality.Bone2;
             skin.skinnedMotionVectors = false;
             skin.updateWhenOffscreen = false;
+            skin.reflectionProbeUsage = ReflectionProbeUsage.Off;
             if (isActiveAndEnabled) BindArt();
             ApplyMotion();
         }
@@ -93,10 +98,11 @@ namespace Dustline
 
         void BindArt()
         {
-            OperatorMesh.Acquire(style, team, out Mesh mesh, out Material material);
+            OperatorMesh.Acquire(style, team, out Mesh mesh, out fabric);
             artBound = true;
-            skin.sharedMaterial = material;
+            skin.sharedMaterial = fabric;
             skin.sharedMesh = mesh;
+            foreach (var part in gear) if (part != null) part.sharedMaterial = fabric;
             UpdateBounds();
         }
 
@@ -105,10 +111,12 @@ namespace Dustline
             skin.localBounds = fallen
                 ? new Bounds(new Vector3(0f, 0.25f, -0.87f), new Vector3(1.75f, 0.90f, 2.10f))
                 : new Bounds(new Vector3(0f, 0.92f, 0.025f), new Vector3(1.75f, 2.24f, 1.70f));
+            foreach (var part in gear) if (part != null) part.localBounds = skin.localBounds;
         }
 
         void OnDestroy()
         {
+            foreach (var item in gearItems) if (!ReferenceEquals(item, null)) OperatorMesh.ReleaseWearable(style, item);
             if (artBound) OperatorMesh.Release(style, team);
         }
 
@@ -194,7 +202,13 @@ namespace Dustline
                 0.003f * breathing - 0.033f * run, 0.023f * run + 0.017f * bend);
             WeaponMount.localRotation = Quaternion.Euler(1.1f * wave + 12f * run - 17f * bend - 14f * pronePose, -11f - 2f * wave - 10f * run,
                 1.9f * wave - 11f * run);
-            if (!externalGrip) ApplyArms(WeaponMount.TransformPoint(RightRestGrip), WeaponMount.TransformPoint(LeftRestGrip));
+            if (showcasePose)
+            {
+                if (carriedWeapon != null && !carriedWeapon.IsMelee)
+                    WeaponMount.SetLocalPositionAndRotation(new Vector3(.025f, .082f + .003f * breathing, .218f), Quaternion.Euler(15f, -58f, 2f));
+                ApplyShowcaseArms();
+            }
+            else if (!externalGrip) ApplyArms(WeaponMount.TransformPoint(RightRestGrip), WeaponMount.TransformPoint(LeftRestGrip));
         }
 
         float HipLimit(Vector3 ankle, float hipZ)
@@ -274,36 +288,99 @@ namespace Dustline
 
         internal void SyncGear(GridInventory bag)
         {
-            Set(0, EquipmentSlot.Helmet, Bone.Head, new Vector3(0,.126f,.005f), .90f);
-            Set(1, EquipmentSlot.Armor, Bone.Chest, new Vector3(0,.032f,.113f), .96f);
-            Set(2, EquipmentSlot.Rig, Bone.Chest, new Vector3(0,-.158f,.160f), .83f);
-            Set(3, EquipmentSlot.Pack, Bone.Chest, new Vector3(0,-.055f,-.190f), .90f);
+            Set(0, EquipmentSlot.Helmet);
+            Set(1, EquipmentSlot.Armor);
+            Set(2, EquipmentSlot.Rig);
+            Set(3, EquipmentSlot.Pack);
 
-            void Set(int index, EquipmentSlot slot, Bone at, Vector3 offset, float scale)
+            void Set(int index, EquipmentSlot slot)
             {
                 var stack = bag?.Equipped(slot);
-                if (gearIds[index] == stack?.ItemId) return;
-                gearIds[index] = stack?.ItemId;
-                if (gear[index] != null) { gear[index].gameObject.SetActive(false); Destroy(gear[index].gameObject); }
-                if (stack == null) { gear[index] = null; return; }
-                gear[index] = ItemProp.Create(Joint(at), bag.Catalog.Find(stack.ItemId), stack, bag.Catalog);
-                gear[index].localPosition = offset;
-                if (slot == EquipmentSlot.Pack) gear[index].localRotation = Quaternion.Euler(0f, 180f, 0f);
-                gear[index].localScale = Vector3.one * scale;
-                var field = gear[index].GetComponent<MeshRenderer>();
-                if (field != null && skin.shadowCastingMode == ShadowCastingMode.ShadowsOnly) field.shadowCastingMode = ShadowCastingMode.ShadowsOnly;
+                var item = bag?.Catalog.Find(stack?.ItemId);
+                if (gearItems[index] != item)
+                {
+                    if (gear[index] != null)
+                    {
+                        gear[index].gameObject.SetActive(false);
+                        gear[index].sharedMesh = null;
+                        Destroy(gear[index].gameObject);
+                        gear[index] = null;
+                    }
+                    if (gearItems[index] != null) OperatorMesh.ReleaseWearable(style, gearItems[index]);
+                    gearItems[index] = item;
+                    gearWear[index] = -1;
+                    if (slot == EquipmentSlot.Pack)
+                    {
+                        packDepth = item != null ? OperatorMesh.PackDepth(item) : 0f;
+                        PositionBackMount();
+                    }
+                    if (item != null)
+                    {
+                        var node = new GameObject("Worn " + slot + " / " + item.Id) { layer = gameObject.layer };
+                        node.transform.SetParent(transform, false);
+                        var part = node.AddComponent<SkinnedMeshRenderer>();
+                        part.rootBone = transform;
+                        part.bones = bones;
+                        part.quality = SkinQuality.Bone2;
+                        part.skinnedMotionVectors = false;
+                        part.shadowCastingMode = skin.shadowCastingMode;
+                        part.reflectionProbeUsage = ReflectionProbeUsage.Off;
+                        part.sharedMaterial = fabric;
+                        part.sharedMesh = OperatorMesh.AcquireWearable(style, item);
+                        part.localBounds = skin.localBounds;
+                        gear[index] = part;
+                    }
+                }
+                if (item == null || gearWear[index] == stack.Wear) return;
+                gearWear[index] = stack.Wear;
+                float wear = item.Durability > 0 ? (float)stack.Wear / item.Durability : 0f;
+                var tone = team == 0 && item.Tint.maxColorComponent > .01f ? Color.Lerp(Color.white, item.Tint, .25f) : Color.white;
+                var block = new MaterialPropertyBlock();
+                block.SetColor("_BaseColor", Color.Lerp(tone, new Color(.65f, .62f, .57f), .38f * wear));
+                gear[index].SetPropertyBlock(block);
             }
         }
 
         internal Transform CreateBackMount()
         {
-            var mount = new GameObject("Back weapon mount") { layer = gameObject.layer }.transform;
-            mount.SetParent(Joint(Bone.Chest), false);
-            mount.SetLocalPositionAndRotation(new Vector3(.14f, .08f, -.38f), Quaternion.Euler(-69f, 180f, -24f));
-            return mount;
+            if (backMount != null) return backMount;
+            backMount = new GameObject("Back weapon mount") { layer = gameObject.layer }.transform;
+            backMount.SetParent(Joint(Bone.Chest), false);
+            PositionBackMount();
+            return backMount;
         }
 
+        void PositionBackMount()
+        {
+            if (backMount == null) return;
+            backMount.SetLocalPositionAndRotation(new Vector3(.065f, .094f, -.204f - packDepth),
+                Quaternion.LookRotation(new Vector3(-.40f, -.91f, -.09f), new Vector3(-.92f, .39f, .08f)));
+        }
+
+        internal Vector3 FootContact(bool right) => Joint(right ? Bone.RightBoot : Bone.LeftBoot).TransformPoint(new Vector3(0f, -ankleHeight, .041f));
+
         internal void BindWeaponView(WeaponVisual weapon) => carriedWeapon = weapon;
+
+        internal void PoseShowcase(WeaponVisual held)
+        {
+            showcasePose = true;
+            carriedWeapon = held;
+            ApplyMotion();
+        }
+
+        void ApplyShowcaseArms()
+        {
+            if (carriedWeapon != null)
+            {
+                ApplyArms(carriedWeapon.RightGrip, carriedWeapon.LeftGrip);
+                return;
+            }
+            float x = Rest(Bone.RightUpper, style).x + .021f;
+            PlaceArm(Bone.RightUpper, Bone.RightLower, Bone.RightHand, 1f,
+                transform.TransformPoint(new Vector3(x, .921f, .076f)), Quaternion.Euler(-6f, 3f, 7f));
+            PlaceArm(Bone.LeftUpper, Bone.LeftLower, Bone.LeftHand, -1f,
+                transform.TransformPoint(new Vector3(-x, .921f, .063f)), Quaternion.Euler(-5f, -4f, -8f));
+        }
 
         public void PoseArms(Vector3 rightHand, Vector3 leftHand)
         {
@@ -383,7 +460,7 @@ namespace Dustline
             transform.localRotation = baseLocalRotation;
             Quaternion lay = Quaternion.Euler(-90f, 0f, 0f);
             Transform hips = Joint(Bone.Hips);
-            hips.localPosition = lay * restHips + Vector3.up * OperatorMesh.BackDepth;
+            hips.localPosition = lay * restHips + Vector3.up * Mathf.Max(.142f, .128f + packDepth);
             hips.localRotation = lay;
             Joint(Bone.Chest).localRotation = Quaternion.identity;
             Joint(Bone.Head).localRotation = Quaternion.Euler(-8f, 18f, 8f);
@@ -410,6 +487,7 @@ namespace Dustline
         public void ShadowsOnly()
         {
             if (skin != null) skin.shadowCastingMode = ShadowCastingMode.ShadowsOnly;
+            foreach (var part in gear) if (part != null) part.shadowCastingMode = ShadowCastingMode.ShadowsOnly;
         }
 
         Transform Joint(Bone b) => bones[(int)b];

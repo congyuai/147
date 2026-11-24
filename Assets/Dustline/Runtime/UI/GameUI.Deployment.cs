@@ -58,24 +58,6 @@ namespace Dustline
             operatorPreview.SyncGear(session.Loadout);
         }
 
-        void DrawPreparedSummary(RectTransform root, float width)
-        {
-            var bag = session.Loadout;
-            Label(root, "装备价值  " + bag.EquipmentValue.ToString("N0"), 18, 11, 55, width - 22, 28, color: Aqua);
-            Label(root, "负重  " + bag.Weight.ToString("0.0") + " / " + bag.MaxWeight.ToString("0.#") + " 千克",
-                16, 11, 85, width - 22, 24, color: Muted);
-            for (int i = 0; i < LoadoutSlots.Hands.Length; i++)
-            {
-                var slot = LoadoutSlots.Hands[i];
-                string name = ItemName(bag.Equipped(slot), slot == EquipmentSlot.Melee ? session.BoundBladeName : "空槽");
-                Label(root, SlotName(slot), 14, 11, 122 + 51 * i, width - 22, 18, color: Muted);
-                var title = Label(root, name, 17, 11, 142 + 51 * i, width - 22, 25, TextAnchor.MiddleLeft);
-                title.resizeTextForBestFit = true;
-                title.resizeTextMinSize = 12;
-                title.resizeTextMaxSize = 17;
-            }
-        }
-
         void OpenStrategicMap()
         {
             int site = PlayerPrefs.GetInt(LastSiteKey, -1), tier = PlayerPrefs.GetInt(LastTierKey, 0);
@@ -350,8 +332,8 @@ namespace Dustline
                 BuildPortrait(portrait);
                 Button(portrait, "切换正背面", (portraitW - 145) * .5f, 549, 145, 37, () => operatorPreview?.RotateView());
                 Label(root, "整备要求", 24, right, 119, 219, 39, color: Aqua);
-                Label(root, "最低装备价值  " + difficulty.RequiredValue.ToString("N0") + "\n等级要求  " + difficulty.RequiredLevel,
-                    17, right, 163, 220, 76, color: Muted);
+                Label(root, "最低装备价值  " + difficulty.RequiredValue.ToString("N0") + "\n等级要求  " + difficulty.RequiredLevel
+                    + "\n行动时限  " + (difficulty.Seconds / 60) + " 分钟", 17, right, 163, 220, 96, color: Muted);
                 Label(root, "确认后返回大厅，\n点出发才加载关卡。", 16, right, 535, 220, 57, color: Muted);
                 Button(root, "确认配装", right, 605, 225, 54, () => Confirm(false), true);
                 DrawPicker();
@@ -438,6 +420,13 @@ namespace Dustline
                 var popup = ItemPopup(root, anchor, def, item, null);
                 bool buying = item == null;
                 int price = def.Value;
+                if (buying && slot == EquipmentSlot.None && def.Kind == ItemKind.Ammo)
+                {
+                    AddAmmoPurchaseControls(popup, def, session.Loadout, "确认购买并携带", () => root == panelRoot && !ProcessInventoryBackKey(),
+                        (qty, quote) => (session.TryPrepareSupply(def.Id, qty, true, quote, out var why), why), Build);
+                    PlaceItemPopup(popup, root, anchor);
+                    return;
+                }
                 if (buying) Label(popup, "价格 " + ((long)price * amount).ToString("N0") + " / 余额 " + session.Profile.Credits.ToString("N0"),
                     15, 12, 164, 304, 26, TextAnchor.MiddleLeft, Amber);
                 popup.sizeDelta = new Vector2(330, buying ? 244 : 216);

@@ -11,8 +11,9 @@ namespace Dustline
     [Serializable]
     public sealed class ProfileData
     {
-        public const int CurrentVersion = 4;
+        public const int CurrentVersion = 5;
         public const int StartingCredits = 1000000;
+        public const int MaxGmLevelBonus = 98;
         public int Version = 1;
         public int Credits = 1000;
         public List<ItemStack> Stash = new List<ItemStack>();
@@ -22,6 +23,7 @@ namespace Dustline
         public int Extractions;
         public string BoundBladeId = "";
         public bool BirthdayGiftClaimed;
+        public int GmLevelBonus;
 
         internal ProfileData WithInventory(GridInventory stash, GridInventory carried, int credits)
         {
@@ -50,6 +52,7 @@ namespace Dustline
         public string UpgradeBackupPath => Path + ".pre-v2.bak";
         public string LoadoutUpgradeBackupPath => Path + ".pre-v3.bak";
         public string EconomyUpgradeBackupPath => Path + ".pre-v4.bak";
+        public string CakeUpgradeBackupPath => Path + ".pre-v5.bak";
 
         public ProfileData Load() => ReadProfile(out _, out _);
 
@@ -118,7 +121,13 @@ namespace Dustline
                 if (previous != null)
                 {
                     if (profile.Version < previous.Version) throw new InvalidDataException("Cannot downgrade an existing profile.");
-                    if (previous.Version < 4 && profile.Version == 4)
+                    if (previous.Version < 5 && profile.Version == 5)
+                    {
+                        BackupOriginal(CakeUpgradeBackupPath, original);
+                        if (previous.Version < 4 && !File.Exists(EconomyUpgradeBackupPath))
+                            BackupOriginal(EconomyUpgradeBackupPath, original);
+                    }
+                    else if (previous.Version < 4 && profile.Version == 4)
                         BackupOriginal(EconomyUpgradeBackupPath, original);
                     else if (previous.Version < 3 && profile.Version == 3)
                         BackupOriginal(LoadoutUpgradeBackupPath, original);
@@ -182,6 +191,9 @@ namespace Dustline
                 throw new InvalidDataException("Invalid profile version, balances, counters or item lists.");
             if (!IsValidBladeId(profile.BoundBladeId))
                 throw new InvalidDataException("Invalid bound blade ID.");
+            if (profile.GmLevelBonus < 0 || profile.GmLevelBonus > ProfileData.MaxGmLevelBonus
+                || profile.Version < 5 && profile.GmLevelBonus != 0)
+                throw new InvalidDataException("Invalid GM level bonus.");
 
             var ids = new HashSet<string>(StringComparer.Ordinal);
             ValidateItems(profile.Stash, ids, profile.Version);
@@ -261,6 +273,11 @@ namespace Dustline
                             case "Extractions":
                                 if (ReadInteger() < 0)
                                     Fail("Negative profile balance or counter.");
+                                break;
+                            case "GmLevelBonus":
+                                int bonus = ReadInteger();
+                                if (bonus < 0 || bonus > ProfileData.MaxGmLevelBonus)
+                                    Fail("Invalid GM level bonus.");
                                 break;
                             case "RaidInProgress":
                             case "BirthdayGiftClaimed":

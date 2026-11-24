@@ -18,15 +18,17 @@ internal sealed record AccountState
 
 internal sealed record PersistedState
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
     public required int Version { get; init; }
     public required Dictionary<string, AccountState> Accounts { get; init; }
     public required Dictionary<string, Listing> Listings { get; init; }
+    public HashSet<string> RecoveryListingIds { get; init; } = new(StringComparer.Ordinal);
 
     public PersistedState Draft() => this with
     {
         Accounts = Accounts.ToDictionary(pair => pair.Key, pair => pair.Value.Draft(), StringComparer.Ordinal),
-        Listings = new(Listings, StringComparer.Ordinal)
+        Listings = new(Listings, StringComparer.Ordinal),
+        RecoveryListingIds = new(RecoveryListingIds, StringComparer.Ordinal)
     };
 
     public static PersistedState Empty() => new() { Version = CurrentVersion, Accounts = [], Listings = [] };
@@ -47,8 +49,24 @@ internal sealed class StateStore : IDisposable
         catch (IOException ex) { throw new IOException("The market state lock is unavailable.", ex); }
         try
         {
-            current = Load();
-            Validate(current, catalog);
+            var loaded = Load();
+            Validate(loaded, catalog);
+            if (loaded.Version == 1)
+            {
+                loaded = loaded with
+                {
+                    Version = PersistedState.CurrentVersion,
+                    Accounts = loaded.Accounts.ToDictionary(pair => pair.Key, pair => pair.Value with
+                    {
+                        Items = Stash.MigrateCakes(catalog, pair.Value.Items)
+                    }, StringComparer.Ordinal),
+                    RecoveryListingIds = loaded.Listings.Values.Where(listing => listing.Item.ItemId == Catalog.Cake)
+                        .Select(listing => listing.Id).ToHashSet(StringComparer.Ordinal)
+                };
+                Validate(loaded, catalog);
+                Save(loaded);
+            }
+            current = loaded;
         }
         catch
         {
@@ -123,7 +141,9 @@ internal sealed class StateStore : IDisposable
 
     private static void Validate(PersistedState state, Catalog catalog)
     {
-        if (state.Version != PersistedState.CurrentVersion || state.Accounts == null || state.Listings == null)
+        bool oldCakeLayout = state.Version == 1;
+        if ((!oldCakeLayout && state.Version != PersistedState.CurrentVersion) || state.Accounts == null || state.Listings == null ||
+            state.RecoveryListingIds == null || oldCakeLayout && state.RecoveryListingIds.Count != 0)
             throw new InvalidDataException("Invalid market state version or structure.");
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (name, account) in state.Accounts)
@@ -132,24 +152,28 @@ internal sealed class StateStore : IDisposable
                 account.Items == null || account.History == null || account.Receipts == null ||
                 account.History.Any(entry => entry == null) || account.Receipts.Any(pair => pair.Value == null))
                 throw new InvalidDataException("Invalid persisted account.");
-            foreach (var item in account.Items) ValidateItem(item);
-            _ = new Stash(catalog, account.Items);
+            foreach (var item in account.Items) ValidateItem(item, allowRecovery: !oldCakeLayout);
+            _ = new Stash(catalog, account.Items, oldCakeLayout);
         }
         foreach (var (id, listing) in state.Listings)
         {
             if (listing == null || !Identifiers.Valid(id) || id != listing.Id || listing.Seller == null ||
                 !state.Accounts.ContainsKey(listing.Seller) || listing.UnitPrice <= 0)
                 throw new InvalidDataException("Invalid persisted listing.");
-            ValidateItem(listing.Item);
+            ValidateItem(listing.Item, allowRecovery: false);
             if (listing.UnitPrice > long.MaxValue / listing.Item.Quantity)
                 throw new InvalidDataException("Invalid persisted listing total.");
         }
 
-        void ValidateItem(ItemStack item)
+        if (state.RecoveryListingIds.Any(id => !Identifiers.Valid(id) || state.Listings.GetValueOrDefault(id)?.Item.ItemId != Catalog.Cake))
+            throw new InvalidDataException("Invalid recovery escrow.");
+
+        void ValidateItem(ItemStack item, bool allowRecovery)
         {
             if (item == null || !Identifiers.Valid(item.ItemId) || !Identifiers.Valid(item.InstanceId) ||
                 catalog.Find(item.ItemId) is not { } definition || item.Quantity < 1 || item.Quantity > definition.MaxStack ||
-                item.Area != 0 || item.Slot != 0 || !catalog.ValidCondition(item) ||
+                (item.Area != ItemStack.MainArea && !(allowRecovery && item.Area == ItemStack.RecoveryArea && item.ItemId == Catalog.Cake)) ||
+                item.Slot != 0 || !catalog.ValidCondition(item) ||
                 ((definition.MaxStack > 1 || item.ItemId == Catalog.Cake) && !item.IsFungible()) || !ids.Add(item.InstanceId))
                 throw new InvalidDataException("Invalid persisted item.");
             foreach (var link in item.Parts.Links())

@@ -4,7 +4,7 @@ using Bone = Dustline.OperatorVisual.Bone;
 
 namespace Dustline
 {
-    internal static class OperatorMesh
+    internal static partial class OperatorMesh
     {
         internal const float BackDepth = 0.250f;
 
@@ -15,20 +15,20 @@ namespace Dustline
             Skin, SkinShade, Hair, HairLine, Eye, Stitch, CoatTrim, GlovePlate
         }
 
-        static readonly Mesh[] shapes = new Mesh[2];
+        static readonly Mesh[] shapes = new Mesh[4];
         static readonly Mesh[] sleeves = new Mesh[2];
-        static readonly int[] shapeUsers = new int[2];
+        static readonly int[] shapeUsers = new int[4];
         static readonly int[] sleeveUsers = new int[2];
-        static readonly Material[] materials = new Material[3];
-        static readonly Texture2D[] palettes = new Texture2D[3];
-        static readonly Texture2D[] finishes = new Texture2D[3];
-        static readonly int[] paletteUsers = new int[3];
+        static readonly Material[] materials = new Material[2];
+        static readonly Texture2D[] palettes = new Texture2D[2];
+        static readonly Texture2D[] finishes = new Texture2D[2];
+        static readonly int[] paletteUsers = new int[2];
 
         public static void Acquire(OperatorStyle style, int team, out Mesh mesh, out Material material)
         {
-            int shape = (int)style;
+            int shape = (int)style + 2 * team;
             if (materials[team] == null) CreatePalette(team);
-            if (shapes[shape] == null) shapes[shape] = Build(style);
+            if (shapes[shape] == null) shapes[shape] = Build(style, team != 0);
             shapeUsers[shape]++;
             paletteUsers[team]++;
             mesh = shapes[shape];
@@ -37,7 +37,7 @@ namespace Dustline
 
         public static void Release(OperatorStyle style, int team)
         {
-            int shape = (int)style;
+            int shape = (int)style + 2 * team;
             if (--shapeUsers[shape] == 0)
             {
                 Dispose(shapes[shape]);
@@ -98,12 +98,14 @@ namespace Dustline
             if (shader == null) shader = Shader.Find("Universal Render Pipeline/Unlit");
             if (shader == null) throw new System.InvalidOperationException("Operator visuals need URP Lit or Unlit in the shader library.");
 
-            int signal = team == 1 ? 0xBD503F : team == 2 ? 0xA8B057 : 0x50A6B3;
-            int backing = team == 1 ? 0x693A34 : team == 2 ? 0x565D39 : 0x315B67;
-            int[] colors = {
-                0x416166, 0x31464C, 0x678086, 0x57615B, 0x3D4947, 0x465760, 0x748386, 0x3F4240,
-                0x253035, 0x22282B, 0x514742, 0x95A49F, 0xE2A14C, 0xDAD2AA, signal, backing,
-                0xB78C74, 0x986854, 0x322A26, 0x524239, 0x3B3331, 0x9B8E72, 0x516F74, 0x596265
+            int[] colors = team == 0 ? new[] {
+                0x3D6267, 0x324C52, 0x6D8A87, 0x525C53, 0x3F4742, 0x485856, 0x75847D, 0x3C4642,
+                0x263238, 0x282D31, 0x534843, 0x95A49F, 0xC78D48, 0xEAE5D4, 0xD3A362, 0x33555C,
+                0xB78C74, 0x986854, 0x322A26, 0x524239, 0x3B3331, 0x96A59C, 0x5C797B, 0x556160
+            } : new[] {
+                0xBCC0BC, 0x939B99, 0xD8DAD4, 0x868F91, 0x646D72, 0x8D9698, 0xBEC3C0, 0x555E62,
+                0x343B41, 0x303639, 0x565859, 0xA5AEAE, 0xB6BCB7, 0xF1EFDF, 0xEFEDE2, 0x414D56,
+                0xAC826D, 0x825C4C, 0x362F2D, 0x554640, 0x3B3331, 0xA3ADAB, 0xD8DBD1, 0x686F73
             };
             var pixels = new Color32[PaletteWidth];
             for (int i = 0; i < colors.Length; i++)
@@ -153,20 +155,21 @@ namespace Dustline
             materials[team] = material;
         }
 
-        static Mesh Build(OperatorStyle style)
+        static Mesh Build(OperatorStyle style, bool faction)
         {
             var b = new Sculpt();
             bool f = style == OperatorStyle.Female;
-            float w = f ? 0.150f : 0.174f;
+            float w = TorsoWidth(style);
             float h = OperatorVisual.Rest(Bone.Hips, style).y;
             b.Loft(Finish.TwillDark, 12, 0.80f,
                 R(Bone.Hips, h - 0.070f, 0f, -0.009f, f ? 0.151f : 0.143f, 0.090f, 0.093f),
                 R(Bone.Hips, h - 0.023f, 0f, -0.013f, f ? 0.187f : 0.173f, 0.109f, 0.111f),
                 R(Bone.Hips, h + 0.045f, 0f, -0.012f, f ? 0.173f : 0.163f, 0.109f, 0.111f),
                 R(Bone.Hips, 1.024f, 0f, -0.007f, w - 0.006f, 0.099f, 0.092f));
-            b.Loft(Finish.Canvas, 14, 0.79f,
+            b.Cloth(Finish.Canvas, 18, 0.84f, .0038f,
                 R(Bone.Hips, 0.991f, 0f, -0.006f, w + 0.001f, 0.100f, 0.095f),
-                R(Bone.Hips, 1.057f, 0f, -0.008f, w - 0.015f, 0.105f, 0.095f, Bone.Chest, 0.20f),
+                R(Bone.Hips, 1.036f, 0f, -0.006f, w - 0.005f, 0.101f, 0.094f),
+                R(Bone.Hips, 1.068f, 0f, -0.008f, w - 0.015f, 0.105f, 0.095f, Bone.Chest, 0.20f),
                 R(Bone.Chest, 1.151f, 0f, 0.002f, w - 0.010f, 0.110f, 0.096f, Bone.Hips, 0.26f),
                 R(Bone.Chest, 1.274f, 0f, 0.006f, w + 0.015f, f ? 0.114f : 0.109f, 0.099f),
                 R(Bone.Chest, 1.386f, 0f, 0.003f, w + 0.023f, 0.100f, 0.100f),
@@ -182,7 +185,7 @@ namespace Dustline
                 R(Bone.Head, 1.554f, 0f, 0.011f, 0.053f, 0.047f, 0.047f),
                 R(Bone.Head, 1.582f, 0f, 0.011f, 0.062f, 0.052f, 0.055f));
 
-            Gear(b, w, f);
+            Uniform(b, w, faction);
             Head(b, f);
             Arm(b, style, 1f, Bone.RightUpper, Bone.RightLower, Bone.RightHand);
             Arm(b, style, -1f, Bone.LeftUpper, Bone.LeftLower, Bone.LeftHand);
@@ -191,51 +194,41 @@ namespace Dustline
             return b.ToMesh(style);
         }
 
-        static void Gear(Sculpt b, float w, bool trimCut)
-        {
-            b.Loft(Finish.Webbing, 12, 0.70f,
-                R(Bone.Hips, 0.994f, 0f, -0.005f, w + 0.010f, 0.111f, 0.100f),
-                R(Bone.Hips, 1.041f, 0f, -0.006f, w + 0.003f, 0.113f, 0.106f, Bone.Chest, 0.12f));
-            b.Tile(Finish.Metal, Bone.Hips, V(0f, 1.015f, 0.119f), V(0.060f, 0.039f, 0.018f), 0.006f);
-            b.Tile(Finish.Ink, Bone.Hips, V(0f, 1.015f, 0.129f), V(0.034f, 0.017f, 0.006f), 0.003f);
+        static float TorsoWidth(OperatorStyle style) => style == OperatorStyle.Female ? .150f : .174f;
 
-            b.Loft(Finish.Webbing, 12, 0.65f,
-                R(Bone.Chest, 1.080f, 0f, 0.009f, w - 0.003f, 0.124f, 0.114f, Bone.Hips, 0.18f),
-                R(Bone.Chest, 1.161f, 0f, 0.005f, w + 0.001f, 0.126f, 0.118f),
-                R(Bone.Chest, 1.312f, 0f, 0.003f, w + 0.005f, 0.125f, 0.112f),
-                R(Bone.Chest, 1.408f, 0f, 0.004f, w - 0.013f, 0.108f, 0.106f));
-            b.Panel(Finish.Shell, Bone.Chest, V(0f, 1.266f, 0.131f), 0.050f,
-                P(-w + 0.035f, -0.132f), P(w - 0.035f, -0.132f), P(w - 0.016f, -0.097f),
-                P(w - 0.019f, 0.078f), P(w - 0.064f, 0.127f), P(-w + 0.064f, 0.127f),
-                P(-w + 0.019f, 0.078f), P(-w + 0.016f, -0.097f));
-            b.Tile(Finish.TeamDark, Bone.Chest, V(0f, 1.324f, 0.160f), V(w * 1.48f, 0.046f, 0.014f), 0.011f);
-            b.Tile(Finish.Team, Bone.Chest, V(-0.036f, 1.324f, 0.169f), V(0.085f, 0.025f, 0.008f), 0.006f);
-            b.Tile(Finish.Chalk, Bone.Chest, V(0.049f, 1.323f, 0.169f), V(0.029f, 0.009f, 0.008f), 0.003f, V(0f, 0f, 19f));
+        static void Uniform(Sculpt b, float w, bool faction)
+        {
+            const Bone chest = Bone.Chest, hips = Bone.Hips;
+            b.Loft(Finish.Webbing, 16, .80f,
+                R(hips, .997f, 0f, -.006f, w + .011f, .109f, .104f),
+                R(hips, 1.030f, 0f, -.008f, w + .003f, .109f, .100f, chest, .12f));
+            b.Tile(Finish.Metal, hips, V(0f, 1.013f, .108f), V(.054f, .028f, .012f), .006f);
+            for (int i = -1; i <= 1; i += 2)
+            {
+                float x = i * w * .51f;
+                b.Tile(Finish.CanvasDark, chest, V(x, 1.283f, .092f), V(w * .45f, .104f, .018f), .011f, V(0, i * 31f, i * 5f));
+                b.Tile(Finish.Seam, chest, V(x, 1.315f, .104f), V(w * .44f, .016f, .009f), .004f, V(0, i * 31f, i * 5f));
+                if (!faction) b.Tile(Finish.CoatTrim, chest, V(i * w * .52f, 1.444f, .056f),
+                    V(.067f, .042f, .016f), .009f, V(-21f, i * 11f, i * 23f));
+            }
+            if (!faction)
+                b.Cloth(Finish.CoatTrim, 14, .85f, .002f,
+                    R(chest, 1.430f, 0f, -.028f, w * .55f, .040f, .057f, tilt: .019f),
+                    R(chest, 1.463f, 0f, -.023f, w * .47f, .043f, .052f, tilt: .011f),
+                    R(chest, 1.493f, 0f, -.018f, .060f, .050f, .049f, Bone.Head, .12f));
+            b.Tile(faction ? Finish.Seam : Finish.Stitch, chest, V(0f, 1.295f, .114f), V(.010f, .263f, .008f), .003f);
+            b.Tile(Finish.CanvasDark, chest, V(0f, 1.138f, .110f), V(.011f, .067f, .007f), .003f);
+            Mark(b, chest, V(.074f, 1.361f, .092f), 21f, .73f);
+        }
+
+        static void Mark(Sculpt b, Bone bone, Vector3 center, float yaw, float scale)
+        {
+            var euler = V(0f, yaw, 0f);
+            var turn = Quaternion.Euler(euler);
+            b.Tile(Finish.TeamDark, bone, center, V(.078f, .045f, .010f) * scale, .006f, euler);
             for (int i = -1; i <= 1; i++)
-            {
-                float x = i * (w - 0.050f) * 0.69f;
-                b.Tile(Finish.CanvasDark, Bone.Chest, V(x, 1.186f, 0.162f), V(0.060f, 0.094f, 0.047f), 0.009f);
-                b.Tile(Finish.Seam, Bone.Chest, V(x, 1.220f, 0.185f), V(0.059f, 0.025f, 0.012f), 0.006f);
-            }
-            b.Tile(Finish.Ink, Bone.Chest, V(0f, 1.258f, -0.158f), V(w * 1.80f, trimCut ? 0.283f : 0.333f, 0.176f), 0.027f);
-            b.Tile(Finish.Shell, Bone.Chest, V(0f, 1.268f, -0.221f), V(w * 1.58f, trimCut ? 0.208f : 0.252f, 0.048f), 0.022f);
-            b.Tile(Finish.CoatTrim, Bone.Chest, V(0f, 1.428f, trimCut ? -0.135f : -0.168f),
-                V(w * 0.68f, 0.047f, 0.024f), 0.008f, V(21f, 0f, 0f));
-            b.Tile(Finish.Team, Bone.Chest, V(0f, 1.343f, 0.005f - BackDepth), V(w * 1.16f, 0.043f, 0.010f), 0.008f);
-            b.Tile(Finish.ShellRim, Bone.Chest, V(0f, 1.245f, 0.005f - BackDepth), V(w * 1.16f, 0.013f, 0.010f), 0.004f);
-            b.Tile(Finish.ShellRim, Bone.Chest, V(0f, 1.211f, 0.005f - BackDepth), V(w * 0.94f, 0.012f, 0.010f), 0.004f);
-            for (int s = -1; s <= 1; s += 2)
-            {
-                float x = s * (w - 0.057f);
-                b.Tile(Finish.Webbing, Bone.Chest, V(x, 1.400f, 0.082f), V(0.038f, 0.116f, 0.025f), 0.007f, V(-34f, 0f, s * 9f));
-                b.Tile(Finish.Webbing, Bone.Chest, V(x, 1.417f, -0.078f), V(0.039f, 0.112f, 0.032f), 0.008f, V(42f, 0f, 0f));
-                b.Tile(Finish.Metal, Bone.Chest, V(x, 1.382f, 0.114f), V(0.039f, 0.023f, 0.013f), 0.004f, V(0f, 0f, s * 9f));
-                b.Tile(Finish.CanvasDark, Bone.Hips, V(s * w, 0.986f, 0.034f), V(0.080f, 0.105f, 0.046f), 0.012f,
-                    V(-4f, s * 55f, s * 10f));
-                b.Tile(Finish.Stitch, Bone.Chest, V(s * (w - 0.025f), 1.123f, 0.126f),
-                    V(0.009f, 0.094f, 0.005f), 0.003f, V(0f, s * 34f, s * 12f));
-            }
-            b.Tile(Finish.Amber, Bone.Chest, V(w - 0.038f, 1.252f, 0.158f), V(0.018f, 0.040f, 0.011f), 0.005f, V(0f, 0f, 8f));
+                b.Tile(Finish.Team, bone, center + turn * (V(.016f * i, -.002f + .004f * (1 - Mathf.Abs(i)), .006f) * scale),
+                    V(.009f, .024f - .003f * Mathf.Abs(i), .004f) * scale, .0015f, V(0f, yaw, -24f));
         }
 
         static void Head(Sculpt b, bool f)
@@ -259,16 +252,16 @@ namespace Dustline
             if (f)
             {
                 b.Loft(Finish.HairLine, 10, 1f,
-                    R(head, 1.621f, 0f, -0.096f, 0.026f, 0.024f, 0.024f),
-                    R(head, 1.651f, 0f, -0.100f, 0.037f, 0.026f, 0.029f),
-                    R(head, 1.678f, 0f, -0.099f, 0.031f, 0.024f, 0.028f));
-                b.Tile(Finish.Webbing, head, V(0f, 1.657f, -0.122f), V(0.060f, 0.021f, 0.020f), 0.007f, V(-12f, 0f, -6f));
+                    R(head, 1.578f, 0f, -0.067f, 0.026f, 0.023f, 0.023f),
+                    R(head, 1.607f, 0f, -0.087f, 0.034f, 0.025f, 0.027f),
+                    R(head, 1.640f, 0f, -0.090f, 0.031f, 0.023f, 0.025f));
+                b.Tile(Finish.Webbing, head, V(0f, 1.604f, -0.111f), V(0.054f, 0.019f, 0.018f), 0.006f, V(-12f, 0f, -6f));
                 b.Loft(Finish.Hair, 10, 0.86f,
-                    R(head, 1.619f, 0f, -0.128f, 0.022f, 0.022f, 0.023f),
-                    R(head, 1.646f, 0.004f, -0.135f, 0.043f, 0.037f, 0.033f),
-                    R(head, 1.686f, 0.005f, -0.135f, 0.042f, 0.036f, 0.035f),
-                    R(head, 1.710f, 0.005f, -0.122f, 0.023f, 0.023f, 0.022f));
-                b.Tile(Finish.HairLine, head, V(0.011f, 1.673f, -0.169f), V(0.054f, 0.012f, 0.009f), 0.005f, V(0f, -2f, -22f));
+                    R(head, 1.562f, 0f, -0.116f, 0.021f, 0.022f, 0.022f),
+                    R(head, 1.584f, 0.004f, -0.119f, 0.040f, 0.035f, 0.032f),
+                    R(head, 1.617f, 0.005f, -0.117f, 0.037f, 0.033f, 0.032f),
+                    R(head, 1.640f, 0.005f, -0.109f, 0.021f, 0.024f, 0.021f));
+                b.Tile(Finish.HairLine, head, V(0.010f, 1.601f, -0.149f), V(0.048f, 0.011f, 0.008f), 0.004f, V(0f, -2f, -22f));
             }
             else
             {
@@ -310,9 +303,9 @@ namespace Dustline
             Vector3 h = OperatorVisual.Rest(hand, style);
             float x = a.x, z = a.z;
             float k = style == OperatorStyle.Female ? 0.91f : 1f;
-            b.Loft(Finish.Canvas, 10, 0.86f,
-                R(elbow, h.y + 0.005f, x, z, 0.038f * k, 0.032f * k, 0.035f * k),
-                R(elbow, h.y + 0.049f, x, z, 0.041f * k, 0.038f * k, 0.041f * k),
+            b.Cloth(Finish.Canvas, 12, 0.90f, .0030f * k,
+                R(elbow, h.y + 0.005f, x, z, 0.034f * k, 0.032f * k, 0.033f * k),
+                R(elbow, h.y + 0.041f, x, z, 0.038f * k, 0.037f * k, 0.040f * k),
                 R(elbow, e.y - 0.071f, x, z - 0.005f, 0.052f * k, 0.044f * k, 0.050f * k),
                 R(elbow, e.y - 0.027f, x, z, 0.054f * k, 0.049f * k, 0.052f * k, upper, 0.21f),
                 R(upper, e.y + 0.010f, x, z, 0.054f * k, 0.050f * k, 0.052f * k, elbow, 0.46f),
@@ -320,14 +313,9 @@ namespace Dustline
                 R(upper, a.y - 0.065f, x, z, 0.069f * k, 0.063f * k, 0.061f * k),
                 R(upper, a.y + 0.010f, x - s * 0.010f, z - 0.002f, 0.073f * k, 0.064f * k, 0.067f * k, Bone.Chest, 0.20f),
                 R(upper, a.y + 0.052f, x - s * 0.020f, z - 0.004f, 0.050f * k, 0.043f * k, 0.044f * k, Bone.Chest, 0.46f));
-            b.Tile(Finish.ShellRim, upper, V(x + s * 0.046f * k, a.y - 0.033f, z + 0.034f),
-                V(0.103f * k, 0.132f, 0.051f), 0.019f, V(0f, s * 54f, s * 10f));
-            b.Tile(Finish.TeamDark, upper, V(x + s * 0.067f * k, a.y - 0.038f, z + 0.052f),
-                V(0.080f * k, 0.074f, 0.023f), 0.014f, V(0f, s * 54f, s * 10f));
-            b.Tile(Finish.Team, upper, V(x + s * 0.076f * k, a.y - 0.039f, z + 0.059f),
-                V(0.062f * k, 0.035f, 0.007f), 0.008f, V(0f, s * 54f, s * 10f));
-            b.Tile(Finish.Shell, elbow, V(x + s * 0.015f, h.y + 0.092f, z - 0.036f),
-                V(0.068f * k, 0.122f, 0.026f), 0.015f, V(0f, -s * 28f, s * 4f));
+            Mark(b, upper, V(x + s * .051f * k, a.y - .055f, z + .048f * k), s * 49f, .86f * k);
+            b.Tile(Finish.CanvasDark, elbow, V(x + s * 0.014f, h.y + 0.090f, z - 0.038f),
+                V(0.066f * k, 0.108f, 0.014f), 0.015f, V(0f, -s * 27f, s * 4f));
             b.Loft(Finish.CanvasDark, 8, 0.81f,
                 R(elbow, h.y - 0.013f, x, z, 0.036f * k, 0.034f * k, 0.034f * k, hand, 0.18f),
                 R(elbow, h.y + 0.029f, x, z, 0.043f * k, 0.039f * k, 0.042f * k));
@@ -361,9 +349,10 @@ namespace Dustline
             Vector3 n = OperatorVisual.Rest(knee, style);
             float x = u.x;
             float w = style == OperatorStyle.Female ? 0.077f : 0.084f;
-            b.Loft(Finish.Twill, 12, 0.82f,
+            b.Cloth(Finish.Twill, 14, 0.87f, .004f,
                 R(knee, 0.147f, x, -0.002f, 0.041f, 0.044f, 0.044f, foot, 0.25f),
-                R(knee, 0.211f, x, -0.005f, 0.048f, 0.052f, 0.054f),
+                R(knee, 0.186f, x, -0.004f, 0.047f, 0.048f, 0.049f),
+                R(knee, 0.213f, x, -0.005f, 0.048f, 0.052f, 0.054f),
                 R(knee, n.y - 0.147f, x, -0.013f, 0.060f, 0.057f, 0.065f),
                 R(knee, n.y - 0.047f, x, -0.005f, 0.061f, 0.062f, 0.061f, thigh, 0.17f),
                 R(knee, n.y + 0.006f, x, 0.002f, 0.064f, 0.065f, 0.066f, thigh, 0.47f),
@@ -377,27 +366,23 @@ namespace Dustline
                 V(0f, s * 54f, s * 5f));
             b.Tile(Finish.Chalk, thigh, V(x + s * 0.067f, u.y - 0.209f, 0.057f), V(0.070f, 0.012f, 0.013f), 0.004f,
                 V(0f, s * 43f, s * 5f));
-            b.Tile(Finish.Webbing, knee, V(x, n.y - 0.035f, 0.043f), V(0.133f, 0.122f, 0.077f), 0.019f, V(-7f, 0f, 0f));
-            b.Panel(Finish.Shell, knee, V(x, n.y - 0.003f, 0.079f), 0.038f,
-                P(-0.038f, -0.060f), P(0.037f, -0.060f), P(0.056f, -0.033f), P(0.058f, 0.026f),
-                P(0.040f, 0.045f), P(-0.039f, 0.045f), P(-0.056f, 0.027f), P(-0.054f, -0.034f));
-            b.Tile(Finish.ShellRim, knee, V(x, n.y + 0.012f, 0.100f), V(0.080f, 0.016f, 0.012f), 0.005f);
-            b.Tile(Finish.Amber, knee, V(x + s * 0.028f, n.y - 0.032f, 0.100f), V(0.026f, 0.016f, 0.008f), 0.005f);
+            b.Tile(Finish.TwillDark, knee, V(x, n.y - 0.011f, 0.044f), V(0.119f, 0.136f, 0.054f), 0.024f, V(-7f, 0f, 0f));
+            b.Tile(Finish.Stitch, knee, V(x, n.y - 0.041f, 0.073f), V(0.075f, 0.006f, 0.006f), 0.002f, V(-7f, 0f, 0f));
 
             float boot = style == OperatorStyle.Female ? 0.060f : 0.064f;
             b.Loft(Finish.Rubber, 12, 0.68f,
-                R(foot, 0f, x, 0.045f, boot - 0.004f, 0.126f, 0.121f),
-                R(foot, 0.014f, x, 0.047f, boot + 0.002f, 0.137f, 0.126f),
-                R(foot, 0.037f, x, 0.048f, boot + 0.002f, 0.135f, 0.123f),
-                R(foot, 0.049f, x, 0.047f, boot - 0.002f, 0.126f, 0.116f));
+                R(foot, 0f, x, 0.035f, boot - 0.005f, 0.108f, 0.094f),
+                R(foot, 0.011f, x, 0.038f, boot, 0.116f, 0.098f),
+                R(foot, 0.033f, x, 0.040f, boot + 0.001f, 0.117f, 0.098f),
+                R(foot, 0.044f, x, 0.039f, boot - 0.002f, 0.112f, 0.095f));
             b.Loft(Finish.Leather, 12, 0.76f,
-                R(foot, 0.039f, x, 0.047f, boot, 0.130f, 0.117f),
-                R(foot, 0.062f, x, 0.045f, boot - 0.002f, 0.130f, 0.115f),
-                R(foot, 0.081f, x, 0.032f, boot - 0.005f, 0.131f, 0.095f),
+                R(foot, 0.035f, x, 0.039f, boot - 0.001f, 0.114f, 0.096f),
+                R(foot, 0.055f, x, 0.037f, boot - 0.002f, 0.115f, 0.094f),
+                R(foot, 0.078f, x, 0.027f, boot - 0.005f, 0.113f, 0.086f),
                 R(foot, 0.109f, x, 0.010f, boot - 0.009f, 0.101f, 0.069f),
                 R(foot, 0.148f, x, -0.001f, boot - 0.014f, 0.062f, 0.053f, knee, 0.25f),
                 R(foot, 0.197f, x, -0.001f, boot - 0.011f, 0.052f, 0.049f, knee, 0.74f));
-            b.Tile(Finish.Ink, foot, V(x, 0.060f, 0.143f), V(boot * 1.69f, 0.032f, 0.068f), 0.010f, V(-6f, 0f, 0f));
+            b.Tile(Finish.Ink, foot, V(x, 0.052f, 0.123f), V(boot * 1.55f, 0.023f, 0.053f), 0.009f, V(-6f, 0f, 0f));
             for (int i = 0; i < 3; i++)
             {
                 b.Tile(Finish.Webbing, foot, V(x, 0.138f - 0.013f * i, 0.058f + 0.024f * i),
@@ -455,7 +440,11 @@ namespace Dustline
                 indices = new List<int>(capacity * 3);
             }
 
-            public void Loft(Finish finish, int sides, float shape, params Ring[] rings)
+            public void Loft(Finish finish, int sides, float shape, params Ring[] rings) => Surface(finish, sides, shape, 0f, true, rings);
+            public void Cloth(Finish finish, int sides, float shape, float fold, params Ring[] rings) => Surface(finish, sides, shape, fold, true, rings);
+            public void Shell(Finish finish, int sides, float shape, params Ring[] rings) => Surface(finish, sides, shape, 0f, false, rings);
+
+            void Surface(Finish finish, int sides, float shape, float fold, bool closeBase, Ring[] rings)
             {
                 int first = positions.Count;
                 for (int i = 0; i < rings.Length; i++)
@@ -466,11 +455,13 @@ namespace Dustline
                         float angle = 2f * Mathf.PI * j / sides;
                         float dx = Curve(Mathf.Sin(angle), shape);
                         float dz = Curve(Mathf.Cos(angle), shape);
-                        Add(r.Center + V(r.Width * dx, r.Tilt * dz, dz * (dz >= 0f ? r.Front : r.Back)), r.Weight, finish);
+                        float ripple = i == 0 || i == rings.Length - 1 ? 0f : fold *
+                            (.68f * Mathf.Sin(3f * angle + i * 1.93f) + .32f * Mathf.Cos(5f * angle - i * 1.16f));
+                        Add(r.Center + V((r.Width + ripple) * dx, r.Tilt * dz, dz * ((dz >= 0f ? r.Front : r.Back) + ripple)), r.Weight, finish);
                     }
                     if (i > 0) Bridge(first + sides * (i - 1), sides);
                 }
-                Cap(first, sides, false, finish);
+                if (closeBase) Cap(first, sides, false, finish);
                 Cap(first + sides * (rings.Length - 1), sides, true, finish);
             }
 
@@ -543,7 +534,7 @@ namespace Dustline
                 indices.Add(c);
             }
 
-            public Mesh ToMesh(OperatorStyle style, bool armsOnly = false)
+            public Mesh ToMesh(OperatorStyle style, bool armsOnly = false, string label = null)
             {
                 const int firstArm = (int)Bone.RightUpper;
                 int first = armsOnly ? firstArm : 0;
@@ -561,7 +552,7 @@ namespace Dustline
                         if (weight.boneIndex0 == weight.boneIndex1) { weight.weight0 = 1; weight.weight1 = 0; }
                     }
                 }
-                var mesh = new Mesh { name = (armsOnly ? "Operator sleeves / " : "Operator mesh / ") + style, hideFlags = HideFlags.DontSave };
+                var mesh = new Mesh { name = label ?? (armsOnly ? "Operator sleeves / " : "Operator mesh / ") + style, hideFlags = HideFlags.DontSave };
                 mesh.SetVertices(positions);
                 mesh.SetUVs(0, uv);
                 mesh.SetTriangles(indices, 0);

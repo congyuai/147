@@ -17,7 +17,7 @@ namespace Dustline
         static readonly string[] MarketTabs = { "购买", "出售", "交易记录", "系统购入", "系统回收" };
         readonly MarketClient marketClient = new MarketClient();
         MarketTab marketTab;
-        bool marketBusy, marketOwnListings, marketUrlLoaded;
+        bool marketBusy, marketOwnListings, marketRecovery, marketUrlLoaded;
         string marketStatus, marketLoginName, marketItemId;
         ItemKind? marketCategory;
         int marketPage, marketRender;
@@ -148,7 +148,7 @@ namespace Dustline
             marketLoginName = null;
             marketStatus = "已退出服务器账户。";
             marketTab = MarketTab.Buy;
-            marketOwnListings = false;
+            marketOwnListings = marketRecovery = false;
             marketCategory = null;
             marketItemId = null;
             marketCategoryScroll = 1f;
@@ -161,6 +161,7 @@ namespace Dustline
         {
             if (marketTab == tab) return;
             marketTab = tab;
+            marketRecovery = false;
             marketCategory = null;
             marketItemId = null;
             marketCategoryView = null;
@@ -180,11 +181,14 @@ namespace Dustline
             var own = listings.Where(l => string.Equals(l.Seller, state.Account, StringComparison.OrdinalIgnoreCase));
             var items = state.Items.Where(MarketStack);
             if (marketTab == MarketTab.Recycle) items = items.Where(i => MarketQuote(state, i.ItemId) != null);
+            int recovered = items.Count(item => item.Area == CargoArea.Legacy);
+            if (recovered == 0 && marketRecovery) ResetMarketFilter(false);
+            var owned = items.Where(item => (item.Area == CargoArea.Legacy) == marketRecovery);
             var stock = state.Products.Where(product => product.ForSale);
             IEnumerable<string> choices = marketTab == MarketTab.Buy ? listings.Select(l => l.Item.ItemId)
                 : marketTab == MarketTab.Shop ? stock.Select(product => product.Id)
                 : marketTab == MarketTab.Sell && marketOwnListings ? own.Select(l => l.Item.ItemId)
-                : items.Select(i => i.ItemId);
+                : owned.Select(i => i.ItemId);
             DrawMarketCategories(rail, choices, railWidth);
 
             switch (marketTab)
@@ -200,9 +204,11 @@ namespace Dustline
                             anchor => ShowMarketDetail(anchor, MarketDetail.Shop, product.Id, null)));
                     break;
                 case MarketTab.Sell:
-                    MarketButton(body, "市场仓库 / 上架", 0, 0, 156, 39, () => SelectMarketSale(false), !marketOwnListings);
-                    MarketButton(body, "我的挂单 / 撤单", 164, 0, 156, 39, () => SelectMarketSale(true), marketOwnListings);
-                    MarketText(body, "只使用服务器账号仓库", 15, 330, 0, w - 330, 39, TextAnchor.MiddleRight, Muted);
+                    MarketButton(body, "市场仓库 / 上架", 0, 0, 156, 39, () => SelectMarketStorage(false, false), !marketOwnListings && !marketRecovery);
+                    MarketButton(body, "我的挂单 / 撤单", 164, 0, 156, 39, () => SelectMarketStorage(true, false), marketOwnListings);
+                    if (recovered > 0)
+                        MarketButton(body, "恢复区 · " + recovered, 328, 0, 130, 39, () => SelectMarketStorage(false, true), marketRecovery);
+                    MarketText(body, "只使用服务器账号仓库", 15, 468, 0, w - 468, 39, TextAnchor.MiddleRight, Muted);
                     if (marketOwnListings)
                     {
                         var orders = own.Where(l => MarketMatches(l.Item.ItemId)).OrderBy(l => l.UnitPrice).ThenBy(l => l.Id, StringComparer.Ordinal).ToArray();
@@ -211,22 +217,36 @@ namespace Dustline
                                 anchor => ShowMarketDetail(anchor, MarketDetail.Cancel, l.Item.ItemId, l.Item, l)));
                         break;
                     }
-                    DrawMarketOwned(body, state, items, w, false);
+                    DrawMarketOwned(body, state, owned, w, false);
                     break;
                 case MarketTab.Recycle:
-                    MarketText(body, "服务端系统回收  /  服务器报价", 19, 0, 0, w, 43);
-                    DrawMarketOwned(body, state, items, w, true);
+                    if (recovered > 0)
+                    {
+                        MarketButton(body, "市场仓库", 0, 0, 126, 39, () => SelectMarketStorage(false, false), !marketRecovery);
+                        MarketButton(body, "恢复区 · " + recovered, 134, 0, 130, 39, () => SelectMarketStorage(false, true), marketRecovery);
+                    }
+                    MarketText(body, "服务端系统回收  /  服务器报价", 19, recovered > 0 ? 276 : 0, 0, w - (recovered > 0 ? 276 : 0), 43);
+                    DrawMarketOwned(body, state, owned, w, true);
                     break;
             }
         }
 
-        void SelectMarketSale(bool own)
+        void SelectMarketStorage(bool listings, bool recovery)
         {
-            if (marketOwnListings == own) return;
-            marketOwnListings = own;
-            marketItemId = null;
-            marketPage = 0;
+            if (marketOwnListings == listings && marketRecovery == recovery) return;
+            marketOwnListings = listings;
+            ResetMarketFilter(recovery);
             DrawMarket();
+        }
+
+        void ResetMarketFilter(bool recovery)
+        {
+            marketRecovery = recovery;
+            marketCategory = null;
+            marketItemId = null;
+            marketCategoryView = null;
+            marketCategoryScroll = 1f;
+            marketPage = 0;
         }
 
         void DrawMarketCategories(RectTransform rail, IEnumerable<string> source, float width)
@@ -324,11 +344,12 @@ namespace Dustline
         {
             var matches = items.Where(i => MarketMatches(i.ItemId)).OrderBy(i => MarketItemName(i.ItemId), StringComparer.Ordinal)
                 .ThenBy(i => i.InstanceId, StringComparer.Ordinal).ToArray();
-            DrawMarketCards(body, width, matches, "市场仓库中没有符合条件的物品。", (card, item) =>
+            DrawMarketCards(body, width, matches, marketRecovery ? "恢复区中没有符合条件的物品。" : "市场仓库中没有符合条件的物品。", (card, item) =>
             {
-                long price = recycle ? MarketQuote(state, item.ItemId).Resale : MarketReferencePrice(state, item.ItemId);
+                bool suggested = false;
+                long price = recycle ? MarketQuote(state, item.ItemId).Resale : MarketListingPrice(state, item.ItemId, out suggested);
                 string quote = recycle ? "回收单价 " + MarketPrice(price)
-                    : price > 0 ? "市场参考 " + MarketPrice(price) : "暂无单价参考";
+                    : price > 0 ? (suggested ? "建议单价 " : "市场参考 ") + MarketPrice(price) : "暂无单价参考";
                 MarketCard(card, item.ItemId, item, quote, recycle ? "查看并回收 ›" : "查看并上架 ›",
                     anchor => ShowMarketDetail(anchor, recycle ? MarketDetail.Recycle : MarketDetail.List, item.ItemId, item));
             });
@@ -354,12 +375,14 @@ namespace Dustline
             var def = MarketDefinition(id);
             if (def != null)
             {
-                var color = def.Tier > 0 ? ItemDefinition.GradeColor(def.Tier) : Border;
+                DrawSpecialBackdrop(card, def);
+                var color = def.Special || def.Tier > 0 ? def.QualityColor : Border;
                 Fill(At("Market item quality", card, 0, 0, 3, 191), color);
                 DrawItemIcon(card, def, stack, 37, 9, width - 74, 79);
                 if (def.Special) MarketText(card, "特殊", 14, 10, 7, 48, 25, color: Amber);
             }
-            if (stack != null) MarketText(card, "×" + stack.Quantity, 14, width - 90, 7, 80, 24, TextAnchor.MiddleRight, Aqua);
+            if (stack != null) MarketText(card, (stack.Area == CargoArea.Legacy ? "恢复区 · " : "") + "×" + stack.Quantity,
+                14, width - 112, 7, 102, 24, TextAnchor.MiddleRight, Aqua);
             MarketText(card, MarketItemName(id), 19, 9, 85, width - 18, 31, TextAnchor.MiddleCenter);
             MarketText(card, price, 18, 9, 117, width - 18, 31, TextAnchor.MiddleCenter, Amber);
             Fill(At("Market price band", card, 9, 151, width - 18, 32), Plate);
@@ -434,6 +457,11 @@ namespace Dustline
             float y = def != null ? 163 : 113;
             if (stack != null)
             {
+                if (stack.Area == CargoArea.Legacy)
+                {
+                    MarketText(popup, "恢复区物品 · 可上架或回收", 15, 13, y, 304, 25, color: Aqua);
+                    y += 25;
+                }
                 MarketText(popup, "实例 " + MarketDisplay(stack.InstanceId, 42) + " · ×" + stack.Quantity, 13, 13, y, 304, 25, color: Muted);
                 y += 25;
                 if (def?.Durability > 0 || stack.Wear != 0)
@@ -510,7 +538,7 @@ namespace Dustline
                 MarketDetail.Buy => offer.UnitPrice,
                 MarketDetail.Shop => product.Value,
                 MarketDetail.Recycle => product.Resale,
-                _ => MarketReferencePrice(state, id)
+                _ => MarketListingPrice(state, id, out _)
             };
             MarketText(popup, "数量 1–" + maxQuantity, 15, 13, y, 304, 25, color: Muted);
             y += 26;
@@ -634,8 +662,14 @@ namespace Dustline
         static bool MarketStack(ItemStack stack) => stack != null && stack.Quantity > 0
             && !string.IsNullOrWhiteSpace(stack.ItemId) && !string.IsNullOrWhiteSpace(stack.InstanceId);
         static MarketProduct MarketQuote(MarketState state, string id) => Array.Find(state.Products, product => product.Id == id);
-        static long MarketReferencePrice(MarketState state, string id) => state.References
-            .Where(r => r != null && r.ItemId == id && r.UnitPrice > 0).Select(r => r.UnitPrice).DefaultIfEmpty().Min();
+        long MarketListingPrice(MarketState state, string id, out bool suggested)
+        {
+            long price = state.References.Where(r => r != null && r.ItemId == id && r.UnitPrice > 0)
+                .Select(r => r.UnitPrice).DefaultIfEmpty().Min();
+            var item = price == 0 ? MarketDefinition(id) : null;
+            suggested = item != null && item.Kind == ItemKind.Part && item.Part.Slot == PartSlot.Sight && item.Part.Magnification >= 6;
+            return suggested ? item.Value : price;
+        }
         static string MarketPrice(long value) => value.ToString("N0", CultureInfo.InvariantCulture);
         static bool MarketTotal(long price, int quantity, out long total)
         {

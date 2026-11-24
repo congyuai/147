@@ -144,6 +144,12 @@ namespace Dustline
             _ => EquipmentSlot.None
         };
 
+        public static string CaliberName(AmmoFamily family) => family switch
+        {
+            AmmoFamily.Amber => "5.56 毫米", AmmoFamily.Copper => "9 毫米", AmmoFamily.Silver => "7.62 毫米",
+            AmmoFamily.Slate => "12 号", _ => "原装规格"
+        };
+
         public static Color GradeColor(int tier) => tier switch
         {
             1 => new Color32(226, 231, 231, 255), 2 => new Color32(100, 195, 127, 255),

@@ -51,6 +51,13 @@ namespace Dustline
                 case "Interact": interactGlyph = glyph; interactButton = slot.Live.gameObject; break;
                 case "SwitchWeapon": switchButton = slot.Live.gameObject; break;
                 case "Heal": BindMedicine(slot.Live, glyph); break;
+                case "Move": moveControl = slot.Live; break;
+                case "Quiet":
+                    quietControl = slot.Live;
+                    SwimCaption(slot.Live.transform, "静步").gameObject.SetActive(true);
+                    break;
+                case "Jump": swimUpLabel = SwimCaption(slot.Live.transform, "上浮"); break;
+                case "Crouch": swimDownLabel = SwimCaption(slot.Live.transform, "下沉"); break;
             }
         }
 
@@ -72,13 +79,18 @@ namespace Dustline
                 mark.anchorMin = mark.anchorMax = Vector2.one * 0.5f;
                 mark.sizeDelta = Vector2.one * 63f;
                 control.Knob = mark;
+                var target = Anchor("Sprint lock", root, .5f, 1f);
+                control.SprintTarget = target;
+                Fill(target, new Color32(34, 61, 65, 218)).sprite = icons[RaidIcon.Dial];
+                var symbol = Stretch("Sprint lock symbol", target);
+                symbol.anchorMin = Vector2.one * .13f;
+                symbol.anchorMax = Vector2.one * .87f;
+                var display = Fill(symbol, Pale);
+                display.sprite = icons[RaidIcon.Sprint];
                 if (!editing)
                 {
-                    var ring = Stretch("Sprint ring", root);
-                    sprintRing = Fill(ring, Amber);
-                    sprintRing.sprite = icons[RaidIcon.ControlRing];
-                    sprintRing.gameObject.SetActive(false);
-                    mark.SetAsLastSibling();
+                    sprintLockGlyph = display;
+                    target.gameObject.SetActive(false);
                 }
             }
             if (editing)
@@ -115,13 +127,37 @@ namespace Dustline
             catch (ArgumentException) { }
         }
 
-        static LayoutEntry ApplySlot(TouchSlot slot, LayoutEntry value, TouchControl control, RectTransform space, float factor)
+        Text SwimCaption(Transform button, string name)
+        {
+            var text = Label(button, name, 15, 0, 0, 100, 23, TextAnchor.MiddleCenter, Pale);
+            var rect = text.rectTransform;
+            rect.anchorMin = new Vector2(0, -.22f);
+            rect.anchorMax = new Vector2(1, .07f);
+            rect.offsetMin = rect.offsetMax = Vector2.zero;
+            text.gameObject.AddComponent<Outline>().effectColor = Ink;
+            text.gameObject.SetActive(false);
+            return text;
+        }
+
+        LayoutEntry ApplySlot(TouchSlot slot, LayoutEntry value, TouchControl control, RectTransform space, float factor)
         {
             var rect = (RectTransform)control.transform;
             float size = slot.Diameter * value.Scale * factor;
             float rx = Mathf.Clamp((size * 0.5f + 3f * factor) / Mathf.Max(1f, space.rect.width), 0f, 0.5f);
             float ry = Mathf.Clamp((size * 0.5f + 3f * factor) / Mathf.Max(1f, space.rect.height), 0f, 0.5f);
-            value.Position = new Vector2(Mathf.Clamp(value.Position.x, rx, 1f - rx), Mathf.Clamp(value.Position.y, ry, 1f - ry));
+            float top = ry;
+            if (control.SprintTarget != null)
+            {
+                float dpi = Screen.dpi;
+                float gap = (dpi >= 70f && dpi <= 1000f ? dpi / 2.54f : Mathf.Clamp(Screen.height * .055f, 29f, 76f))
+                    * factor / Mathf.Max(.01f, uiCanvas.scaleFactor);
+                float diameter = Mathf.Clamp(size * .34f, 38f * factor, 66f * factor);
+                gap = Mathf.Min(gap, space.rect.height * .25f);
+                control.SprintTarget.sizeDelta = Vector2.one * diameter;
+                control.SprintTarget.anchoredPosition = Vector2.up * gap;
+                top = Mathf.Clamp((size * .5f + gap + diameter * .5f + 4f * factor) / Mathf.Max(1f, space.rect.height), ry, .8f);
+            }
+            value.Position = new Vector2(Mathf.Clamp(value.Position.x, rx, 1f - rx), Mathf.Clamp(value.Position.y, ry, Mathf.Max(ry, 1f - top)));
             rect.anchorMin = rect.anchorMax = value.Position;
             rect.anchoredPosition = Vector2.zero;
             rect.sizeDelta = Vector2.one * size;

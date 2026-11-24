@@ -17,6 +17,10 @@ namespace Dustline
         public bool Sprinting { get; private set; }
         public bool SprintExhausted => sprintLocked;
         public float MoveSpeed { get; private set; }
+        internal ShotPosture FiringPosture { get; private set; } = ShotPosture.Standing;
+        internal float FiringMovement { get; private set; }
+        internal bool IsSwimming => water.IsSwimming;
+        internal bool IsWading => water.IsWading;
         public float Lean { get; private set; }
         public float AimProgress => WeaponView != null ? WeaponView.VisibleAim : 0f;
         public string InteractionHint { get; private set; }
@@ -38,10 +42,10 @@ namespace Dustline
         StepCadence steps;
         readonly Collider[] stanceHits = new Collider[16];
         float pitch, verticalSpeed, noiseAt, focusAt, searchElapsed, staminaResumeAt, firingWalkUntil;
-        Vector2 recoilImpulse, recoilView;
-        int recoilPattern;
+        ViewRecoil recoil;
+        HarborSwimming water;
         HarborDoor focusedDoor;
-        bool sprintLocked;
+        bool sprintLocked, fireFromSprint;
         float currentHeight = 1.8f;
 
         public void Initialize(GameSession owner)
@@ -100,7 +104,9 @@ namespace Dustline
             if (WeaponView == null) WeaponView = WeaponVisual.Create(View.transform, true, form);
             else WeaponView.SetForm(form);
             WeaponView.SetEquipped(definition != null);
-            SetViewFov(75f);
+            recoil = default;
+            fireFromSprint = false;
+            SetViewFov(WeaponTuning.DefaultViewFov);
         }
 
         void SetViewFov(float value)
@@ -173,13 +179,22 @@ namespace Dustline
             Health.StepBody(frame);
             if (!Health.Alive || !session.InField) return;
             var input = session.Input;
+            bool harbor = session.Phase == SessionPhase.Raid && session.World != null && !session.World.IsQuarry;
+            bool wasSwimming = water.IsSwimming;
+            water.Update(harbor, transform.position, currentHeight, motor.isGrounded);
+            if (water.IsSwimming && !wasSwimming)
+            {
+                Prone = Crouched = false;
+                input.CancelTouchSprint();
+                CancelTreatment();
+            }
             if (input.Gameplay)
             {
                 pitch = Mathf.Clamp(pitch - input.Look.y, -85, 85);
                 transform.Rotate(0, input.Look.x, 0);
-                if (input.CrouchPressed) ToggleCrouch();
-                if (input.PronePressed) ToggleProne();
-                if (input.HealPressed && !input.WeaponSelectionPending && !input.InteractPressed) session.TryUseMedicine(input.HealInstance, input.HealPart);
+                if (!water.IsSwimming && input.CrouchPressed) ToggleCrouch();
+                if (!water.IsSwimming && input.PronePressed) ToggleProne();
+                if (!water.IsSwimming && input.HealPressed && !input.WeaponSelectionPending && !input.InteractPressed) session.TryUseMedicine(input.HealInstance, input.HealPart);
             }
             Weapon.SyncHandForMovement(now);
             if (Stamina <= .01f && !sprintLocked)
@@ -188,43 +203,70 @@ namespace Dustline
                 input.CancelTouchSprint();
                 staminaResumeAt = now + .35f;
             }
-            bool lowProfile = Prone || Crouched || currentHeight < 1.7f;
-            input.SprintAllowed = !sprintLocked && !lowProfile && !WeaponView.MedicineBusy && (Health.Body?.LegsAllowSprint ?? true);
-
             bool grounded = motor.isGrounded;
-            if (input.Gameplay && input.JumpPressed && grounded && !Prone)
+            bool jumping = false;
+            if (input.Gameplay && input.JumpPressed && grounded && !Prone && !water.IsSwimming)
             {
                 if (!Crouched || CanFit(1.8f))
                 {
                     Crouched = false;
                     verticalSpeed = 7.2f;
+                    jumping = true;
                 }
             }
-            bool walkForFire = WalkForFire(now, input.Gameplay, Weapon.Magazine != null, input.Fire);
+            bool lowProfile = Prone || Crouched || currentHeight < 1.7f;
             if (sprintLocked && input.Gameplay && !input.SprintHeld && Stamina >= 25f) sprintLocked = false;
-            bool sprint = input.Gameplay && input.Sprint && !walkForFire && input.SprintAllowed && !sprintLocked && input.Move.y > .1f
-                && Stamina > .01f && !lowProfile;
+            input.SprintAllowed = CanSprint(lowProfile);
+            bool sprintIntent = input.Gameplay && input.Sprint && input.SprintAllowed && input.Move.y > .1f;
+            bool walkForFire = WalkForFire(now, input.Gameplay, Weapon.Magazine != null, input.Fire);
+            // A shot can originate from the sprint that the trigger itself interrupted.
+            if (!input.Fire || !sprintIntent || jumping) fireFromSprint = false;
+            else if (input.FirePressed && Sprinting) fireFromSprint = true;
+            bool sprint = sprintIntent && !walkForFire;
             if (sprint && Stamina - 9.5f * frame <= .01f)
             {
                 Stamina = 0f; sprintLocked = true; sprint = false;
                 input.CancelTouchSprint();
                 staminaResumeAt = now + .35f;
             }
+            if (sprintIntent) input.EndQuietWalk();
+            bool quiet = input.QuietWalk;
             var bag = session.ActiveFieldBag;
-            float speed = MovementSpeed(Prone, lowProfile, sprint, bag.Weight, bag.MaxWeight, Weapon.MoveFactor, Health.Body?.Mobility ?? 1f);
+            float walkSpeed = MovementSpeed(Prone, lowProfile, false, bag.Weight, bag.MaxWeight, Weapon.MoveFactor, Health.Body?.Mobility ?? 1f);
+            float speed = sprint ? walkSpeed * (6.5f / 3.8f) : walkSpeed;
+            if (quiet) speed *= .55f;
+            if (water.IsSwimming) speed = (water.IsSubmerged ? 2.45f : 2.8f) * (quiet ? .70f : 1f);
+            else if (water.IsWading) speed *= .76f;
             Vector2 move = input.Gameplay ? input.Move : Vector2.zero;
             Vector3 movement = transform.right * move.x + transform.forward * move.y;
             UpdateStanceHeight(frame);
-            if (motor.isGrounded && verticalSpeed < 0) verticalSpeed = -2;
-            verticalSpeed -= 20 * frame;
+            if (water.IsSwimming)
+                verticalSpeed = water.VerticalVelocity(transform.position, currentHeight, frame, input.SwimUp, input.SwimDown, verticalSpeed);
+            else
+            {
+                if (grounded && verticalSpeed < 0) verticalSpeed = -2;
+                verticalSpeed -= 20 * frame;
+            }
             Vector3 before = transform.position;
             CollisionFlags collision = motor.Move((movement * speed + Vector3.up * verticalSpeed) * frame);
-            if ((collision & CollisionFlags.Above) != 0 && verticalSpeed > 0) verticalSpeed = 0;
+            if ((collision & CollisionFlags.Above) != 0 && verticalSpeed > 0) verticalSpeed = 0f;
+            water.Update(harbor, transform.position, currentHeight, motor.isGrounded);
+            if ((collision & CollisionFlags.Below) != 0 && verticalSpeed < 0) verticalSpeed = water.IsSwimming ? 0f : -2f;
+            if (water.IsSwimming && !wasSwimming)
+            {
+                Prone = Crouched = false;
+                input.CancelTouchSprint();
+                CancelTreatment();
+                fireFromSprint = false;
+            }
             Vector3 displacement = transform.position - before;
             float travel = new Vector2(displacement.x, displacement.z).magnitude;
             MoveSpeed = frame > 0f ? travel / frame : 0f;
-            bool running = sprint && MoveSpeed > 1.5f;
+            bool running = sprint && !water.IsSwimming && !water.IsWading && MoveSpeed > .07f;
             Sprinting = running;
+            bool airborne = !water.IsSwimming && (jumping && (collision & CollisionFlags.Above) == 0 || !motor.isGrounded);
+            FiringPosture = FieldHandling.Posture((Crouched || Prone) && !water.IsSwimming, airborne, running || fireFromSprint && MoveSpeed > .07f, MoveSpeed);
+            FiringMovement = Mathf.Clamp01(MoveSpeed / Mathf.Max(.01f, FiringPosture == ShotPosture.Running ? walkSpeed * (6.5f / 3.8f) : walkSpeed));
             if (running)
             {
                 Stamina = Mathf.Max(0f, Stamina - 9.5f * frame);
@@ -232,13 +274,13 @@ namespace Dustline
             }
             else if (now >= staminaResumeAt) Stamina = Mathf.Min(100f, Stamina + 15f * frame);
             if (Stamina <= 0.01f) sprintLocked = true;
-            input.SprintAllowed = !sprintLocked && !lowProfile && !WeaponView.MedicineBusy && (Health.Body?.LegsAllowSprint ?? true);
-            if (steps.Advance(travel, motor.isGrounded,
+            input.SprintAllowed = CanSprint(lowProfile);
+            if (steps.Advance(travel, motor.isGrounded && !water.IsSwimming,
                 Prone ? 0.76f : lowProfile ? 0.91f : running ? 1.67f : 1.42f))
                 session.EnvironmentAudio?.PlayFootstep(transform.position,
-                    Prone ? 0.30f : lowProfile ? 0.46f : running ? 1f : 0.83f, true);
+                    (Prone ? 0.30f : lowProfile ? 0.46f : running ? 1f : 0.83f) * (quiet ? .37f : 1f), true);
 
-            float leanTarget = input.Gameplay && !Prone
+            float leanTarget = input.Gameplay && !Prone && !water.IsSwimming
                 ? (input.LeanRight ? 1 : input.LeanLeft ? -1 : 0) : 0;
             float cameraEase = 1f - Mathf.Exp(-12f * frame);
             float cameraHeight = Prone ? 0.56f : Crouched ? 0.98f : Mathf.Min(currentHeight, 1.6f);
@@ -246,24 +288,24 @@ namespace Dustline
             float offset = FitLean(eyeY, Mathf.Lerp(Lean, leanTarget, cameraEase) * 0.22f);
             Lean = offset / 0.22f;
             View.transform.localPosition = new Vector3(offset, eyeY, 0f);
-            recoilView = Vector2.Lerp(recoilView, recoilImpulse, 1f - Mathf.Exp(-34f * frame));
-            recoilImpulse *= Mathf.Exp(-9f * frame);
-            View.transform.localRotation = Quaternion.Euler(Mathf.Clamp(pitch - recoilView.x, -87f, 87f), recoilView.y, -Lean * 6.5f);
-            if (session.Phase == SessionPhase.Raid) UpdateLoot(input, move.sqrMagnitude > 0.04f || IsTreating);
+            recoil.Step(now, frame);
+            ApplyViewRotation();
+            if (session.Phase == SessionPhase.Raid) UpdateLoot(input, move.sqrMagnitude > 0.04f || IsTreating || water.IsSwimming);
             bool aiming = input.Gameplay && input.Aim && Weapon.Magazine != null && !WeaponView.MedicineBusy;
             WeaponView.SetMedicineProgress(TreatmentProgress);
             WeaponView.SetPose(aiming, MoveSpeed, running, lowProfile, frame, sprintLocked || walkForFire || Weapon.Magazine?.Reloading == true);
-            SetViewFov(Mathf.Lerp(75f, Weapon.AimFov, Mathf.SmoothStep(0f, 1f, AimProgress)));
+            SetViewFov(Mathf.Lerp(WeaponTuning.DefaultViewFov, Weapon.AimFov, Mathf.SmoothStep(0f, 1f, AimProgress)));
 
             Operator.SetMotion(MoveSpeed, running, lowProfile, frame, sprintLocked);
             Operator.SyncGear(session.ActiveFieldBag);
             Operator.SetProne(Prone, frame);
             Operator.PoseArms(WeaponView.RightGrip, WeaponView.LeftGrip);
-            bool moving = MoveSpeed > 0.35f;
-            if (moving && now > noiseAt)
+            bool moving = MoveSpeed > .20f;
+            if (moving && (motor.isGrounded || water.IsSwimming) && now > noiseAt)
             {
-                CombatNoise.Emit(transform.position, Prone ? 3 : lowProfile ? 4 : running ? 22 : 10, Health);
-                noiseAt = now + (running ? 0.32f : Prone ? 0.72f : 0.55f);
+                float audible = water.IsSwimming ? 6f : Prone ? 3f : lowProfile ? 4f : running ? 22f : 10f;
+                CombatNoise.Emit(transform.position, audible * (quiet ? .4f : 1f), Health);
+                noiseAt = now + (running ? 0.32f : Prone || quiet ? 0.72f : 0.55f);
             }
         }
 
@@ -408,11 +450,20 @@ namespace Dustline
             }
         }
 
-        public void Recoil(float amount)
+        bool CanSprint(bool low) => !sprintLocked && !low && !water.IsSwimming && !water.IsWading
+            && !WeaponView.MedicineBusy && Stamina > .01f && (Health.Body?.LegsAllowSprint ?? true);
+
+        internal void Recoil(float now, float interval, float amount)
         {
-            recoilPattern = (recoilPattern + 1) & 31;
-            recoilImpulse.x = Mathf.Min(9f, recoilImpulse.x + amount);
-            recoilImpulse.y = Mathf.Clamp(recoilImpulse.y + Mathf.Sin(recoilPattern * 1.73f) * amount * 0.17f, -2f, 2f);
+            fireFromSprint = false;
+            recoil.Add(now, interval, amount);
+            ApplyViewRotation();
+        }
+
+        void ApplyViewRotation()
+        {
+            var offset = recoil.Offset;
+            View.transform.localRotation = Quaternion.Euler(Mathf.Clamp(pitch - offset.x, -87f, 87f), offset.y, -Lean * 6.5f);
         }
     }
 }

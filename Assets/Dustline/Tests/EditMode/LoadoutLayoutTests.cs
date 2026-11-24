@@ -143,6 +143,7 @@ namespace Dustline.Tests
                 Assert.Throws<InvalidDataException>(() => store.Save(older));
                 Assert.That(File.ReadAllBytes(store.Path), Is.EqualTo(savedBytes));
                 Assert.That(File.ReadAllBytes(store.EconomyUpgradeBackupPath), Is.EqualTo(original));
+                Assert.That(File.ReadAllBytes(store.CakeUpgradeBackupPath), Is.EqualTo(original));
 
                 var mislabeled = new ProfileStore(Path.Combine(directory, "mislabeled.json"));
                 Assert.Throws<InvalidDataException>(() => mislabeled.Save(new ProfileData { Version = 2, Loadout = saved.Loadout }));

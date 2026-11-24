@@ -329,7 +329,7 @@ namespace Dustline
         [TestCase("{\"Version\":1,\"Stash\":[],\"Loadout\":[]}")]
         [TestCase("{\"Version\":1,\"Credits\":1000,\"Loadout\":[]}")]
         [TestCase("{\"Version\":1,\"Credits\":1000,\"Stash\":[]}")]
-        [TestCase("{\"Version\":5,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
+        [TestCase("{\"Version\":6,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
         [TestCase("{\"Version\":4,\"Credits\":1000,\"Stash\":[],\"Loadout\":[],\"BirthdayGiftClaimed\":1}")]
         [TestCase("{\"Version\":0,\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
         [TestCase("{\"Version\":\"1\",\"Credits\":1000,\"Stash\":[],\"Loadout\":[]}")]
@@ -371,6 +371,74 @@ namespace Dustline
                 if (Directory.Exists(directory))
                     Directory.Delete(directory, true);
             }
+        }
+
+        [TestCase("-1")]
+        [TestCase("99")]
+        [TestCase("1.0")]
+        [TestCase("true")]
+        [TestCase("null")]
+        [TestCase("\"1\"")]
+        [TestCase("2147483648")]
+        [TestCase("0,\"\\u0047mLevelBonus\":1")]
+        public void SchemaFiveRejectsInvalidOrDuplicateGmLevelBonus(string value)
+        {
+            LoadRejectsInvalidJsonOrSchemaWithoutChangingFile("{\"Version\":5,\"Credits\":1000,\"Stash\":[],\"Loadout\":[],\"GmLevelBonus\":" + value + "}");
+        }
+
+        [Test]
+        public void SchemaFiveRoundTripsGmBonusWithoutChangingCountersAndKeepsOriginalBackups()
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                var store = new ProfileStore(System.IO.Path.Combine(directory, "profile.json"));
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(store.EconomyUpgradeBackupPath, "earlier upgrade");
+                File.WriteAllText(store.Path, "{\"Version\":4,\"Credits\":123,\"Raids\":4,\"Extractions\":2,\"Stash\":[],\"Loadout\":[],\"BirthdayGiftClaimed\":true}");
+                byte[] original = File.ReadAllBytes(store.Path);
+                var old = store.Load();
+                Assert.That(old.GmLevelBonus, Is.Zero);
+                old.Version = ProfileData.CurrentVersion;
+                old.GmLevelBonus = 98;
+                store.Save(old);
+                var saved = store.Load();
+                Assert.That((saved.Version, saved.Raids, saved.Extractions, saved.Credits, saved.GmLevelBonus, saved.BirthdayGiftClaimed),
+                    Is.EqualTo((5, 4, 2, 123, 98, true)));
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(store.CakeUpgradeBackupPath));
+                Assert.That(File.ReadAllText(store.EconomyUpgradeBackupPath), Is.EqualTo("earlier upgrade"));
+                string before = File.ReadAllText(store.Path);
+                saved.GmLevelBonus = 99;
+                Assert.Throws<InvalidDataException>(() => store.Save(saved));
+                saved.GmLevelBonus = -1;
+                Assert.Throws<InvalidDataException>(() => store.Save(saved));
+                Assert.That(File.ReadAllText(store.Path), Is.EqualTo(before));
+                saved.GmLevelBonus = 0;
+                store.Save(saved);
+                Assert.That(store.Load().GmLevelBonus, Is.Zero);
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(store.CakeUpgradeBackupPath));
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        }
+
+        [Test]
+        public void SchemaFiveDoesNotOverwriteAMismatchedBackup()
+        {
+            string directory = TemporaryDirectory();
+            try
+            {
+                var store = new ProfileStore(System.IO.Path.Combine(directory, "profile.json"));
+                store.Save(new ProfileData { Version = 4 });
+                byte[] original = File.ReadAllBytes(store.Path);
+                File.WriteAllText(store.CakeUpgradeBackupPath, "earlier migration");
+                var next = store.Load();
+                next.Version = ProfileData.CurrentVersion;
+                Assert.Throws<IOException>(() => store.Save(next));
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(store.Path));
+                Assert.That(File.ReadAllText(store.CakeUpgradeBackupPath), Is.EqualTo("earlier migration"));
+                Assert.That(Directory.GetFiles(directory), Is.EquivalentTo(new[] { store.Path, store.CakeUpgradeBackupPath }));
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
         }
 
         [TestCase("null-stash")]

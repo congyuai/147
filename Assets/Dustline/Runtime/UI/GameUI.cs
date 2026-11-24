@@ -9,7 +9,7 @@ namespace Dustline
 {
     public sealed partial class GameUI : MonoBehaviour
     {
-        enum ScreenPage { Lobby, Stash, Shop, Operator, Gunsmith, MenuSettings, Loading, Field, FieldInventory, FieldMap, FieldSettings, Health, ExitConfirm, PracticePanel, TouchLayout, Results, Error, Strategy, Preparation, Market }
+        enum ScreenPage { Lobby, Stash, Shop, Operator, Gunsmith, MenuSettings, Loading, Field, FieldInventory, FieldMap, FieldSettings, Health, ExitConfirm, PracticePanel, TouchLayout, Results, Error, Strategy, Preparation, Market, TestGm }
 
         ScreenPage current;
         readonly Stack<Action> backRoutes = new Stack<Action>();
@@ -79,47 +79,7 @@ namespace Dustline
             UpdateSafeArea();
         }
 
-        public void ShowMenu()
-        {
-            var panel = Display(ScreenPage.Lobby, "Operations desk", wide: true);
-            reflowWidePage = Draw;
-            Draw();
-
-            void Draw()
-            {
-                operatorPreview?.Dispose();
-                ClearContent(panel);
-                float w = panel.rect.width;
-                WideHeader(panel, "尘线：行动大厅", "行动员等级 " + session.PlayerLevel + "   /   本地突袭", true);
-                const float nav = 162;
-                Fill(At("Lobby navigation", panel, 12, 58, nav, 609), Ink);
-                Button(panel, "仓库", 20, 78, nav - 16, 55, ShowStash);
-                Button(panel, "商店", 20, 142, nav - 16, 55, () => ShowShop());
-                Button(panel, "市场", 20, 206, nav - 16, 55, ShowMarket);
-                Button(panel, "枪械改装", 20, 280, nav - 16, 48, () => ShowGunsmith());
-                Button(panel, "离线靶场", 20, 336, nav - 16, 48, session.StartPractice);
-                Button(panel, "角色", 20, 560, nav - 16, 43, ShowOperator);
-                Button(panel, "设置", 20, 611, nav - 16, 43, () => ShowSettings(false));
-                float portraitWidth = Mathf.Min(w * .44f, 560f);
-                var portrait = At("Lobby operator", panel, (w - portraitWidth) * .5f, 56, portraitWidth, 605);
-                BuildPortrait(portrait);
-                Button(portrait, "切换正背面", (portraitWidth - 146) * .5f, 551, 146, 38, () => operatorPreview?.RotateView());
-                float sideW = Mathf.Clamp(w * .24f, 215f, 310f);
-                float x = w - sideW - 14;
-                var summary = At("Deployment summary", panel, x, 124, sideW, 351);
-                Fill(summary, Ink);
-                Label(summary, "当前穿戴", 25, 11, 12, sideW - 22, 36, color: Amber);
-                DrawPreparedSummary(summary, sideW);
-                if (!string.IsNullOrEmpty(session.Notice))
-                    Label(panel, session.Notice, 15, x, 487, sideW, 57, color: Amber);
-                bool ready = Deployment.TryDifficulty(session.PreparedSite, session.PreparedTier, out var tier);
-                if (ready) Button(panel, Deployment.Sites[session.PreparedSite].Name + " / " + tier.Name, x, 550, sideW, 44, OpenStrategicMap);
-                Button(panel, ready ? "出发" : "开始游戏", x, 603, sideW, 56, () =>
-                {
-                    if (ready) session.StartRaid(); else OpenStrategicMap();
-                }, true);
-            }
-        }
+        public void ShowMenu() => ShowLobby();
 
         void ShowOperator()
         {
@@ -440,7 +400,7 @@ namespace Dustline
             mapZoom = 0f;
             EnterField();
             Notify(session.Input.TouchMode
-                ? "向前推杆锁定奔跑，回拉解除。地图标出撤离点。"
+                ? "拖入摇杆上方的图标锁跑，回拉解除。地图标出撤离点。"
                 : "F 交互 / 1–4 或 X 切换武器 / J 健康 / M 地图 / Tab 背包 / Esc 设置");
         }
 
@@ -507,6 +467,7 @@ namespace Dustline
 
             CancelFieldGestures();
             session.SaveControlPreferences();
+            DisposeLobby();
             operatorPreview?.Dispose();
             operatorPreview = null;
             ReleaseStrategicMap();
@@ -653,11 +614,7 @@ namespace Dustline
                 UpdateFpsText();
                 if (current == ScreenPage.FieldMap && fullMap != null) UpdateFullMap();
             }
-            if (current == ScreenPage.Field)
-            {
-                UpdateHud(false);
-            }
-            else if (current == ScreenPage.Health && Time.unscaledTime >= healthRefreshAt)
+            if (current == ScreenPage.Health && Time.unscaledTime >= healthRefreshAt)
             {
                 healthRefreshAt = Time.unscaledTime + .15f;
                 healthRefresh?.Invoke();
@@ -671,6 +628,7 @@ namespace Dustline
 
         void LateUpdate()
         {
+            if (current == ScreenPage.Field) UpdateHud(false);
             UpdateInventoryDrag();
             if (current == ScreenPage.Strategy) UpdateStrategicMap();
             itemIcons?.Step();
@@ -784,6 +742,7 @@ namespace Dustline
         string ItemName(ItemStack item, string missing) => item == null ? missing : session.Catalog.Find(item.ItemId).DisplayName;
         void OnDestroy()
         {
+            DisposeLobby();
             operatorPreview?.Dispose();
             ReleaseStrategicMap();
             DisposeGunsmithPreview();

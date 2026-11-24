@@ -7,15 +7,16 @@ namespace Dustline
     [DefaultExecutionOrder(-200)]
     public sealed class PlayerInputReader : MonoBehaviour
     {
-        public const int DefaultSprintThreshold = 86;
-        public const int MinSprintThreshold = 55;
-        public const int MaxSprintThreshold = 99;
-        public int SprintThreshold { get; set; } = DefaultSprintThreshold;
+        const float StickDeadZone = .12f;
         public bool SprintAllowed { get; set; } = true;
         public float LookSensitivity { get; set; } = 1f;
         public float GyroSensitivity { get; set; } = 1f;
         public GyroMode GyroUsage { get; set; }
         public AimMode AimBehavior { get; private set; }
+        public LeanMode LeanBehavior { get; private set; } = LeanMode.Hybrid;
+        public bool QuietWalk { get; private set; }
+        internal bool SwimUp => Gameplay && (touchSwimUp || Keyboard.current?.spaceKey.isPressed == true);
+        internal bool SwimDown => Gameplay && (touchSwimDown || Keyboard.current?.cKey.isPressed == true);
         public bool HasGyroscope => Application.isMobilePlatform && GyroDevice.current != null;
         internal GameUI GestureUI;
         public bool Gameplay;
@@ -54,9 +55,11 @@ namespace Dustline
         GyroDevice gyro;
         bool ownsGyro, aimAvailable, mouseAimArmed;
         AimGesture aimGesture;
-        bool touchFire, touchFireTap, touchLeanLeft, touchLeanRight, autoSprint, wasFire, mouseArmed;
-        bool sprintArmed = true;
+        LeanGesture leanGesture;
+        bool touchFire, touchFireTap, touchSwimUp, touchSwimDown, autoSprint, wasFire, mouseArmed;
+        bool sprintTargetHeld, quietTap;
         internal bool TouchSprintLocked => autoSprint;
+        internal bool StickMoving => TouchMove.sqrMagnitude > StickDeadZone * StickDeadZone;
         bool reload, crouch, prone, jump, interact, inventory, heal, settings, map, weaponSwap;
 
         void Update()
@@ -80,8 +83,23 @@ namespace Dustline
             CrouchPressed = crouch || (keyboard?.cKey.wasPressedThisFrame ?? false);
             PronePressed = prone || (keyboard?.zKey.wasPressedThisFrame ?? false);
             JumpPressed = jump || (keyboard?.spaceKey.wasPressedThisFrame ?? false);
-            LeanLeft = touchLeanLeft || (keyboard?.qKey.isPressed ?? false);
-            LeanRight = touchLeanRight || (keyboard?.eKey.isPressed ?? false);
+            if (Gameplay && keyboard != null)
+            {
+                double t = Time.unscaledTimeAsDouble;
+                if (keyboard.qKey.wasPressedThisFrame) leanGesture.Set(-1, true, LeanBehavior, t);
+                if (keyboard.eKey.wasPressedThisFrame) leanGesture.Set(1, true, LeanBehavior, t);
+                if (keyboard.qKey.wasReleasedThisFrame) leanGesture.Set(-1, false, LeanBehavior, t);
+                if (keyboard.eKey.wasReleasedThisFrame) leanGesture.Set(1, false, LeanBehavior, t);
+            }
+            int lean = Gameplay ? leanGesture.Active(LeanBehavior) : 0;
+            LeanLeft = lean < 0;
+            LeanRight = lean > 0;
+            if (Gameplay && (quietTap || keyboard?.leftAltKey.wasPressedThisFrame == true))
+            {
+                QuietWalk = !QuietWalk;
+                if (QuietWalk) CancelTouchSprint();
+            }
+            quietTap = false;
             InteractPressed = interact || (keyboard?.fKey.wasPressedThisFrame ?? false);
             HealPressed = heal || (keyboard?.hKey.wasPressedThisFrame ?? false);
             HealInstance = heal ? medicineTapInstance : null;
@@ -118,12 +136,6 @@ namespace Dustline
             Aim = Gameplay && aimAvailable && aimGesture.Active(AimBehavior);
             Look += ReadGyro();
             if (!Gameplay || !TouchMode) autoSprint = false;
-            else if (!sprintArmed)
-            {
-                if (TouchMove.y < (ClampSprintThreshold(SprintThreshold) - 14) / 100f) sprintArmed = true;
-            }
-            else if (autoSprint) autoSprint = AutoSprintForward(TouchMove.y, true, SprintThreshold);
-            else if (SprintAllowed) autoSprint = AutoSprintForward(TouchMove.y, false, SprintThreshold);
             SprintHeld = Gameplay && (TouchMode ? autoSprint : (keyboard?.leftShiftKey.isPressed ?? false));
             Sprint = SprintAllowed && !Aim && SprintHeld;
             Move = Vector2.ClampMagnitude(Move + TouchWalk(TouchMove, TouchMode && Sprint), 1f);
@@ -141,24 +153,44 @@ namespace Dustline
             return false;
         }
 
-        public static int ClampSprintThreshold(int percent) => Mathf.Clamp(percent, MinSprintThreshold, MaxSprintThreshold);
-
-        public static bool AutoSprintForward(float forward, bool alreadySprinting, int percent = DefaultSprintThreshold)
-        {
-            return alreadySprinting ? forward > -.20f : forward >= ClampSprintThreshold(percent) / 100f;
-        }
-
         public static Vector2 TouchWalk(Vector2 stick, bool lockedSprint)
         {
-            if (lockedSprint) return new Vector2(stick.x, Mathf.Max(.75f, stick.y)).normalized;
-            return stick.sqrMagnitude > .0144f ? stick : Vector2.zero;
+            if (lockedSprint) return new Vector2(Mathf.Clamp(stick.x, -1f, 1f), Mathf.Max(.75f, stick.y)).normalized;
+            return stick.sqrMagnitude > StickDeadZone * StickDeadZone ? stick.normalized : Vector2.zero;
+        }
+
+        internal void MoveTouchStick(Vector2 raw, bool inSprintTarget)
+        {
+            TouchMove = raw;
+            if (raw.y <= -.20f) CancelTouchSprint();
+            else if (inSprintTarget && !sprintTargetHeld && Gameplay && TouchMode && SprintAllowed && !Aim && raw.y > StickDeadZone)
+            {
+                autoSprint = true;
+                QuietWalk = false;
+            }
+            sprintTargetHeld = inSprintTarget;
+        }
+
+        internal void ReleaseTouchStick(bool cancelled)
+        {
+            TouchMove = Vector2.zero;
+            sprintTargetHeld = false;
+            if (cancelled) CancelTouchSprint();
         }
 
         internal void CancelTouchSprint()
         {
             autoSprint = false;
-            sprintArmed = false;
             if (TouchMode) Sprint = SprintHeld = false;
+        }
+
+        internal void EndQuietWalk() => QuietWalk = false;
+
+        internal void SetLeanMode(LeanMode mode)
+        {
+            LeanBehavior = mode;
+            leanGesture = default;
+            LeanLeft = LeanRight = false;
         }
 
         public void SetAimMode(AimMode mode)
@@ -234,8 +266,10 @@ namespace Dustline
             }
             if (action == "Aim" && Gameplay && aimAvailable)
                 aimGesture.Set(down, AimBehavior, Time.unscaledTimeAsDouble);
-            if (action == "LeanLeft") touchLeanLeft = down;
-            if (action == "LeanRight") touchLeanRight = down;
+            if (Gameplay && (action == "LeanLeft" || action == "LeanRight"))
+                leanGesture.Set(action == "LeanLeft" ? -1 : 1, down, LeanBehavior, Time.unscaledTimeAsDouble);
+            if (action == "Jump") touchSwimUp = down;
+            if (action == "Crouch") touchSwimDown = down;
         }
         public void Tap(string action)
         {
@@ -250,6 +284,7 @@ namespace Dustline
             if (action == "Map") map = true;
             if (action == "SwitchWeapon") weaponSwap = true;
             if (action == "Heal") TapMedicine();
+            if (action == "Quiet") quietTap = true;
         }
 
         internal EquipmentSlot TakeWeaponSlot()
@@ -269,6 +304,7 @@ namespace Dustline
         internal void CancelAction(string action)
         {
             if (action == "Aim") CancelAimGesture();
+            else if (action == "LeanLeft" || action == "LeanRight") leanGesture.Cancel(action == "LeanLeft" ? -1 : 1);
             else Hold(action, false);
             switch (action)
             {
@@ -283,6 +319,7 @@ namespace Dustline
                 case "Map": map = false; break;
                 case "SwitchWeapon": weaponSwap = false; break;
                 case "Health": healthPage = false; break;
+                case "Quiet": quietTap = false; break;
             }
         }
 
@@ -299,8 +336,8 @@ namespace Dustline
             Fire = FirePressed = Sprint = SprintHeld = wasFire = mouseArmed = false;
             HealthPressed = healthPage = false;
             HealPart = medicineTapPart = null;
-            touchFire = touchFireTap = touchLeanLeft = touchLeanRight = autoSprint = false;
-            sprintArmed = true;
+            touchFire = touchFireTap = touchSwimUp = touchSwimDown = autoSprint = sprintTargetHeld = quietTap = false;
+            leanGesture = default;
             LeanLeft = LeanRight = SwitchWeaponPressed = false;
             weaponSlot = EquipmentSlot.None;
             ReloadPressed = CrouchPressed = PronePressed = JumpPressed = InteractPressed = HealPressed = false;

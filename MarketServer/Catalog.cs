@@ -83,7 +83,8 @@ internal sealed class Catalog
                 item.MaxStack < 1 || item.Value < 0 || item.Resale < 0 || item.StarterQuantity < 0 || !items.TryAdd(item.Id, item))
                 throw new InvalidDataException("Invalid or duplicate catalog item.");
         }
-        if (!items.TryGetValue(Cake, out var cake)) throw new InvalidDataException("Catalog must contain birthday_cake.");
+        if (!items.TryGetValue(Cake, out var cake) || cake.Width != 3 || cake.Height != 4)
+            throw new InvalidDataException("Catalog must contain a 3x4 birthday_cake.");
         items[Cake] = cake with { ForSale = false, Resale = CakeResale, StarterQuantity = 1, MaxStack = 1 };
 
         var catalog = new Catalog(items, config.StarterBuilds);

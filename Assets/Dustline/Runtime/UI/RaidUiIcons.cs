@@ -4,7 +4,7 @@ using UnityEngine;
 namespace Dustline
 {
     enum RaidIcon { Dial, Knob, Aim, Fire, Reload, Crouch, Search, Heal, Bag, Gear, Reticle, Hit, Strike, Prone, Jump, LeanLeft, LeanRight,
-        InteractDoor, Map, Heading, Danger, Exit, Switch, ControlRing, DamageArc, Health, Sort, Secure, Sun }
+        InteractDoor, Map, Heading, Danger, Exit, Switch, ControlRing, DamageArc, Health, Sort, Secure, Sun, Sprint, Quiet }
 
     sealed class RaidUiIcons : IDisposable
     {
@@ -126,6 +126,11 @@ namespace Dustline
                 case RaidIcon.Crouch:
                     return Cover(Mathf.Min(Circle(p, 13, 13, 4.5f), Mathf.Min(Segment(p, 6, 8, -3, 1, -12, -7),
                         Mathf.Min(Segment(p, -12, -7, 3, -7, 11, -16), Segment(p, 6, 6, 13, -2, 21, -2)))));
+                case RaidIcon.Sprint:
+                    return Cover(Mathf.Min(Segment(p, -14, 2, 0, 16, 14, 2), Segment(p, -14, -12, 0, 2, 14, -12)));
+                case RaidIcon.Quiet:
+                    return Cover(Mathf.Min(Box(p, -14, 0, 5, 6), Mathf.Min(Segment(p, -9, 4, 1, 13, 1, -13),
+                        Segment(p, 8, -9, 21, 9, 2.7f))));
                 case RaidIcon.Search:
                     return Cover(Mathf.Min(Ring(p, -4, 4, 12.5f, 2.5f), Segment(p, 6, -6, 20, -20, 2.8f)));
                 case RaidIcon.Heal:
