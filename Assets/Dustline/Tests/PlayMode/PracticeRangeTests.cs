@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
@@ -46,6 +47,7 @@ namespace Dustline.Tests
                 File.Delete(store.LegacyBackupPath);
                 File.Delete(store.UpgradeBackupPath);
                 File.Delete(store.LoadoutUpgradeBackupPath);
+                File.Delete(store.EconomyUpgradeBackupPath);
             }
             yield return null;
             QualitySettings.renderPipeline = previousPipeline;
@@ -65,6 +67,8 @@ namespace Dustline.Tests
             var training = session.ActiveFieldBag;
             var player = session.Player;
             Assert.That(player.Weapon.Magazine.Rounds, Is.EqualTo(player.Weapon.Magazine.Capacity));
+            Assert.That(player.Weapon.HasInfiniteReserve, Is.True);
+            Assert.That(player.Weapon.Reserve, Is.EqualTo(int.MaxValue));
             var range = player.transform.parent;
             Assert.That(training, Is.Not.SameAs(raidBag));
             var trainingRifle = training.Equipped(EquipmentSlot.Weapon);
@@ -91,12 +95,16 @@ namespace Dustline.Tests
             Set(session.Input, "Fire", false);
             Set(session.Input, "FirePressed", false);
             int reserve = training.Count("ammo");
+            Assert.That(reserve, Is.Zero);
             Set(session.Input, "ReloadPressed", true);
             Invoke(player.Weapon, "Tick", Time.time + .8f, .02f);
             Set(session.Input, "ReloadPressed", false);
             Assert.That(player.Weapon.Magazine.Reloading, Is.True);
             Invoke(player.Weapon, "Tick", Time.time + 4f, 4f);
-            Assert.That(training.Count("ammo"), Is.EqualTo(reserve - 1));
+            Assert.That(player.Weapon.Magazine.Reloading, Is.False);
+            Assert.That(player.Weapon.Magazine.Rounds, Is.EqualTo(player.Weapon.Magazine.Capacity));
+            Assert.That(player.Weapon.Reserve, Is.EqualTo(int.MaxValue));
+            Assert.That(training.Count("ammo"), Is.EqualTo(reserve));
             Assert.That(savedRifle.LoadedAmmo, Is.EqualTo(3));
             plate.Damage(plate.Maximum, player.Health);
             Assert.That(plate.gameObject.activeSelf, Is.False);
@@ -125,6 +133,7 @@ namespace Dustline.Tests
             Assert.That(player.WeaponView.AppearanceKey, Is.EqualTo(look));
             Assert.That(player.Weapon.Magazine.Capacity, Is.EqualTo(30));
             Assert.That(player.Weapon.Magazine.Rounds, Is.EqualTo(player.Weapon.Magazine.Capacity));
+            Assert.That(player.Weapon.Reserve, Is.EqualTo(int.MaxValue));
             session.UseMedicine();
             Assert.That(player.IsTreating, Is.True);
             Invoke(session, "OnApplicationPause", true);
@@ -163,6 +172,7 @@ namespace Dustline.Tests
             CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.Path));
             Assert.That(File.Exists(store.LegacyBackupPath), Is.False);
             Assert.That(File.Exists(store.UpgradeBackupPath), Is.False);
+            Assert.That(File.Exists(store.EconomyUpgradeBackupPath), Is.False);
         }
 
         [UnityTest]
@@ -244,6 +254,117 @@ namespace Dustline.Tests
         }
 
         [UnityTest]
+        public IEnumerator PracticeAmmoPanelOffersSixCompatibleGradesWithoutChangingTheRaidLoadout()
+        {
+            yield return OpenPractice();
+            var weapon = session.Player.Weapon;
+            var copy = session.ActiveFieldBag.Equipped(EquipmentSlot.Weapon);
+            var original = session.Loadout.Equipped(EquipmentSlot.Weapon);
+            int rounds = weapon.Magazine.Rounds;
+            Invoke(session.UI, "TogglePracticePanel");
+            for (int grade = 1; grade <= 6; grade++)
+            {
+                ClickPractice(grade + " 级弹");
+                var selected = session.Catalog.Find(weapon.ReadyAmmoType);
+                Assert.That(selected, Is.Not.Null);
+                Assert.That(selected.Tier, Is.EqualTo(grade));
+                Assert.That(WeaponRules.CanLoad(weapon.Definition, selected, out _), Is.True);
+                Assert.That(copy.LoadedAmmoId, Is.EqualTo(selected.Id));
+                Assert.That(weapon.Magazine.Rounds, Is.EqualTo(rounds));
+                Assert.That(weapon.Reserve, Is.EqualTo(int.MaxValue));
+            }
+            Assert.That(weapon.SelectPracticeAmmo("ammo_copper"), Is.False);
+            Assert.That(session.Catalog.Find(weapon.ReadyAmmoType).Tier, Is.EqualTo(6));
+            Assert.That((original.LoadedAmmoId, original.LoadedAmmo), Is.EqualTo(("ammo", 3)));
+            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.Path));
+            ClickPractice("补充练习装备");
+            Assert.That(weapon.ReadyAmmoType, Is.EqualTo("ammo"));
+            Assert.That(weapon.Magazine.Rounds, Is.EqualTo(weapon.Magazine.Capacity));
+            Invoke(session.UI, "TogglePracticePanel");
+            ClickPractice("返回大厅");
+            Assert.That(session.Phase, Is.EqualTo(SessionPhase.Menu), session.Error);
+            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.Path));
+        }
+
+        [UnityTest]
+        public IEnumerator PracticeDummiesKeepSeparateGearAndWearThroughIndividualAndGlobalResets()
+        {
+            yield return OpenPractice();
+            var range = session.GetType().GetProperty("Practice", Instance).GetValue(session);
+            var player = session.Player;
+            var targets = player.transform.parent.Cast<Transform>().Where(node => node.name == "Practice plate")
+                .Select(node => node.GetComponent<Health>()).ToArray();
+            Assert.That(targets, Has.Length.EqualTo(6));
+            Equip(0, EquipmentSlot.Helmet, "helmet_1");
+            Equip(1, EquipmentSlot.Helmet, "helmet_3");
+            Equip(0, EquipmentSlot.Armor, "vest_2");
+            Equip(1, EquipmentSlot.Armor, "vest_2");
+            var first = Dummy(0);
+            var second = Dummy(1);
+            Assert.That((first.helmet, first.armor, second.helmet, second.armor),
+                Is.EqualTo(("helmet_1", "vest_2", "helmet_3", "vest_2")));
+            Assert.That((first.helmetWear, first.armorWear, second.helmetWear, second.armorWear), Is.EqualTo((0, 0, 0, 0)));
+
+            Hit(0, .445f);
+            Hit(0, 0f);
+            var firstHit = Dummy(0);
+            Assert.That(firstHit.helmetWear, Is.GreaterThan(0));
+            Assert.That(firstHit.armorWear, Is.GreaterThan(0));
+            Assert.That(firstHit.hits, Is.EqualTo(2));
+            Assert.That(firstHit.health, Is.LessThan(first.health));
+            Assert.That(Dummy(1), Is.EqualTo(second));
+            Hit(1, 0f);
+            var secondHit = Dummy(1);
+            Assert.That(secondHit.armorWear, Is.GreaterThan(0));
+            Assert.That(secondHit.hits, Is.EqualTo(1));
+            Assert.That(Dummy(0), Is.EqualTo(firstHit));
+
+            Invoke(session.UI, "TogglePracticePanel");
+            ClickPractice("假人 2");
+            ClickPractice("复位此假人");
+            Assert.That(Dummy(0), Is.EqualTo(firstHit));
+            Assert.That(Dummy(1), Is.EqualTo(second));
+            var stats = Invoke(range, "GetStats");
+            Assert.That((Read<int>(stats, "Shots"), Read<int>(stats, "Hits")), Is.EqualTo((3, 3)));
+            ClickPractice("重置标靶和计数");
+            Assert.That(Dummy(0), Is.EqualTo(first));
+            Assert.That(Dummy(1), Is.EqualTo(second));
+            stats = Invoke(range, "GetStats");
+            Assert.That((Read<int>(stats, "Shots"), Read<int>(stats, "Hits")), Is.EqualTo((0, 0)));
+            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.Path));
+            ClickPractice("返回大厅");
+            Assert.That(session.Phase, Is.EqualTo(SessionPhase.Menu), session.Error);
+            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.Path));
+
+            void Equip(int index, EquipmentSlot slot, string item)
+            {
+                Assert.That(Invoke(range, "TrySetDummyGear", index, slot, item, session.Catalog), Is.EqualTo(true));
+            }
+
+            (string helmet, string armor, int helmetWear, int armorWear, int hits, float health) Dummy(int index)
+            {
+                var args = new object[] { index, null };
+                Assert.That(Invoke(range, "TryGetDummy", args), Is.EqualTo(true));
+                var dummy = args[1];
+                return (Read<string>(dummy, "HelmetId"), Read<string>(dummy, "ArmorId"), Read<int>(dummy, "HelmetWear"),
+                    Read<int>(dummy, "ArmorWear"), Read<int>(dummy, "Hits"), Read<float>(dummy, "CurrentHealth"));
+            }
+
+            void Hit(int index, float height)
+            {
+                // Use fixed impacts so the isolation check does not depend on random spread.
+                var target = targets[index];
+                var point = target.transform.TransformPoint(Vector3.up * height);
+                float before = target.Current;
+                typeof(Health).GetMethod("DamageAt", Instance, null,
+                    new[] { typeof(float), typeof(Health), typeof(Vector3), typeof(int) }, null)
+                    .Invoke(target, new object[] { 8f, player.Health, point, WeaponRules.PenetrationForTier(1) });
+                Invoke(range, "RecordShot");
+                Assert.That(Invoke(range, "RecordHit", target, point, before - target.Current), Is.EqualTo(true));
+            }
+        }
+
+        [UnityTest]
         public IEnumerator FailedRangeSetupLeavesTheLobbyProfileUntouched()
         {
             CreateSession();
@@ -275,8 +396,8 @@ namespace Dustline.Tests
         [UnityTest]
         public IEnumerator LegacySaveMigratesInPlaceAndKeepsSelectedAndPurchasedUpgrades()
         {
-            CreateSession(true);
-            Assert.That(session.Profile.Version, Is.EqualTo(ProfileData.CurrentVersion));
+            CreateSession(legacy: true, birthdayGiftClaimed: false);
+            Assert.That(session.Profile.Version, Is.EqualTo(4));
             Assert.That(session.Profile.Credits, Is.EqualTo(777));
             Assert.That(session.Profile.Raids, Is.EqualTo(4));
             Assert.That(session.BoundBladeId, Is.EqualTo(BladeCatalog.ShortBladeId));
@@ -286,12 +407,18 @@ namespace Dustline.Tests
             Assert.That(rifle.Mods.Grip, Is.EqualTo(1));
             Assert.That(rifle.Mods.OwnedGrip, Is.EqualTo(2));
             Assert.That(rifle.Mods.Sight, Is.EqualTo(1));
-            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.LoadoutUpgradeBackupPath));
+            Assert.That(store.EconomyUpgradeBackupPath, Is.EqualTo(store.Path + ".pre-v4.bak"));
+            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.EconomyUpgradeBackupPath));
+            Assert.That(File.Exists(store.LoadoutUpgradeBackupPath), Is.False);
             Assert.That(session.Stash.Count("medkit"), Is.EqualTo(1));
+            Assert.That(session.Stash.Count(LootTable.BirthdayCake), Is.EqualTo(1));
+            Assert.That(store.Load().BirthdayGiftClaimed, Is.True);
             Assert.That(Invoke(session, "SelectWeaponPart", session.Loadout, rifle.InstanceId, WeaponModSlot.Grip, 2), Is.EqualTo(true));
             Assert.That(session.Profile.Credits, Is.EqualTo(777));
-            Assert.That(store.Load().Loadout.Find(x => x.InstanceId == rifle.InstanceId).Mods.Grip, Is.EqualTo(2));
-            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.LoadoutUpgradeBackupPath));
+            var saved = store.Load();
+            Assert.That(saved.Loadout.Find(x => x.InstanceId == rifle.InstanceId).Mods.Grip, Is.EqualTo(2));
+            Assert.That(saved.Stash.Where(item => item.ItemId == LootTable.BirthdayCake).Sum(item => item.Quantity), Is.EqualTo(1));
+            CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.EconomyUpgradeBackupPath));
             yield return null;
         }
 
@@ -305,6 +432,7 @@ namespace Dustline.Tests
             session.Loadout.Restore(prepared);
             session.PersistSafeState();
             var supplies = session.Loadout.Find(medicine.InstanceId);
+            ConfirmDefaultDeployment();
             session.StartRaid();
             for (int i = 0; i < 60 && session.Phase == SessionPhase.Loading; i++) yield return null;
             Assert.That(session.Phase, Is.EqualTo(SessionPhase.Raid), session.Error);
@@ -348,6 +476,7 @@ namespace Dustline.Tests
             session.LeavePractice();
             CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(store.Path));
 
+            ConfirmDefaultDeployment();
             session.StartRaid();
             for (int frame = 0; frame < 60 && session.Phase == SessionPhase.Loading; frame++) yield return null;
             Assert.That(session.Phase, Is.EqualTo(SessionPhase.Raid), session.Error);
@@ -356,6 +485,8 @@ namespace Dustline.Tests
             Assert.That(player.WeaponView.AppearanceKey, Is.EqualTo(appearance));
             CollectionAssert.AreEqual(geometry, Geometry(player.WeaponView));
             Assert.That(player.Weapon.Magazine.Rounds, Is.EqualTo(3));
+            Assert.That(player.Weapon.HasInfiniteReserve, Is.False);
+            Assert.That(player.Weapon.Reserve, Is.EqualTo(18));
             var deployed = File.ReadAllBytes(store.Path);
             session.UI.BackOrSettings();
             Click("退出本局");
@@ -370,7 +501,9 @@ namespace Dustline.Tests
             session.UI.BackOrSettings();
             Click("退出本局");
             Click("确认退出");
-            Assert.That(session.Phase, Is.EqualTo(SessionPhase.Results));
+            Assert.That(session.Phase, Is.EqualTo(SessionPhase.Menu));
+            Assert.That(session.Player, Is.Null);
+            Assert.That(session.UI.GetComponentsInChildren<RectTransform>().Any(node => node.name == "Operations desk"), Is.True);
             Assert.That(session.Result, Does.Contain("主动退出"));
             var after = store.Load();
             Assert.That(after.RaidInProgress, Is.False);
@@ -380,9 +513,6 @@ namespace Dustline.Tests
             Assert.That(after.BoundBladeId, Is.EqualTo(BladeCatalog.ShortBladeId));
             Assert.That(after.Extractions, Is.EqualTo(2));
             Assert.That(after.Raids, Is.EqualTo(5));
-            Click("‹ 返回");
-            Assert.That(session.Phase, Is.EqualTo(SessionPhase.Menu));
-            Assert.That(session.Player, Is.Null);
 
             void Click(string caption)
             {
@@ -420,18 +550,19 @@ namespace Dustline.Tests
             Assert.That(session.Player, Is.Not.Null);
         }
 
-        void CreateSession(bool legacy = false)
+        void ConfirmDefaultDeployment()
+        {
+            Assert.That(Invoke(session, "ConfirmDeployment", 0, 0), Is.EqualTo(true), "Confirm regular harbor deployment.");
+        }
+
+        void CreateSession(bool legacy = false, bool birthdayGiftClaimed = true)
         {
             var catalog = Resources.Load<ItemCatalog>("Dustline/Items");
             Assert.That(catalog, Is.Not.Null, "Run Dustline > Prepare Project first.");
             store = new ProfileStore(Path.Combine(Application.temporaryCachePath, "dustline-practice-test-" + Guid.NewGuid().ToString("N") + ".json"));
-            var stash = new GridInventory(12, 10, 300f, catalog);
-            var loadout = new GridInventory(6, 6, 30f, catalog);
+            var stash = GridInventory.Warehouse(catalog);
             Assert.That(stash.TryAdd("medkit", 1, out _), Is.True);
-            Assert.That(loadout.TryAdd("rifle", 1, out _), Is.True);
-            var rifle = loadout.Items[0];
-            Assert.That(loadout.TryEquip(rifle.InstanceId, EquipmentSlot.Weapon, out _), Is.True);
-            rifle.LoadedAmmo = 3;
+            var rifle = new ItemStack { InstanceId = "raid-rifle", ItemId = "rifle", Slot = EquipmentSlot.Weapon, LoadedAmmo = 3 };
             rifle.Mods = new WeaponMods { Grip = 1, OwnedGrip = 2, Sight = 1, OwnedSight = 1 };
             if (!legacy)
             {
@@ -441,11 +572,13 @@ namespace Dustline.Tests
                 rifle.Parts.Muzzle = new PartLink { ItemId = "part_muzzle", InstanceId = "raid-muzzle" };
                 rifle.Parts.Magazine = new PartLink { ItemId = "part_mag_a", InstanceId = "raid-magazine" };
             }
-            Assert.That(loadout.TryAdd("ammo", 18, out _), Is.True);
-            var carried = loadout.Snapshot();
-            if (!legacy) carried.Find(item => item.ItemId == "ammo").Area = CargoArea.Pockets;
+            var carried = new List<ItemStack>
+            {
+                rifle,
+                new ItemStack { InstanceId = "raid-ammo", ItemId = "ammo", Quantity = 18, Area = legacy ? CargoArea.Main : CargoArea.Pockets }
+            };
             store.Save(new ProfileData { Version = legacy ? 1 : ProfileData.CurrentVersion, Credits = 777, Raids = 4, Extractions = 2, BoundBladeId = BladeCatalog.ShortBladeId,
-                Loadout = carried, Stash = stash.Snapshot() });
+                BirthdayGiftClaimed = birthdayGiftClaimed, Loadout = carried, Stash = stash.Snapshot() });
             originalBytes = File.ReadAllBytes(store.Path);
             host = new GameObject("Isolated practice test session");
             host.SetActive(false);
@@ -455,6 +588,18 @@ namespace Dustline.Tests
             Assert.That(session.Phase, Is.EqualTo(SessionPhase.Menu), session.Error);
         }
 
+        void ClickPractice(string name)
+        {
+            var pages = session.UI.transform.Find("Dustline UI/Safe area/Pages");
+            var panel = pages.GetComponentsInChildren<RectTransform>().SingleOrDefault(node => node.name == "Practice controls");
+            Assert.That(panel, Is.Not.Null);
+            var button = panel.GetComponentsInChildren<Button>().SingleOrDefault(candidate => candidate.name == name);
+            Assert.That(button, Is.Not.Null, name);
+            Assert.That(button.IsInteractable(), Is.True, name);
+            button.onClick.Invoke();
+        }
+
+        static T Read<T>(object owner, string name) => (T)Field(owner, name).GetValue(owner);
         static FieldInfo Field(object owner, string name) => owner.GetType().GetField(name, Instance);
         static object Invoke(object owner, string name, params object[] args) => owner.GetType().GetMethod(name, Instance).Invoke(owner, args);
         static void Set(object owner, string name, object value) => owner.GetType().GetProperty(name, Instance).GetSetMethod(true).Invoke(owner, new[] { value });

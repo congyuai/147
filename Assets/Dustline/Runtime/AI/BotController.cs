@@ -113,7 +113,7 @@ namespace Dustline
                 if (seen != null)
                 {
                     if (state != State.Attack || target != seen)
-                        shotAt = Mathf.Max(shotAt, Time.time + tuning.ReactionSeconds);
+                        shotAt = Mathf.Max(shotAt, Time.time + tuning.ReactionSeconds / session.RaidThreat);
                     target = seen;
                     state = State.Attack;
                     lastKnown = seen.transform.position;
@@ -229,7 +229,7 @@ namespace Dustline
                 end = hit.point;
                 Health struck = hit.collider.GetComponentInParent<Health>();
                 hitEnemy = CanEngage(struck);
-                if (hitEnemy) struck.DamageAt(tuning.Damage, health, hit.point);
+                if (hitEnemy) struck.DamageAt(tuning.Damage * session.RaidThreat, health, hit.point);
             }
             CombatNoise.Emit(transform.position, 55f, health);
             session.Effects?.Shot(weapon.Muzzle.position, end, hitSomething ? hit.normal : Vector3.zero, hitSomething, hitEnemy, false);

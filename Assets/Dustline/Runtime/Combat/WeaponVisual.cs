@@ -14,7 +14,7 @@ namespace Dustline
         public Transform Muzzle { get; private set; }
         public WeaponForm Form { get; private set; }
         public bool IsMelee => Ar20Mesh.IsBlade(Form);
-        public int AppearanceKey => sightLevel | (gripStyle << 3) | (stockStyle << 6) | (muzzleStyle << 9) | (magStyle << 12);
+        public int AppearanceKey => WeaponRules.PackLook(sightLevel, gripStyle, stockStyle, muzzleStyle, magStyle);
         internal float VisibleAim => firstPerson && !IsMelee ? aimProgress : 0f;
         internal bool MedicineBusy => usingMedicine || medicineBlend > 0f;
         public Vector3 RightGrip => transform.TransformPoint(rightGrip);
@@ -24,7 +24,7 @@ namespace Dustline
         internal Quaternion LeftGlove => IsMelee && Form != WeaponForm.Tangdao
             ? transform.parent.rotation * FreeGlove : transform.rotation * leftGlove;
 
-        bool firstPerson;
+        bool firstPerson, alternateFrame;
         MeshFilter filter;
         MeshRenderer surface, magazineProp, medicineProp;
         MeshFilter medicineMesh, magazineMesh;
@@ -128,6 +128,7 @@ namespace Dustline
         void ConfigureForm(WeaponForm form)
         {
             Form = form;
+            alternateFrame = false;
             sightLevel = gripStyle = stockStyle = muzzleStyle = magStyle = 0;
             switch (Form)
             {
@@ -168,9 +169,13 @@ namespace Dustline
             ApplyPose();
         }
 
-        public void SetConfiguration(ItemStack stack, ItemCatalog catalog)
+        public void SetConfiguration(ItemStack stack, ItemCatalog catalog) =>
+            SetConfiguration(stack, catalog, catalog?.Find(stack?.ItemId)?.Weapon);
+
+        internal void SetConfiguration(ItemStack stack, ItemCatalog catalog, WeaponDefinition definition)
         {
             if (IsMelee) return;
+            alternateFrame = definition != null && definition.AlternateFrame;
             sightLevel = WeaponRules.VisualLevel(stack, catalog, PartSlot.Sight);
             gripStyle = WeaponRules.VisualLevel(stack, catalog, PartSlot.Grip);
             stockStyle = WeaponRules.VisualLevel(stack, catalog, PartSlot.Stock);
@@ -183,13 +188,13 @@ namespace Dustline
         void RefreshArt()
         {
             if (art == null) return;
-            filter.sharedMesh = art.GetMesh(Form, sightLevel, gripStyle != 0, stockStyle != 0);
+            filter.sharedMesh = art.GetMesh(Form, sightLevel, gripStyle != 0, stockStyle != 0, alternateFrame);
             SetAccessory(PartSlot.Sight, sightLevel, Vector3.zero);
             SetAccessory(PartSlot.Grip, gripStyle, Vector3.zero);
             SetAccessory(PartSlot.Stock, stockStyle, Vector3.zero);
-            float front = Ar20Mesh.Front(Form);
+            float front = Ar20Mesh.Front(Form, alternateFrame);
             SetAccessory(PartSlot.Muzzle, muzzleStyle, new Vector3(0, Ar20Mesh.Muzzle.y, front - .012f));
-            if (!IsMelee) Muzzle.localPosition = new Vector3(0, Ar20Mesh.Muzzle.y, front + (muzzleStyle == 0 ? 0 : muzzleStyle == 1 ? .065f : .121f));
+            if (!IsMelee) Muzzle.localPosition = new Vector3(0, Ar20Mesh.Muzzle.y, front + Ar20Mesh.MuzzleExtension(muzzleStyle));
             magazineMesh.sharedMesh = magStyle > 0 ? art.PartMesh(PartSlot.Magazine, magStyle)
                 : Form == WeaponForm.Lmg ? art.PartMesh(PartSlot.Magazine, 2) : art.MagazineMesh;
             magazineMesh.transform.localScale = Form == WeaponForm.Pistol && magStyle == 0 ? new Vector3(.78f, .69f, .78f)

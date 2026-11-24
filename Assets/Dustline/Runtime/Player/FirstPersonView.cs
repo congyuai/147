@@ -39,7 +39,7 @@ namespace Dustline
             data.requiresDepthOption = CameraOverrideOption.Off;
             // New URP overlay data clears depth by default; preserve local mesh depth testing.
             if (!data.clearDepth) throw new InvalidOperationException("The foreground camera must clear world depth.");
-            world.cullingMask &= ~(Mask | ItemPreviewStage.LayerMask);
+            world.cullingMask &= ~(Mask | ItemPreviewStage.LayerMask | OperatorPreview.LayerMask | StrategyTerrain.LayerMask);
             stack.Add(overlay);
             return overlay;
         }

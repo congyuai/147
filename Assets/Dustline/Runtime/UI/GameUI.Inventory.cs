@@ -145,13 +145,18 @@ namespace Dustline
 
             var target = stash ? session.Stash : loot?.Inventory;
             Label(storage, stash ? "仓库储备" : loot == null ? "搜刮区" : "容器物资", 20, 9, 2, right * .48f, 32, TextAnchor.MiddleLeft);
-            if (stash) Button(storage, "一键整理", right - 113, 3, 105, 31, () =>
+            if (stash)
             {
-                if (!InventoryIdle() || ProcessInventoryBackKey()) return;
-                CloseItemPopup();
-                if (session.SortStash(out var error)) { RefreshInventory(); Notify("仓库已整理。"); }
-                else Notify(error ?? "未能保存整理结果。");
-            });
+                var sort = Button(storage, "", right - 55, 3, 45, 32, () =>
+                {
+                    if (!InventoryIdle() || ProcessInventoryBackKey()) return;
+                    CloseItemPopup();
+                    if (session.SortStash(out var error)) { RefreshInventory(); Notify("仓库已整理。"); }
+                    else Notify(error ?? "未能保存整理结果。");
+                });
+                sort.name = "一键整理";
+                Fill(At("Sort icon", sort.transform, 10, 3, 25, 25), Aqua).sprite = icons[RaidIcon.Sort];
+            }
             if (target != null)
             {
                 if (!stash && target.Items.Count == 0)
@@ -202,22 +207,23 @@ namespace Dustline
             float gearRow = (h - 48f - 3 * gutter) / 3f;
             float guardTop = 42f + 2 * (gearRow + gutter);
             bool legacy = carried.OccupiedCells(CargoArea.Legacy) > 0;
-            var sections = new[] { "武器", "防具", "弹挂", "口袋", "背包", "迁移物品" };
-            var symbols = new[] { EquipmentSlot.Weapon, EquipmentSlot.Armor, EquipmentSlot.Rig, EquipmentSlot.None, EquipmentSlot.Pack, EquipmentSlot.Pack };
-            var area = new[] { CargoArea.Rig, CargoArea.Pockets, CargoArea.Main, CargoArea.Legacy };
+            var sections = new[] { "武器", "防具", "弹挂", "口袋", "背包", "安全箱", "迁移物品" };
+            var symbols = new[] { EquipmentSlot.Weapon, EquipmentSlot.Armor, EquipmentSlot.Rig, EquipmentSlot.None, EquipmentSlot.Pack,
+                EquipmentSlot.None, EquipmentSlot.Pack };
+            var area = new[] { CargoArea.Rig, CargoArea.Pockets, CargoArea.Main, CargoArea.Secure, CargoArea.Legacy };
             var cells = new float[area.Length];
             var heights = new float[area.Length];
-            var tops = new float[6];
+            var tops = new float[sections.Length];
             tops[1] = guardTop;
             float end = h;
-            int count = legacy ? 6 : 5;
+            int count = legacy ? sections.Length : sections.Length - 1;
             for (int i = 0; i < count - 2; i++)
             {
                 var shape = carried.Layout(area[i]);
-                bool hasGear = i == 0 || i == 2;
+                bool hasGear = area[i] == CargoArea.Rig || area[i] == CargoArea.Main || area[i] == CargoArea.Secure;
                 float free = inner - 2 * gutter - (hasGear ? iconWidth + gutter : 0f);
                 cells[i] = Mathf.Min(hasGear ? 52f : 58f, free / Mathf.Max(1, shape.Columns));
-                heights[i] = head + Mathf.Max(hasGear ? 88f : 0f, shape.Rows * cells[i]) + gutter;
+                heights[i] = head + Mathf.Max(hasGear ? iconWidth : 0f, shape.Rows * cells[i]) + gutter;
                 tops[i + 2] = end;
                 end += heights[i];
             }
@@ -251,11 +257,17 @@ namespace Dustline
                 caption.name = "Capacity / " + area[i];
                 if (area[i] == CargoArea.Legacy)
                     Label(section, "不带入突袭", 14, 8, 0, inner - 16, head - 3f, TextAnchor.MiddleRight, Muted);
-                var gearSlot = i == 0 ? EquipmentSlot.Rig : i == 2 ? EquipmentSlot.Pack : EquipmentSlot.None;
+                var gearSlot = area[i] == CargoArea.Rig ? EquipmentSlot.Rig : area[i] == CargoArea.Main ? EquipmentSlot.Pack : EquipmentSlot.None;
                 float x = gutter;
                 if (gearSlot != EquipmentSlot.None)
                 {
-                    DrawEquipment(section, carried, gearSlot, 0, head, iconWidth, Mathf.Max(88f, shape.Rows * cells[i]));
+                    DrawEquipment(section, carried, gearSlot, 0, head, iconWidth, iconWidth);
+                    x = iconWidth + gutter;
+                }
+                else if (area[i] == CargoArea.Secure)
+                {
+                    Label(section, "失败时保留", 14, 8, 0, inner - 16, head - 3f, TextAnchor.MiddleRight, Muted);
+                    DrawSecureCase(section, iconWidth, head, stash);
                     x = iconWidth + gutter;
                 }
                 if (shape.Columns > 0) DrawGrid(section, carried, area[i], x, head, cells[i]);
@@ -270,9 +282,11 @@ namespace Dustline
                 var tint = new Color32(150, 177, 175, 255);
                 if (symbols[i] != EquipmentSlot.None)
                     DrawSilhouette(tab.transform, symbols[i], 9, 7, 32, 24, tint, "Category icon");
+                else if (i == 5)
+                    Fill(At("Case symbol", tab.transform, 11, 5, 28, 28), tint).sprite = icons[RaidIcon.Secure];
                 else
                     for (int x = 0; x < 3; x++) Fill(At("Pocket symbol", tab.transform, 9 + x * 11, 14, 8, 8), tint);
-                Label(tab.transform, sections[i], i == 5 ? 11 : 13, 1, 33, 48, 16, TextAnchor.MiddleCenter, Muted);
+                Label(tab.transform, sections[i], i == 6 ? 11 : 13, 1, 33, 48, 16, TextAnchor.MiddleCenter, Muted);
                 markers[i] = Fill(At("Category selection", tab.transform, 0, 0, 2, 55), Aqua);
             }
             jumpToSection = index =>
@@ -293,6 +307,40 @@ namespace Dustline
                 for (int i = 1; i < count; i++) if (offset + 2f >= tops[i]) active = i;
                 for (int i = 0; i < count; i++) if (markers[i] != null) markers[i].enabled = i == active;
             }
+        }
+
+        void DrawSecureCase(RectTransform section, float size, float top, bool stash)
+        {
+            var definition = session.Catalog.Find(GridInventory.DefaultSecureCase);
+            var button = Button(section, "", 0, top, size, size, null);
+            button.name = "Equipped secure case";
+            var card = (RectTransform)button.transform;
+            if (definition != null) DrawItemIcon(card, definition, null, 4, 4, size - 8, size - 25);
+            else Fill(At("Case icon", card, size * .24f, 8, size * .52f, size * .52f), Aqua).sprite = icons[RaidIcon.Secure];
+            TileCaption(card, "已装备 2×2", "Secure case capacity", 3, size - 22, size - 6, 19, TextAnchor.MiddleCenter, 13);
+            button.onClick.AddListener(() =>
+            {
+                if (!InventoryIdle() || ProcessInventoryBackKey() || placing) return;
+                CloseInventoryMore();
+                ClearSelection();
+                var popup = ItemPopup(panelRoot, card, definition, null, null);
+                if (definition == null) return;
+                Label(popup, "箱内物品在撤离失败或中断时保留，\n不能直接用作弹药或药品。", 15, 13, 158, 304, 49, color: Aqua);
+                if (stash)
+                {
+                    var ids = new[] { "secure_2x3", "secure_3x3", "secure_3x4" };
+                    float y = 210;
+                    foreach (var id in ids)
+                    {
+                        var other = session.Catalog.Find(id);
+                        if (other == null) continue;
+                        Label(popup, other.DisplayName + " · 尚未开放", 15, 13, y, 304, 26, color: Muted);
+                        y += 27;
+                    }
+                    popup.sizeDelta = new Vector2(330, y + 6);
+                    PlaceItemPopup(popup, panelRoot, card);
+                }
+            });
         }
 
         RectTransform VerticalInventory(Transform parent, float x, float y, float w, float h, float contentHeight, float position,
@@ -363,11 +411,12 @@ namespace Dustline
                 float w = (item.Rotated ? def.Height : def.Width) * cell - 2,
                     h = (item.Rotated ? def.Width : def.Height) * cell - 2;
                 string id = item.InstanceId;
-                var grade = ItemDefinition.GradeColor(def.Tier);
+                var grade = def.QualityColor;
                 float margin = layout.Pockets != null && layout.Pockets.Length > 0 || layout.Split > 0 ? 3f : 1f;
                 w -= 2f * (margin - 1f); h -= 2f * (margin - 1f);
                 var tileRect = At(def.DisplayName, board, item.X * cell + margin, item.Y * cell + margin, w, h);
-                var tile = CreateItemTile(tileRect, def.Tier > 0 ? Color.Lerp(Plate, grade, .15f) : Plate);
+                bool graded = def.Tier > 0 || def.Special;
+                var tile = CreateItemTile(tileRect, graded ? Color.Lerp(Plate, grade, .15f) : Plate);
                 itemAnchors[(bag, id)] = tileRect;
                 tile.onClick.AddListener(() => SelectItem(bag, id));
                 tile.Place = e =>
@@ -376,7 +425,7 @@ namespace Dustline
                     if (drops.TryCell(e.position, e.pressEventCamera, out int x, out int y)) PlaceAt(bag, area, x, y);
                     return true;
                 };
-                if (def.Tier > 0) Fill(At("Grade", tileRect, 0, 0, 2, h), grade);
+                if (graded) Fill(At("Grade", tileRect, 0, 0, 2, h), grade);
                 float modelInset = Mathf.Min(11f, h * .22f);
                 DrawItemIcon(tileRect, def, item, 2, modelInset, w - 4f, h - 2f * modelInset, item.Rotated);
                 TileCaption(tileRect, def.DisplayName, "Item name", 3, 2, w - 6, 13, TextAnchor.UpperLeft, 12);
@@ -511,7 +560,7 @@ namespace Dustline
             if (stash)
             {
                 Add("补给商店", () => ShowShop());
-                Add("应急装备", session.EmergencyKit);
+                Add("交易市场", ShowMarket);
             }
             else
             {
@@ -574,7 +623,7 @@ namespace Dustline
             itemPopup = At("Item details", panel, 0, 0, 330, 216);
             popupClosed = closed;
             Fill(itemPopup, new Color32(16, 27, 33, 252), true);
-            var border = def != null && def.Tier > 0 ? ItemDefinition.GradeColor(def.Tier) : Aqua;
+            var border = def != null && (def.Tier > 0 || def.Special) ? def.QualityColor : Aqua;
             Fill(At("Details rule", itemPopup, 0, 0, 330, 2), border);
             DrawItemIcon(itemPopup, def, stack, 8, 11, 87, 61, blade: blade != null ? blade.Form : WeaponForm.Tangdao);
             Label(itemPopup, def != null ? def.DisplayName : session.BoundBladeName, 19, 99, 12, 166, 57, TextAnchor.MiddleLeft);
@@ -817,7 +866,8 @@ namespace Dustline
                 paintedGear = gear;
                 var targetGraphic = gear.GetComponent<Button>().targetGraphic;
                 gearOriginal = targetGraphic.color;
-                targetGraphic.color = Color.Lerp(gearOriginal, to.TryWearFrom(from, dragId, gear.Slot, out _) ? Aqua : MapDanger, .6f);
+                bool ok = to.TryWearFrom(from, dragId, gear.Slot, out _, dragBag == session.Stash ? from : null);
+                targetGraphic.color = Color.Lerp(gearOriginal, ok ? Aqua : MapDanger, .6f);
             }
         }
 
@@ -893,7 +943,7 @@ namespace Dustline
         {
             if (!InventoryIdle() || source == session.Loadout && source.Find(id)?.Slot == slot) return;
             if (!session.EditInventory(source, session.Loadout, (GridInventory from, GridInventory to, out string why) =>
-                to.TryWearFrom(from, id, slot, out why), out var error))
+                to.TryWearFrom(from, id, slot, out why, source == session.Stash ? from : null), out var error))
             {
                 Notify(error ?? "不能装备到该栏位。");
                 return;
@@ -976,9 +1026,10 @@ namespace Dustline
             if (stash)
             {
                 string sale = (!item.Parts.Empty || item.LoadedAmmo > 0) ? "出售枪身 · 退回配件和弹药" : "出售";
-                ActionButton(root, sale + " / " + (long)Mathf.Max(1, def.Value / 2) * item.Quantity, ref y, () => session.Sell(source, id));
+                ActionButton(root, sale + " / " + ((long)def.ResaleValue * item.Quantity).ToString("N0"), ref y, () => session.Sell(source, id));
             }
-            else if (source == session.Loadout && def.Kind == ItemKind.Medicine) ActionButton(root, "选择治疗部位", ref y, () => ShowHealth(null, id));
+            else if (source == session.Loadout && def.Kind == ItemKind.Medicine && GridInventory.FieldSupply(item))
+                ActionButton(root, "选择治疗部位", ref y, () => ShowHealth(null, id));
             root.sizeDelta = new Vector2(330, Mathf.Max(209f, y + 7));
 
             void StartPlacement(bool turn)
@@ -998,7 +1049,7 @@ namespace Dustline
                 for (int i = 0; i <= (int)PartSlot.Magazine; i++)
                     weight += session.Catalog.Find(stack.Parts.Get((PartSlot)i).ItemId)?.UnitWeight ?? 0f;
             int w = stack?.Rotated == true ? item.Height : item.Width, h = stack?.Rotated == true ? item.Width : item.Height;
-            string result = item.KindName + " · " + (item.Tier > 0 ? item.Tier + " 级" : "未分级")
+            string result = item.KindName + " · " + item.QualityName
                 + "\n占格 " + w + " × " + h + " / " + weight.ToString("0.##") + " 千克";
             if (item.Storage.Columns > 0)
                 result += "\n容量 " + item.Storage.Capacity + " 格 / 内载 " + item.Storage.WeightLimit + " 千克";
@@ -1007,12 +1058,13 @@ namespace Dustline
             if (item.Weapon != null && !item.Weapon.Melee)
                 result += "\n弹匣 " + Mathf.Max(0, stack?.LoadedAmmo ?? 0) + " / " + WeaponRules.Capacity(item.Weapon, stack, session.Catalog)
                     + " · " + AmmoName(item.Weapon.AmmoFamily);
-            if (item.Kind == ItemKind.Ammo) result += "\n" + AmmoName(item.AmmoFamily);
+            if (item.Kind == ItemKind.Ammo) result += "\n" + AmmoName(item.AmmoFamily) + " · 游戏穿甲 " + item.Penetration;
             if (item.Kind == ItemKind.Part)
             {
                 result += "\n" + PartName(item.Part.Slot) + " · " + (string.IsNullOrEmpty(item.Part.DedicatedItem)
                     ? item.Part.Interface : session.Catalog.Find(item.Part.DedicatedItem)?.DisplayName ?? "指定型号");
                 if (item.Part.Slot == PartSlot.Magazine) result += "\n容量 " + item.Part.Capacity + " 发";
+                if (item.Part.Slot == PartSlot.Sight && item.Part.Magnification > 0) result += "\n放大倍率 " + item.Part.Magnification + "×";
             }
             return result;
         }

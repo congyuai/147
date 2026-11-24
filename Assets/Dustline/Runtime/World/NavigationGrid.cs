@@ -9,7 +9,9 @@ namespace Dustline
         const float BodyRadius = .47f, FootClearance = .13f, TopClearance = 1.88f;
         readonly float linkRadius, groundHeight;
         readonly int obstacleMask;
-        readonly bool port;
+        enum FloorKind { Flat, Port, Quarry }
+        readonly FloorKind terrain;
+        readonly HashSet<Collider> quarryFloors;
         readonly Bounds[] doors;
         readonly Dictionary<Vector2Int, List<int>> buckets = new Dictionary<Vector2Int, List<int>>();
         readonly Collider[] overlaps = new Collider[24];
@@ -41,19 +43,24 @@ namespace Dustline
             : this(waypoints, linkRadius, Physics.DefaultRaycastLayers, 0f) { }
 
         public NavigationGrid(IEnumerable<Vector3> waypoints, float linkRadius, int obstacleMask, float groundHeight)
-            : this(waypoints, linkRadius, obstacleMask, groundHeight, false, Array.Empty<HarborDoor>()) { }
+            : this(waypoints, linkRadius, obstacleMask, groundHeight, FloorKind.Flat, Array.Empty<HarborDoor>(), null) { }
 
         internal NavigationGrid(IEnumerable<Vector3> waypoints, float linkRadius, HarborDoor[] harborDoors)
-            : this(waypoints, linkRadius, Physics.DefaultRaycastLayers, 0, true, harborDoors) { }
+            : this(waypoints, linkRadius, Physics.DefaultRaycastLayers, 0, FloorKind.Port, harborDoors, null) { }
 
-        NavigationGrid(IEnumerable<Vector3> waypoints, float linkRadius, int obstacleMask, float groundHeight, bool port, HarborDoor[] harborDoors)
+        internal NavigationGrid(IEnumerable<Vector3> waypoints, float linkRadius, HashSet<Collider> quarryFloors)
+            : this(waypoints, linkRadius, Physics.DefaultRaycastLayers, 0, FloorKind.Quarry, Array.Empty<HarborDoor>(), quarryFloors) { }
+
+        NavigationGrid(IEnumerable<Vector3> waypoints, float linkRadius, int obstacleMask, float groundHeight, FloorKind terrain,
+            HarborDoor[] harborDoors, HashSet<Collider> quarryFloors)
         {
             if (waypoints == null) throw new ArgumentNullException(nameof(waypoints));
             if (!(linkRadius > 0) || float.IsInfinity(linkRadius)) throw new ArgumentOutOfRangeException(nameof(linkRadius));
             this.linkRadius = linkRadius;
             this.obstacleMask = obstacleMask;
             this.groundHeight = groundHeight;
-            this.port = port;
+            this.terrain = terrain;
+            this.quarryFloors = quarryFloors;
             doors = new Bounds[harborDoors.Length];
             for (int i = 0; i < doors.Length; i++) doors[i] = harborDoors[i].Opening;
             Physics.SyncTransforms();
@@ -95,11 +102,23 @@ namespace Dustline
         static Vector3 Lower(Vector3 p) => p + Vector3.up * (FootClearance + BodyRadius);
         static Vector3 Upper(Vector3 p) => p + Vector3.up * (TopClearance - BodyRadius);
 
+        internal static float PlanarDistanceSquared(Vector3 a, Vector3 b)
+        {
+            float x = a.x - b.x, z = a.z - b.z;
+            return x * x + z * z;
+        }
+
+        bool SampleFloor(float x, float z, out float y)
+        {
+            if (terrain == FloorKind.Port) return PortTerrain.TryWalk(x, z, out y);
+            if (terrain == FloorKind.Quarry) return QuarryTerrain.TryWalk(x, z, out y);
+            y = groundHeight;
+            return true;
+        }
+
         internal bool TryFloor(Vector3 point, out Vector3 floor)
         {
-            bool standable = true;
-            float y = groundHeight;
-            if (port) standable = PortTerrain.TryWalk(point.x, point.z, out y);
+            bool standable = SampleFloor(point.x, point.z, out float y);
             floor = new Vector3(point.x, y, point.z);
             return standable;
         }
@@ -112,7 +131,33 @@ namespace Dustline
                 for (int z = cell.y - 1; z <= cell.y + 1; z++)
                     if (buckets.TryGetValue(new Vector2Int(x, z), out var indices))
                         foreach (int i in indices)
-                            if (PortLayout.DistanceSquared(Points[i], point) <= radiusSq) yield return i;
+                            if (PlanarDistanceSquared(Points[i], point) <= radiusSq) yield return i;
+        }
+
+        internal List<Vector3> ReachablePoints(Vector3 origin)
+        {
+            var result = new List<Vector3>();
+            if (!TryFloor(origin, out var floor) || !IsClear(floor, false)) return result;
+            var reached = new bool[Points.Count];
+            var frontier = new Queue<int>();
+            foreach (int i in CloseNodes(floor))
+            {
+                if (!Sweep(floor, Points[i])) continue;
+                reached[i] = true;
+                frontier.Enqueue(i);
+            }
+            while (frontier.Count > 0)
+            {
+                int current = frontier.Dequeue();
+                result.Add(Points[current]);
+                foreach (var edge in edges[current])
+                {
+                    if (reached[edge.To] || edge.Door && !Sweep(Points[current], Points[edge.To])) continue;
+                    reached[edge.To] = true;
+                    frontier.Enqueue(edge.To);
+                }
+            }
+            return result;
         }
 
         internal bool CanStandAt(Vector3 position) => TryFloor(position, out var p) && IsClear(p, false);
@@ -130,7 +175,8 @@ namespace Dustline
         bool Blocks(Collider collider, bool ignoreDoorLeaf)
         {
             if (collider is CharacterController) return false;
-            if (port && collider.TryGetComponent<FootstepSurface>(out var surface) && surface.IsNavigationFloor) return false;
+            if (quarryFloors != null && quarryFloors.Contains(collider)) return false;
+            if (terrain == FloorKind.Port && collider.TryGetComponent<FootstepSurface>(out var surface) && surface.IsNavigationFloor) return false;
             if (ignoreDoorLeaf && doors.Length > 0)
             {
                 var door = collider.GetComponentInParent<HarborDoor>();
@@ -162,16 +208,17 @@ namespace Dustline
         bool TerrainTrace(Vector3 from, Vector3 to, out bool straight)
         {
             straight = true;
-            if (!port) return true;
-            float horizontal = Mathf.Sqrt(PortLayout.DistanceSquared(from, to));
+            if (terrain == FloorKind.Flat) return true;
+            float horizontal = Mathf.Sqrt(PlanarDistanceSquared(from, to));
             int count = Mathf.Max(1, Mathf.CeilToInt(horizontal / 1.15f));
             float previousHeight = from.y;
-            float maxRise = .27f + horizontal / count * PortTerrain.WalkGradient;
+            float walkGradient = terrain == FloorKind.Quarry ? QuarryTerrain.WalkGradient : PortTerrain.WalkGradient;
+            float maxRise = .27f + horizontal / count * walkGradient;
             for (int i = 1; i <= count; i++)
             {
                 float t = i / (float)count;
                 Vector3 p = Vector3.LerpUnclamped(from, to, t);
-                if (!PortTerrain.TryWalk(p.x, p.z, out float height) || Mathf.Abs(height - previousHeight) > maxRise) return false;
+                if (!SampleFloor(p.x, p.z, out float height) || Mathf.Abs(height - previousHeight) > maxRise) return false;
                 if (Mathf.Abs(p.y - height) > .11f) straight = false;
                 previousHeight = height;
             }
@@ -182,7 +229,7 @@ namespace Dustline
         {
             if (!TerrainTrace(from, to, out bool straight)) return false;
             if (straight) return Cast(from, to, ignoreDoorLeaf, avoidActors, actor);
-            int pieces = Mathf.CeilToInt(Mathf.Sqrt(PortLayout.DistanceSquared(from, to)) / 3.5f);
+            int pieces = Mathf.CeilToInt(Mathf.Sqrt(PlanarDistanceSquared(from, to)) / 3.5f);
             Vector3 last = from;
             for (int i = 1; i <= pieces; i++)
             {
@@ -260,8 +307,8 @@ namespace Dustline
         {
             var result = new List<Vector3>();
             if (!TryFloor(start, out var from) || !TryFloor(end, out var to) || !IsClear(from, false)
-                || !TryGoal(from, ref to) || PortLayout.DistanceSquared(from, to) < .0025f) return result;
-            if (PortLayout.DistanceSquared(from, to) <= 95 * 95 && Sweep(from, to)) { result.Add(to); return result; }
+                || !TryGoal(from, ref to) || PlanarDistanceSquared(from, to) < .0025f) return result;
+            if (PlanarDistanceSquared(from, to) <= 95 * 95 && Sweep(from, to)) { result.Add(to); return result; }
 
             Array.Clear(state, 0, state.Length);
             for (int i = 0; i < goalDistance.Length; i++) goalDistance[i] = -1;
@@ -335,9 +382,9 @@ namespace Dustline
             {
                 int next = i;
                 for (int shortcut = Mathf.Max(0, i - 3); shortcut < i; shortcut++)
-                    if (PortLayout.DistanceSquared(from, chain[shortcut]) <= 82 * 82 && Sweep(from, chain[shortcut]))
+                    if (PlanarDistanceSquared(from, chain[shortcut]) <= 82 * 82 && Sweep(from, chain[shortcut]))
                     { next = shortcut; break; }
-                if (PortLayout.DistanceSquared(chain[next], from) >= .0025f)
+                if (PlanarDistanceSquared(chain[next], from) >= .0025f)
                 {
                     from = chain[next];
                     result.Add(from);

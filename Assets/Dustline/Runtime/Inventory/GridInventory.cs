@@ -21,6 +21,9 @@ namespace Dustline
                 new CargoPocket(3, 0, 1, 1), new CargoPocket(4, 0, 1, 1) }
         };
 
+        public const int StashColumns = 12, StashRows = 30;
+        public const string DefaultSecureCase = "secure_2x2";
+        public static GridInventory Warehouse(ItemCatalog catalog) => new GridInventory(StashColumns, StashRows, 900, catalog);
         public static GridInventory Carried(ItemCatalog catalog) => new GridInventory(1, 1, 30, catalog, null, true);
 
         public GridInventory(int width, int height, float maxWeight, ItemCatalog catalog) : this(width, height, maxWeight, catalog, null) { }
@@ -99,6 +102,8 @@ namespace Dustline
         {
             if (!adaptive) return area == CargoArea.Main ? new StorageSpec { Columns = baseWidth, Rows = baseHeight } : default;
             if (area == CargoArea.Pockets) return PersonalPockets;
+            if (area == CargoArea.Secure)
+                return Catalog.Find(DefaultSecureCase)?.Storage ?? new StorageSpec { Columns = 2, Rows = 2, WeightLimit = 30 };
             if (area == CargoArea.Legacy) return new StorageSpec { Columns = 12, Rows = 12, WeightLimit = float.MaxValue };
             if (area != CargoArea.Main && area != CargoArea.Rig) return default;
             return Gear(area == CargoArea.Main ? EquipmentSlot.Pack : EquipmentSlot.Rig, load)?.Storage ?? default;
@@ -152,7 +157,7 @@ namespace Dustline
             int limit = StackLimit(definition);
             foreach (ItemStack stack in staged)
             {
-                if (stack.Slot != EquipmentSlot.None || stack.ItemId != itemId || stack.Area == CargoArea.Legacy)
+                if (stack.Slot != EquipmentSlot.None || stack.ItemId != itemId || stack.Area == CargoArea.Legacy || stack.Area == CargoArea.Secure)
                     continue;
 
                 int added = FitQuantity(staged, stack.Area, definition, Math.Min(remaining, limit - stack.Quantity));
@@ -277,7 +282,7 @@ namespace Dustline
                 return false;
             }
 
-            if (adaptive && (CapacitySlot(slot) || stack.Area == CargoArea.Legacy))
+            if (adaptive && (CapacitySlot(slot) || stack.Area == CargoArea.Legacy || stack.Area == CargoArea.Secure))
             {
                 var next = Snapshot();
                 var staged = next.Find(item => item.InstanceId == instanceId);
@@ -299,7 +304,7 @@ namespace Dustline
 
         static bool CapacitySlot(EquipmentSlot slot) => slot == EquipmentSlot.Pack || slot == EquipmentSlot.Rig;
 
-        internal bool TryWearFrom(GridInventory source, string id, EquipmentSlot slot, out string error)
+        internal bool TryWearFrom(GridInventory source, string id, EquipmentSlot slot, out string error, GridInventory storeReplaced = null)
         {
             error = null;
             var input = source.Find(id);
@@ -313,7 +318,9 @@ namespace Dustline
             { error = "已超出物品数量上限。"; return false; }
             var next = Snapshot();
             var old = next.Find(item => item.Slot == slot);
-            if (old != null)
+            bool returnOld = !same && old != null && storeReplaced != null;
+            if (returnOld) next.Remove(old);
+            else if (old != null)
             {
                 if (same && MatchesSlot(Catalog.Find(old.ItemId), input.Slot)) SetEquipped(old, input.Slot);
                 else { old.Slot = EquipmentSlot.None; old.X = -1; }
@@ -322,9 +329,19 @@ namespace Dustline
             SetEquipped(incoming, slot);
             if (!same) next.Add(incoming);
             if (!Repack(next, out error)) return false;
-            if (!same && !source.RemoveStage(input, out error)) return false;
+
+            if (returnOld)
+            {
+                var from = source.Draft();
+                var retained = ReferenceEquals(source, storeReplaced) ? from : storeReplaced.Draft();
+                if (!from.RemoveStage(from.Find(id), out error) || !retained.TryInsert(old, out error)) return false;
+                source.ApplyDraft(from);
+                if (retained != from) storeReplaced.ApplyDraft(retained);
+            }
+            else if (!same && !source.RemoveStage(input, out error)) return false;
             Commit(next);
             if (!same) source.Touch();
+            if (returnOld && source != storeReplaced) storeReplaced.Touch();
             Touch();
             return true;
         }
@@ -494,14 +511,17 @@ namespace Dustline
             var item = Catalog.Find(itemId);
             if (item?.Kind != ItemKind.Medicine) return 0;
             foreach (var stack in items)
-                if (stack.ItemId == itemId) count += (long)stack.Quantity * item.Uses - stack.UsesSpent;
+                if (stack.ItemId == itemId && FieldSupply(stack)) count += (long)stack.Quantity * item.Uses - stack.UsesSpent;
             return (int)Math.Min(count, int.MaxValue);
         }
+
+        internal static bool FieldSupply(ItemStack stack) => stack != null && stack.Slot == EquipmentSlot.None
+            && stack.Area != CargoArea.Secure && stack.Area != CargoArea.Legacy;
 
         internal bool ConsumeInstance(string instanceId)
         {
             var stack = Find(instanceId);
-            if (stack == null || stack.Slot != EquipmentSlot.None || stack.Quantity <= 0) return false;
+            if (!FieldSupply(stack) || stack.Quantity <= 0) return false;
             var item = Catalog.Find(stack.ItemId);
             if (item.Kind == ItemKind.Medicine && stack.UsesSpent + 1 < Math.Max(1, item.Uses)) stack.UsesSpent++;
             else
@@ -521,7 +541,7 @@ namespace Dustline
             int available = 0;
             foreach (ItemStack stack in items)
             {
-                if (stack.Slot == EquipmentSlot.None && stack.ItemId == itemId)
+                if (FieldSupply(stack) && stack.ItemId == itemId)
                     available += stack.Quantity;
             }
             if (available < quantity)
@@ -530,7 +550,7 @@ namespace Dustline
             for (int i = 0; i < items.Count && quantity > 0;)
             {
                 ItemStack stack = items[i];
-                if (stack.Slot != EquipmentSlot.None || stack.ItemId != itemId)
+                if (!FieldSupply(stack) || stack.ItemId != itemId)
                 {
                     i++;
                     continue;
@@ -760,7 +780,7 @@ namespace Dustline
 
         private bool TryPlace(ItemStack stack, ItemDefinition definition, List<ItemStack> occupied, bool onlyArea = false)
         {
-            var first = adaptive && stack.Area != CargoArea.Legacy ? stack.Area : CargoArea.Main;
+            var first = adaptive && stack.Area != CargoArea.Legacy && stack.Area != CargoArea.Secure ? stack.Area : CargoArea.Main;
             if (PlaceIn(stack, definition, occupied, first)) return true;
             if (adaptive && !onlyArea)
                 foreach (var area in CarryAreas)

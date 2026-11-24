@@ -35,7 +35,7 @@ namespace Dustline
         const int Tile = 32, Columns = 8, Rows = 8;
         internal readonly Material Structure, Pavement, Sea, Dark, Ground, Lamp;
 
-        internal PortMaterials(Action<UnityEngine.Object> keep)
+        internal PortMaterials(Action<UnityEngine.Object> keep, Texture2D ground = null)
         {
             var lit = Shader.Find("Universal Render Pipeline/Lit");
             var surface = Shader.Find(PortRaster.SurfaceShader);
@@ -59,7 +59,9 @@ namespace Dustline
             texture.Apply(true, true);
             Structure = Make(surface, "Port structures", texture, 0.18f);
             Pavement = Make(surface, "Port pavement", texture, 0.09f);
-            Ground = Make(surface, "Harbor ground and road markings", Load(PortRaster.Ground), 0.09f);
+            Ground = ground == null
+                ? Make(surface, "Harbor ground and road markings", Load(PortRaster.Ground), 0.09f)
+                : Make(surface, "Quarry strata and haul roads", ground, 0.09f);
             for (int i = 0; i < 4; i++)
             {
                 var finish = (PortRaster.Finish)i;

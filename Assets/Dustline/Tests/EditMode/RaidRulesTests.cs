@@ -22,10 +22,11 @@ namespace Dustline.Tests
 
         [TestCase(0.85f, false, false)]
         [TestCase(0.86f, false, true)]
-        [TestCase(0.73f, true, true)]
-        [TestCase(0.71f, true, false)]
+        [TestCase(0f, true, true)]
+        [TestCase(-0.19f, true, true)]
+        [TestCase(-0.2f, true, false)]
         [TestCase(-1f, true, false)]
-        public void TouchSprintHasASeparateReleaseThreshold(float forward, bool active, bool expected)
+        public void TouchSprintKeepsRunningAtRestUntilPulledBack(float forward, bool active, bool expected)
         {
             Assert.That(PlayerInputReader.AutoSprintForward(forward, active), Is.EqualTo(expected));
         }

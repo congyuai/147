@@ -57,7 +57,8 @@ namespace Dustline
             Health.Initialize(100, 0);
             Health.EnableBody();
             Health.HitPart = ResolveBodyPart;
-            Health.ProtectPart = ApplyArmor;
+            Health.ProtectPart = (part, damage) => ApplyArmor(part, damage, 0);
+            Health.ProtectAmmoPart = ApplyArmor;
             Health.Damaged += session.UI.ShowDamage;
             Health.Hurt += _ => CancelTreatment();
             Health.Died += _ => session.PlayerDown();
@@ -83,12 +84,12 @@ namespace Dustline
             return Operator.HitRegion(point);
         }
 
-        float ApplyArmor(BodyPart part, float damage)
+        float ApplyArmor(BodyPart part, float damage, int penetration)
         {
             var bag = session.ActiveFieldBag;
             var armor = bag.Equipped(part == BodyPart.Head ? EquipmentSlot.Helmet : EquipmentSlot.Armor);
             var rule = session.Catalog.Find(armor?.ItemId);
-            float remaining = BodyCondition.Protect(part, damage, rule, armor);
+            float remaining = BodyCondition.Protect(part, damage, rule, armor, penetration);
             if (remaining < damage) bag.Touch();
             return remaining;
         }
@@ -136,7 +137,7 @@ namespace Dustline
             var stack = treatmentBag.Find(treatmentInstance);
             if (!session.Input.Gameplay || session.Input.WeaponSelectionPending || !Health.Alive
                 || treatmentBag != session.ActiveFieldBag || stack == null || stack.Quantity <= 0 || stack.ItemId != treatmentItem.Id
-                || stack.Slot != EquipmentSlot.None || (Health.Body != null ? !Health.Body.CanTreat(treatmentPart, treatmentItem.Treatment)
+                || !GridInventory.FieldSupply(stack) || (Health.Body != null ? !Health.Body.CanTreat(treatmentPart, treatmentItem.Treatment)
                     : Health.Current >= Health.Maximum))
             {
                 CancelTreatment();
@@ -184,6 +185,7 @@ namespace Dustline
             if (Stamina <= .01f && !sprintLocked)
             {
                 sprintLocked = true;
+                input.CancelTouchSprint();
                 staminaResumeAt = now + .35f;
             }
             bool lowProfile = Prone || Crouched || currentHeight < 1.7f;
@@ -205,6 +207,7 @@ namespace Dustline
             if (sprint && Stamina - 9.5f * frame <= .01f)
             {
                 Stamina = 0f; sprintLocked = true; sprint = false;
+                input.CancelTouchSprint();
                 staminaResumeAt = now + .35f;
             }
             var bag = session.ActiveFieldBag;

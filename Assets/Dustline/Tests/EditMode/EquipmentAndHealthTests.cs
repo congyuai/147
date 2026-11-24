@@ -41,15 +41,18 @@ namespace Dustline.Tests
             Assert.That(WeaponRules.CanLoad(rifle, build, alternate, out _), Is.True);
         }
 
-        [TestCase(ItemKind.Rig, "rig_5 rig_4 rig_watch rig_3 rig_2 rig_1")]
-        [TestCase(ItemKind.Pack, "pack_6 pack_5 pack_patrol pack_4 pack_3 pack_compact pack_2 pack_1")]
-        [TestCase(ItemKind.Armor, "vest_6 vest_5 vest_flex vest_4 vest_3 armor vest_2 vest_1")]
-        [TestCase(ItemKind.Helmet, "helmet_6 helmet_5 helmet_4 helmet_scout helmet_3 helmet_2 helmet_1")]
-        public void GearShopListsOnlyTheRequestedKindInTierAndPriceOrder(ItemKind kind, string expected)
+        [TestCase(ItemKind.Rig, 5)]
+        [TestCase(ItemKind.Pack, 6)]
+        [TestCase(ItemKind.Armor, 6)]
+        [TestCase(ItemKind.Helmet, 6)]
+        public void GearShopListsOnlyTheRequestedKindInTierAndPriceOrder(ItemKind kind, int tiers)
         {
             var stock = catalog.Stock(kind);
-            Assert.That(stock.All(item => item.Kind == kind), Is.True);
-            CollectionAssert.AreEqual(expected.Split(' '), stock.Select(item => item.Id).ToArray());
+            Assert.That(stock.All(item => item.Kind == kind && !item.NotForSale), Is.True);
+            CollectionAssert.AreEqual(Enumerable.Range(1, tiers), stock.Select(item => item.Tier).Distinct());
+            Assert.That(stock.GroupBy(item => item.Tier).All(level => level.Count() >= 2), Is.True);
+            foreach (var row in stock.GroupBy(item => item.Tier))
+                Assert.That(row.Select(item => item.Value), Is.Ordered.Ascending);
         }
 
         [Test]
@@ -68,7 +71,7 @@ namespace Dustline.Tests
                     source.Items.Add(item);
                 }
                 var sorted = source.Stock(ItemKind.Valuable).Select(item => item.Id).ToArray();
-                CollectionAssert.AreEqual(new[] { "red-a", "red-b", "red-expensive", "white", "cheap" }, sorted);
+                CollectionAssert.AreEqual(new[] { "white", "red-a", "red-b", "red-expensive", "cheap" }, sorted);
                 Assert.That(source.Items[0].Id, Is.EqualTo("cheap"));
             }
             finally
@@ -84,9 +87,12 @@ namespace Dustline.Tests
             var rifle = catalog.Find("rifle");
             var stock = catalog.CompatibleParts(rifle, PartSlot.Magazine);
             CollectionAssert.AreEqual(new[] { "part_mag_a" }, stock.Select(item => item.Id).ToArray());
+            Assert.That(catalog.CompatibleParts(catalog.Find("dust_rifle_jetty"), PartSlot.Magazine)
+                .Any(item => item.Id == "part_mag_a_patrol"), Is.True);
+            var expansion = stock.Single();
             var ordinary = new ItemStack { ItemId = rifle.Id };
             var proposed = ordinary.Clone();
-            proposed.Parts.Magazine = new PartLink { ItemId = stock[0].Id };
+            proposed.Parts.Magazine = new PartLink { ItemId = expansion.Id };
             Assert.That(ordinary.Parts.Magazine.Empty, Is.True);
             Assert.That(WeaponRules.Capacity(rifle.Weapon, ordinary, catalog), Is.EqualTo(20));
             Assert.That(WeaponRules.Capacity(rifle.Weapon, proposed, catalog), Is.EqualTo(30));

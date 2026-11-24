@@ -61,8 +61,20 @@ namespace Dustline.Tests
                 body.Damage(part, body.Maximum(part) * (1f - fractions[i]), false);
             }
             RefreshHud();
-            Assert.That(LabelAt(vitals, "Stamina value"), Does.StartWith("体力"));
-            Assert.That(vitals.Cast<Transform>().Count(node => node.name == "Bar track"), Is.EqualTo(1));
+            var stamina = Node(vitals, "Stamina display");
+            var staminaGroup = stamina.GetComponent<CanvasGroup>();
+            Assert.That(staminaGroup.alpha, Is.Zero);
+            Assert.That(staminaGroup.blocksRaycasts, Is.False);
+            Assert.That(LabelAt(stamina, "Stamina value"), Is.EqualTo("体力  100 / 100"));
+            Assert.That(vitals.GetComponentsInChildren<RectTransform>().Count(node => node.name == "Bar track"), Is.EqualTo(1));
+            var setStamina = typeof(PlayerController).GetProperty(nameof(PlayerController.Stamina)).GetSetMethod(true);
+            setStamina.Invoke(session.Player, new object[] { 64f });
+            RefreshHud();
+            Assert.That(staminaGroup.alpha, Is.EqualTo(1f));
+            Assert.That(LabelAt(stamina, "Stamina value"), Is.EqualTo("体力  64 / 100"));
+            setStamina.Invoke(session.Player, new object[] { 100f });
+            RefreshHud();
+            Assert.That(staminaGroup.alpha, Is.Zero);
             Assert.That(vitals.GetComponentsInChildren<Text>().Any(text => text.text.StartsWith("总健康") || text.name.StartsWith("Region health / ")), Is.False);
             var sidearm = Slot(Node(Safe, "Weapon bar/Weapon slots"), EquipmentSlot.Sidearm);
             Assert.That(sidearm.GetComponent<Button>().interactable, Is.False);
@@ -162,8 +174,8 @@ namespace Dustline.Tests
                     models.Add(Node(node, "Item model / " + session.BoundBlade.Form).GetComponent<RawImage>());
                     continue;
                 }
-                var ammunition = session.Catalog.Find(item.ItemId).Weapon.AmmoId;
-                Assert.That(LabelAt(node, "Weapon ammunition"), Is.EqualTo(item.LoadedAmmo + " / " + bag.Count(ammunition)));
+                int rounds = slot == weapon.ActiveSlot ? weapon.Magazine.Rounds : Mathf.Max(0, item.LoadedAmmo);
+                Assert.That(LabelAt(node, "Weapon ammunition"), Is.EqualTo(rounds + " / 无限"));
                 models.Add(Node(node, "Item model / " + item.ItemId).GetComponent<RawImage>());
             }
             Assert.That(models.All(model => model != null && !model.raycastTarget), Is.True);
@@ -194,10 +206,13 @@ namespace Dustline.Tests
 
             var sidearm = Slot(strip, EquipmentSlot.Sidearm);
             var pistol = bag.Equipped(EquipmentSlot.Sidearm);
-            pistol.LoadedAmmo = -1;
-            Assert.That(bag.Consume("ammo_copper", 1), Is.True);
+            Assert.That(bag.Count("ammo_copper"), Is.Zero);
+            pistol.LoadedAmmo = 3;
             RefreshHud();
-            Assert.That(LabelAt(sidearm, "Weapon ammunition"), Is.EqualTo("0 / " + bag.Count("ammo_copper")));
+            Assert.That(LabelAt(sidearm, "Weapon ammunition"), Is.EqualTo("3 / 无限"));
+            pistol.LoadedAmmo = -1;
+            RefreshHud();
+            Assert.That(LabelAt(sidearm, "Weapon ammunition"), Is.EqualTo("0 / 无限"));
 
             var legacyPosition = legacy.position;
             legacy.position = sidearm.TransformPoint(sidearm.rect.center);
@@ -232,7 +247,7 @@ namespace Dustline.Tests
                 Equip("dust_pistol", EquipmentSlot.Sidearm);
             }
             store = new ProfileStore(Path.Combine(Application.temporaryCachePath, "dustline-field-hud-" + Guid.NewGuid().ToString("N") + ".json"));
-            store.Save(new ProfileData { Version = ProfileData.CurrentVersion, Loadout = loadout.Snapshot() });
+            store.Save(new ProfileData { Version = ProfileData.CurrentVersion, BirthdayGiftClaimed = true, Loadout = loadout.Snapshot() });
             host = new GameObject("Field HUD test session");
             host.SetActive(false);
             session = host.AddComponent<GameSession>();

@@ -68,12 +68,15 @@ namespace Dustline
             keepAngle &= model != null;
             Clear();
             model = item != null ? ItemProp.Create(Root, item, stack, catalog) : ItemProp.CreateWeapon(Root, blade, null, catalog).transform;
+            if (item?.Weapon?.AlternateFrame == true && stack == null)
+                model.GetComponent<WeaponVisual>().SetConfiguration(null, catalog, item.Weapon);
             Measure();
             if (!keepAngle)
             {
                 bool weapon = item == null || item.Weapon != null;
-                yaw = weapon ? 82f : item.Equipment != EquipmentSlot.None ? 151f : item.Kind == ItemKind.Part ? 63f : 42f;
-                pitch = weapon ? 7f : 22f;
+                yaw = weapon ? (!workshop && item?.Weapon?.Melee == false ? -82f : 82f)
+                    : item.Equipment != EquipmentSlot.None ? 151f : item.Kind == ItemKind.Part ? 63f : 42f;
+                pitch = weapon ? 7f : item.Id == "birthday_cake" ? 12f : 22f;
                 zoom = 1f;
                 referenceSize = 0f;
             }
@@ -177,9 +180,10 @@ namespace Dustline
             else if (weaponView != null && !weaponView.IsMelee && weaponView.Form != WeaponForm.Pistol && aspect >= 2.25f)
             {
                 // A higher angle preserves the whole silhouette in unusually wide tiles.
+                float side = Mathf.Sign(Mathf.Sin(yaw * Mathf.Deg2Rad));
                 for (float tilt = 16f; tilt <= 88f && HorizontalFill(box.extents) < .91f; tilt += 8f)
                 {
-                    var candidate = Quaternion.Euler(tilt, 87f, 0f);
+                    var candidate = Quaternion.Euler(tilt, side * 87f, 0f);
                     var projected = ProjectedBounds(candidate);
                     if (HorizontalFill(projected.extents) <= HorizontalFill(box.extents)) continue;
                     angle = candidate;
@@ -235,6 +239,7 @@ namespace Dustline
         {
             if (disposed) return;
             disposed = true;
+            if (Root == null) return;
             Root.gameObject.SetActive(false);
             Object.Destroy(Root.gameObject);
         }

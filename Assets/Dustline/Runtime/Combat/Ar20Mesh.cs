@@ -11,7 +11,8 @@ namespace Dustline
         enum Finish
         {
             Ink, Blue, Porcelain, Amber, Edge, Warm, Signal, Deep, Steel, Jade, Wrap, Optic,
-            Anodized, Graphite, Parkerized, Polymer, Rubber, Machined, Recess, Stencil, Coating, OpticDot
+            Anodized, Graphite, Parkerized, Polymer, Rubber, Machined, Recess, Stencil, Coating, OpticDot,
+            SpongeBerry, SpongeOrange, SpongeLemon, SpongeLime, SpongeMint, SpongeBlue, SpongeViolet, SpongeRose
         }
         const int Columns = 8, Rows = 4;
         static Ar20Mesh shared;
@@ -31,18 +32,18 @@ namespace Dustline
             return shared;
         }
 
-        public Mesh GetMesh(WeaponForm form, int sight, bool customGrip = false, bool customStock = false)
+        public Mesh GetMesh(WeaponForm form, int sight, bool customGrip = false, bool customStock = false, bool alternate = false)
         {
             sight = Mathf.Clamp(sight, 0, 4);
-            int index = ((int)form << 5) | (sight << 2) | (customGrip ? 2 : 0) | (customStock ? 1 : 0);
+            int index = ((int)form << 5) | (sight << 2) | (customGrip ? 2 : 0) | (customStock ? 1 : 0) | (alternate ? 512 : 0);
             if (variants.TryGetValue(index, out var mesh)) return mesh;
             switch (form)
             {
                 case WeaponForm.Baton: mesh = BuildBaton(); break;
                 case WeaponForm.Tangdao: mesh = BuildTangdao(); break;
                 case WeaponForm.ShortBlade: mesh = BuildShortBlade(); break;
-                case WeaponForm.Rifle: mesh = BuildRifle(sight, customGrip, customStock); break;
-                default: mesh = BuildFrame(form, sight, customGrip, customStock); break;
+                case WeaponForm.Rifle when !alternate: mesh = BuildRifle(sight, customGrip, customStock); break;
+                default: mesh = BuildFrame(form, sight, customGrip, customStock, alternate); break;
             }
             mesh.name = "Dustline / " + form + " / " + index;
             return variants[index] = mesh;
@@ -108,14 +109,16 @@ namespace Dustline
                 Rgb(0x778C91), Rgb(0xECE1C5), Rgb(0x68D9D7), Rgb(0x172129),
                 Rgb(0xB4CCD0), Rgb(0x328F85), Rgb(0x453839), Rgb(0x87EFE1),
                 Rgb(0x51575B), Rgb(0x3D4143), Rgb(0x444844), Rgb(0x56594E), Rgb(0x2C3030),
-                Rgb(0x838786), Rgb(0x232625), Rgb(0x9A9B8F), Rgb(0x364849), Rgb(0xCD533C)
+                Rgb(0x838786), Rgb(0x232625), Rgb(0x9A9B8F), Rgb(0x364849), Rgb(0xCD533C),
+                Rgb(0xE04F55), Rgb(0xF28742), Rgb(0xF8C950), Rgb(0x88C655), Rgb(0x51C6AB), Rgb(0x5B9BDF), Rgb(0x8C6BC8), Rgb(0xF285AD)
             }, 64);
             finishMap = Palette("Dustline / weapon finishes", true, new[] {
                 Gloss(30, 98), Gloss(48, 115), Gloss(16, 114), Gloss(40, 128),
                 Gloss(72, 150), Gloss(20, 103), Gloss(23, 178), Gloss(4, 85),
                 Gloss(150, 208), Gloss(67, 150), Gloss(6, 62), Gloss(20, 165),
                 Gloss(87, 121), Gloss(41, 100), Gloss(83, 94), Gloss(2, 73), Gloss(0, 50),
-                Gloss(150, 151), Gloss(1, 54), Gloss(4, 94), Gloss(63, 155), Gloss(1, 127)
+                Gloss(150, 151), Gloss(1, 54), Gloss(4, 94), Gloss(63, 155), Gloss(1, 127),
+                Gloss(0, 60), Gloss(0, 60), Gloss(0, 60), Gloss(0, 60), Gloss(0, 60), Gloss(0, 60), Gloss(0, 60), Gloss(0, 60)
             }, 64);
             lightMap = Palette("Dustline / weapon indicators", false, new[] {
                 Rgb(0), Rgb(0), Rgb(0), Rgb(0), Rgb(0), Rgb(0), Rgb(0x55C8C7), Rgb(0),
@@ -173,7 +176,8 @@ namespace Dustline
 
         static byte Channel(float value) => (byte)Mathf.Clamp(Mathf.RoundToInt(value), 0, 255);
 
-        public static float SightHeight(int level) => level == 2 || level == 4 ? 0.164f : level > 0 ? 0.148f : 0.132f;
+        public static float SightHeight(int level) => level >= 5 ? .166f + .004f * (level - 5)
+            : level == 2 || level == 4 ? .164f : level > 0 ? .148f : .132f;
 
         static Mesh BuildRifle(int sight, bool customGrip, bool customStock)
         {

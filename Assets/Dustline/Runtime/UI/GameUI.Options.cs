@@ -43,7 +43,7 @@ namespace Dustline
                 session.SelectSprintThreshold(Mathf.RoundToInt(value));
                 threshold.text = "前推 " + input.SprintThreshold + "%";
             });
-            Label(body, "百分比越低，越容易触发自动冲刺。", 16, 24, 389, 800, 27, color: Muted);
+            Label(body, "前推到阈值即锁定奔跑，向后拉或体力耗尽解除。", 16, 24, 389, 800, 27, color: Muted);
             Button(body, "自定义键位", 866, 339, 279, 56, () => ShowTouchLayout(field), true);
 
             void MakeOptions(string[] labels, float x, int selected, Action<int> select, bool enabled)

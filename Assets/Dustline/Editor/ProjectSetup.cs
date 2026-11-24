@@ -17,9 +17,9 @@ namespace Dustline.Editor
         const string PipelinePath = "Assets/Dustline/Settings/MobilePipeline.asset";
         const string RendererPath = "Assets/Dustline/Settings/MobileRenderer.asset";
         const string RenderingRoot = Root + "/Rendering";
-        const string Version = "0.5.0";
-        const int AndroidVersionCode = 10;
-        const int RaidRendererLayers = FirstPersonView.Mask | (1 << 29) | (1 << 30) | (1 << 2) | 1;
+        const string Version = "0.6.0";
+        const int AndroidVersionCode = 11;
+        const int RaidRendererLayers = FirstPersonView.Mask | (1 << 27) | (1 << 29) | (1 << 30) | (1 << 2) | 1;
         static readonly string[] LitVariantAssets = { "LitBase", "LitMetal", "LitEmission", "LitMetalEmission" };
         static readonly Dictionary<string, string> ItemNames = new Dictionary<string, string> {
             { "rifle", "AR-20突击步枪" }, { "ammo", "5.56毫米弹药" },
@@ -47,7 +47,8 @@ namespace Dustline.Editor
                 || catalog.Find("pack_6") == null || catalog.Find("pack_compact")?.Storage.Capacity != 28 || catalog.Find("dust_lmg")?.Weapon == null
                 || catalog.Find("rig_watch") == null || catalog.Items.Exists(item => (item.Kind == ItemKind.Rig || item.Kind == ItemKind.Pack) && item.Storage.WeightLimit <= 0f
                     || item.Kind == ItemKind.Rig && (item.Storage.Pockets == null || item.Storage.Pockets.Length == 0))
-                || catalog.Find("surgery") == null || catalog.Find("part_sight_prism") == null
+                || catalog.Find("surgery") == null || catalog.Find("part_scope_15") == null || catalog.Find(LootTable.BirthdayCake) == null
+                || catalog.Find("secure_3x4") == null || catalog.Find("vest_shell_1") == null
                 || !LitVariantsPrepared()
                 || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/Loot.asset") == null
                 || AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/HighValueLoot.asset") == null
@@ -61,7 +62,10 @@ namespace Dustline.Editor
                 || pipeline.additionalLightsRenderingMode != LightRenderingMode.PerPixel
                 || catalog.Find(WeaponDefinition.BatonId)?.Weapon?.Form != WeaponForm.Baton
                 || PlayerSettings.bundleVersion != Version
-                || PlayerSettings.Android.bundleVersionCode != AndroidVersionCode)
+                || PlayerSettings.Android.bundleVersionCode != AndroidVersionCode
+                || !PlayerSettings.Android.forceInternetPermission
+                || PlayerSettings.defaultInterfaceOrientation != UIOrientation.LandscapeLeft
+                || PlayerSettings.colorSpace != ColorSpace.Linear)
             {
                 Prepare();
                 return;
@@ -80,8 +84,9 @@ namespace Dustline.Editor
             Directory.CreateDirectory(RenderingRoot);
             Directory.CreateDirectory("Assets/Dustline/Settings");
             AssetDatabase.Refresh();
-            if (LayerMask.NameToLayer(FirstPersonView.LayerName) != FirstPersonView.Layer)
-                throw new BuildFailedException("请恢复 ProjectSettings/TagManager.asset 的第一人称渲染层。");
+            if (LayerMask.NameToLayer(FirstPersonView.LayerName) != FirstPersonView.Layer
+                || LayerMask.NameToLayer("DustlineStrategicMap") != 27)
+                throw new BuildFailedException("请恢复 ProjectSettings/TagManager.asset 中的专用渲染层。");
             if (AssetDatabase.LoadAssetAtPath<Font>(Root + "/Fonts/NotoSansSC-Regular.otf") == null)
                 throw new BuildFailedException("缺少随包中文字体，请恢复 NotoSansSC-Regular.otf 后重试。");
             PortTextureSetup.Prepare();
@@ -188,7 +193,9 @@ namespace Dustline.Editor
             EnsureLootEntry(table, "bandage", 1, 2, 7);
             EnsureLootEntry(table, "trauma_case", 1, 1, 1);
             EnsureHighValueLoot();
-            PrepareEquipment(catalog, table, AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/HighValueLoot.asset"));
+            var highValue = AssetDatabase.LoadAssetAtPath<LootTable>(Root + "/HighValueLoot.asset");
+            PrepareEquipment(catalog, table, highValue);
+            PrepareEconomy(catalog, table, highValue);
             EnsureBoundBlades();
             PlayerSettings.companyName = "Dustline";
             PlayerSettings.productName = "Dustline Extraction";
@@ -199,6 +206,7 @@ namespace Dustline.Editor
             PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, ScriptingImplementation.IL2CPP);
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
             PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel26;
+            PlayerSettings.Android.forceInternetPermission = true;
             PlayerSettings.colorSpace = ColorSpace.Linear;
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(Scene, true) };
             AssetDatabase.SaveAssets();

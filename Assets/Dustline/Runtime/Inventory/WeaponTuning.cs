@@ -18,6 +18,8 @@ namespace Dustline
     {
         public readonly float Damage, FireInterval, Range, ReloadSeconds, Recoil;
         public readonly float HipSpread, AimSpread, AimFov, AimSeconds;
+        public float Magnification => WeaponTuning.MagnificationForFov(AimFov);
+        public float Spread(bool aiming) => aiming ? AimSpread : HipSpread;
 
         internal WeaponStats(float damage, float fireInterval, float range, float reloadSeconds, float recoil,
             float hipSpread, float aimSpread, float aimFov, float aimSeconds)
@@ -37,6 +39,17 @@ namespace Dustline
     public static class WeaponTuning
     {
         public const int MaxUpgradeLevel = 2;
+        public const float DefaultViewFov = 75f;
+        const double HalfAngle = Math.PI / 360d;
+
+        public static float AimFovForMagnification(float magnification)
+        {
+            double power = magnification >= 1f ? Math.Min(15f, magnification) : 1d;
+            return (float)(Math.Atan(Math.Tan(DefaultViewFov * HalfAngle) / power) / HalfAngle);
+        }
+
+        internal static float MagnificationForFov(float fov) =>
+            fov > 0f ? (float)(Math.Tan(DefaultViewFov * HalfAngle) / Math.Tan(fov * HalfAngle)) : 1f;
 
         public static int Level(WeaponMods mods, WeaponModSlot slot) => slot switch
         {
@@ -77,12 +90,15 @@ namespace Dustline
         {
             if (definition == null) throw new ArgumentNullException(nameof(definition));
             if (!SupportsUpgrades(definition) || !IsValid(mods)) mods = default;
+            float hip = definition.HipSpread > 0f ? definition.HipSpread : .012f;
+            float ads = definition.AimSpread > 0f ? definition.AimSpread : .002f;
+            if (definition.Rays > 1) { hip = Math.Max(hip, .035f); ads = Math.Max(ads, .035f); }
             return new WeaponStats(definition.Damage, definition.FireInterval,
                 definition.Range * (1f + 0.04f * mods.Sight),
                 definition.ReloadSeconds * (1f + 0.06f * mods.Grip) * (1f - 0.06f * mods.Stock),
                 definition.Recoil * (1f - 0.08f * mods.Grip) * (1f - 0.13f * mods.Stock),
-                0.012f * (1f - 0.17f * mods.Grip) * (1f + 0.09f * mods.Stock),
-                0.002f * (1f - 0.20f * mods.Sight),
+                hip * (1f - 0.17f * mods.Grip) * (1f + 0.09f * mods.Stock),
+                ads * (1f - 0.20f * mods.Sight),
                 48f - 6f * mods.Sight,
                 0.18f + 0.043f * mods.Sight - 0.018f * mods.Stock);
         }
@@ -108,14 +124,15 @@ namespace Dustline
                 stability *= spec.Stability > 0f ? spec.Stability : 1f;
                 reload *= spec.ReloadFactor > 0f ? spec.ReloadFactor : 1f;
                 aim *= spec.AimFactor > 0f ? spec.AimFactor : 1f;
-                if (slot == PartSlot.Sight) fov = spec.Form == 2 ? 35f : 42f;
+                if (slot == PartSlot.Sight)
+                    fov = spec.Magnification >= 1f ? AimFovForMagnification(spec.Magnification) : spec.Form == 2 ? 35f : 42f;
             }
             return new WeaponStats(stats.Damage, stats.FireInterval, stats.Range, stats.ReloadSeconds * reload, stats.Recoil * stability,
                 stats.HipSpread * stability, stats.AimSpread * stability, fov, stats.AimSeconds * aim);
         }
 
         public static bool SupportsUpgrades(WeaponDefinition definition) =>
-            definition != null && definition.Form == WeaponForm.Rifle && !definition.Melee;
+            definition != null && definition.Form == WeaponForm.Rifle && !definition.Melee && !definition.AlternateFrame;
 
         internal static bool IsValidForItem(string itemId, WeaponMods mods) =>
             mods.IsEmpty || itemId == WeaponDefinition.RifleId && IsValid(mods);

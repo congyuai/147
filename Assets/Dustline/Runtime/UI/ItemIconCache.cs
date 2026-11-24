@@ -82,7 +82,9 @@ namespace Dustline
 
         void OnVisibilityChanged(RawImage image)
         {
-            if (Visible(image) && bindings.TryGetValue(image, out var entry) && (entry.Texture == null || !entry.Texture.IsCreated())) Queue(entry);
+            if (!Visible(image)) return;
+            if (!bindings.TryGetValue(image, out var entry)) return;
+            if (entry.Texture == null || !entry.Texture.IsCreated()) Queue(entry);
         }
 
         internal void Unbind(RawImage image)

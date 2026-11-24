@@ -7,22 +7,26 @@ namespace Dustline
 {
     sealed class OperatorPreview : IDisposable
     {
-        const int Layer = 30;
+        internal const int Layer = 30;
+        internal const int LayerMask = 1 << Layer;
         readonly GameObject stage;
         readonly Camera camera;
         readonly RenderTexture texture;
-        readonly WeaponDefinition loadout;
+        readonly WeaponDefinition boundBlade;
         OperatorVisual model;
-        WeaponVisual weapon;
+        WeaponVisual hand, back;
+        Transform backMount;
         OperatorStyle selected;
+        bool rear, disposed;
 
         public OperatorPreview(Transform parent, RawImage image, WeaponDefinition loadout)
         {
-            this.loadout = loadout;
+            boundBlade = loadout;
             stage = new GameObject("Operator preview stage") { layer = Layer };
             stage.transform.SetParent(parent, false);
             stage.transform.position = new Vector3(0, -300, 0);
-            texture = new RenderTexture(336, 400, 24, RenderTextureFormat.ARGB32) { name = "Operator portrait" };
+            float aspect = Mathf.Clamp(image.rectTransform.rect.width / Mathf.Max(1f, image.rectTransform.rect.height), .65f, 2f);
+            texture = new RenderTexture(Mathf.RoundToInt(512f * aspect), 512, 24, RenderTextureFormat.ARGB32) { name = "Operator portrait" };
             image.texture = texture;
             var eye = new GameObject("Portrait camera", typeof(Camera));
             eye.transform.SetParent(stage.transform, false);
@@ -35,7 +39,8 @@ namespace Dustline
             camera.farClipPlane = 9;
             camera.clearFlags = CameraClearFlags.SolidColor;
             camera.backgroundColor = new Color32(27, 43, 47, 255);
-            camera.cullingMask = 1 << Layer;
+            camera.cullingMask = LayerMask;
+            camera.aspect = aspect;
             camera.targetTexture = texture;
             camera.allowMSAA = false;
             camera.allowHDR = false;
@@ -69,20 +74,62 @@ namespace Dustline
             model = OperatorVisual.Create(stage.transform, style, 0, Layer);
             model.transform.localRotation = Quaternion.Euler(0, -16, 0);
             model.SetMotion(0, false, false, 0.016f);
-            if (loadout == null) return;
-            weapon = WeaponVisual.Create(model.WeaponMount, false, loadout.Form);
-            model.PoseArms(weapon.RightGrip, weapon.LeftGrip);
+            backMount = model.CreateBackMount();
+            hand = null;
+            back = null;
         }
 
-        internal void SyncGear(GridInventory bag) => model?.SyncGear(bag);
+        internal void SyncGear(GridInventory bag)
+        {
+            if (model == null || bag == null) return;
+            model.SyncGear(bag);
+            var primary = bag.Equipped(EquipmentSlot.Weapon);
+            var second = bag.Equipped(EquipmentSlot.PrimaryTwo);
+            var held = primary ?? bag.Equipped(EquipmentSlot.Sidearm) ?? bag.Equipped(EquipmentSlot.Melee);
+            var definition = bag.Catalog.Find(held?.ItemId)?.Weapon ?? boundBlade;
+            Sync(ref back, backMount, second, bag.Catalog.Find(second?.ItemId)?.Weapon, bag.Catalog, false);
+            Sync(ref hand, model.WeaponMount, held, definition, bag.Catalog, true);
+            model.BindWeaponView(hand);
+            if (hand != null) model.PoseArms(hand.RightGrip, hand.LeftGrip);
+        }
+
+        static void Sync(ref WeaponVisual visual, Transform mount, ItemStack item, WeaponDefinition definition, ItemCatalog catalog, bool held)
+        {
+            if (definition == null)
+            {
+                if (visual != null) { visual.gameObject.SetActive(false); Object.Destroy(visual.gameObject); }
+                visual = null;
+                return;
+            }
+            if (visual == null)
+            {
+                visual = WeaponVisual.Create(mount, false, definition.Form);
+                visual.name = held ? "Equipped hand weapon" : "Equipped back weapon";
+            }
+            else visual.SetForm(definition.Form);
+            visual.SetConfiguration(item, catalog, definition);
+            if (!held)
+            {
+                visual.transform.SetLocalPositionAndRotation(Vector3.zero, Quaternion.identity);
+                visual.transform.localScale = Vector3.one * .75f;
+            }
+        }
+
+        internal void RotateView()
+        {
+            rear = !rear;
+            camera.transform.localPosition = rear ? new Vector3(-1.45f, 1.24f, -3.2f) : new Vector3(1.3f, 1.32f, 3.2f);
+            camera.transform.LookAt(stage.transform.position + Vector3.up * .88f);
+        }
 
         public void Dispose()
         {
-            camera.targetTexture = null;
-            stage.SetActive(false);
-            texture.Release();
-            Object.Destroy(texture);
-            Object.Destroy(stage);
+            if (disposed) return;
+            disposed = true;
+            if (camera != null) camera.targetTexture = null;
+            if (stage != null) stage.SetActive(false);
+            ItemIconCache.Release(texture);
+            if (stage != null) Object.Destroy(stage);
         }
     }
 }

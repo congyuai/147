@@ -131,7 +131,7 @@ namespace Dustline
             var bag = session.ActiveFieldBag;
             wheelItems.Clear();
             foreach (var item in session.Catalog.Items)
-                if (item.Kind == ItemKind.Medicine && bag.Count(item.Id) > 0) wheelItems.Add(item);
+                if (item.Kind == ItemKind.Medicine && bag.RemainingUses(item.Id) > 0) wheelItems.Add(item);
             if (wheelItems.Count == 0) { Notify("没有可用的医疗品。"); return; }
 
             medicineWheel = Stretch("Medicine selection", safe);

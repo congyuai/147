@@ -55,6 +55,8 @@ namespace Dustline
         bool ownsGyro, aimAvailable, mouseAimArmed;
         AimGesture aimGesture;
         bool touchFire, touchFireTap, touchLeanLeft, touchLeanRight, autoSprint, wasFire, mouseArmed;
+        bool sprintArmed = true;
+        internal bool TouchSprintLocked => autoSprint;
         bool reload, crouch, prone, jump, interact, inventory, heal, settings, map, weaponSwap;
 
         void Update()
@@ -91,7 +93,6 @@ namespace Dustline
             if (keyboard != null)
                 Move = new Vector2((keyboard.dKey.isPressed ? 1 : 0) - (keyboard.aKey.isPressed ? 1 : 0),
                     (keyboard.wKey.isPressed ? 1 : 0) - (keyboard.sKey.isPressed ? 1 : 0));
-            Move = Vector2.ClampMagnitude(Move + TouchMove, 1);
             Look = touchLook * (0.13f * LookSensitivity);
             bool mouseLook = !TouchMode && Cursor.lockState == CursorLockMode.Locked && mouse != null;
             if (mouseLook) Look += mouse.delta.ReadValue() * (0.08f * LookSensitivity);
@@ -116,9 +117,16 @@ namespace Dustline
             }
             Aim = Gameplay && aimAvailable && aimGesture.Active(AimBehavior);
             Look += ReadGyro();
-            autoSprint = Gameplay && TouchMode && AutoSprintForward(TouchMove.y, autoSprint, SprintThreshold);
+            if (!Gameplay || !TouchMode) autoSprint = false;
+            else if (!sprintArmed)
+            {
+                if (TouchMove.y < (ClampSprintThreshold(SprintThreshold) - 14) / 100f) sprintArmed = true;
+            }
+            else if (autoSprint) autoSprint = AutoSprintForward(TouchMove.y, true, SprintThreshold);
+            else if (SprintAllowed) autoSprint = AutoSprintForward(TouchMove.y, false, SprintThreshold);
             SprintHeld = Gameplay && (TouchMode ? autoSprint : (keyboard?.leftShiftKey.isPressed ?? false));
             Sprint = SprintAllowed && !Aim && SprintHeld;
+            Move = Vector2.ClampMagnitude(Move + TouchWalk(TouchMove, TouchMode && Sprint), 1f);
             if (!Gameplay) { Move = Look = Vector2.zero; Aim = Sprint = LeanLeft = LeanRight = false; }
             wasFire = Gameplay && held;
         }
@@ -137,9 +145,20 @@ namespace Dustline
 
         public static bool AutoSprintForward(float forward, bool alreadySprinting, int percent = DefaultSprintThreshold)
         {
-            // A lower release point keeps small joystick movements from switching the gait repeatedly.
-            int threshold = ClampSprintThreshold(percent) - (alreadySprinting ? 14 : 0);
-            return forward >= threshold / 100f;
+            return alreadySprinting ? forward > -.20f : forward >= ClampSprintThreshold(percent) / 100f;
+        }
+
+        public static Vector2 TouchWalk(Vector2 stick, bool lockedSprint)
+        {
+            if (lockedSprint) return new Vector2(stick.x, Mathf.Max(.75f, stick.y)).normalized;
+            return stick.sqrMagnitude > .0144f ? stick : Vector2.zero;
+        }
+
+        internal void CancelTouchSprint()
+        {
+            autoSprint = false;
+            sprintArmed = false;
+            if (TouchMode) Sprint = SprintHeld = false;
         }
 
         public void SetAimMode(AimMode mode)
@@ -281,6 +300,7 @@ namespace Dustline
             HealthPressed = healthPage = false;
             HealPart = medicineTapPart = null;
             touchFire = touchFireTap = touchLeanLeft = touchLeanRight = autoSprint = false;
+            sprintArmed = true;
             LeanLeft = LeanRight = SwitchWeaponPressed = false;
             weaponSlot = EquipmentSlot.None;
             ReloadPressed = CrouchPressed = PronePressed = JumpPressed = InteractPressed = HealPressed = false;

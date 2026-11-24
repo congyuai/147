@@ -138,11 +138,11 @@ namespace Dustline.Tests
                 store.Save(upgraded);
 
                 var saved = store.Load();
-                Assert.That(saved.Version, Is.EqualTo(3));
+                Assert.That(saved.Version, Is.EqualTo(ProfileData.CurrentVersion));
                 byte[] savedBytes = File.ReadAllBytes(store.Path);
                 Assert.Throws<InvalidDataException>(() => store.Save(older));
                 Assert.That(File.ReadAllBytes(store.Path), Is.EqualTo(savedBytes));
-                Assert.That(File.ReadAllBytes(store.Path + ".pre-v3.bak"), Is.EqualTo(original));
+                Assert.That(File.ReadAllBytes(store.EconomyUpgradeBackupPath), Is.EqualTo(original));
 
                 var mislabeled = new ProfileStore(Path.Combine(directory, "mislabeled.json"));
                 Assert.Throws<InvalidDataException>(() => mislabeled.Save(new ProfileData { Version = 2, Loadout = saved.Loadout }));
@@ -175,7 +175,7 @@ namespace Dustline.Tests
         static bool TryWear(GridInventory carried, GridInventory source, string id, EquipmentSlot slot, out string error)
         {
             Assert.That(wear, Is.Not.Null);
-            var args = new object[] { source, id, slot, null };
+            var args = new object[] { source, id, slot, null, null };
             bool result = (bool)wear.Invoke(carried, args);
             error = (string)args[3];
             return result;

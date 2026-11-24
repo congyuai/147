@@ -36,7 +36,7 @@ namespace Dustline
         void Update()
         {
             if (session != null && session.Phase == SessionPhase.Raid)
-                Apply(Mathf.Clamp01(1f - session.RaidRemaining / 900f));
+                Apply(Mathf.Clamp01(1f - session.RaidRemaining / Mathf.Max(1f, session.RaidDuration)));
         }
 
         void Apply(float progress)

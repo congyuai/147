@@ -11,7 +11,8 @@ namespace Dustline
     [Serializable]
     public sealed class ProfileData
     {
-        public const int CurrentVersion = 3;
+        public const int CurrentVersion = 4;
+        public const int StartingCredits = 1000000;
         public int Version = 1;
         public int Credits = 1000;
         public List<ItemStack> Stash = new List<ItemStack>();
@@ -20,6 +21,16 @@ namespace Dustline
         public int Raids;
         public int Extractions;
         public string BoundBladeId = "";
+        public bool BirthdayGiftClaimed;
+
+        internal ProfileData WithInventory(GridInventory stash, GridInventory carried, int credits)
+        {
+            var copy = (ProfileData)MemberwiseClone();
+            copy.Stash = stash.Snapshot();
+            copy.Loadout = carried.Snapshot();
+            copy.Credits = credits;
+            return copy;
+        }
     }
 
     public sealed class ProfileStore
@@ -38,6 +49,7 @@ namespace Dustline
         public string LegacyBackupPath => Path + ".v1.bak";
         public string UpgradeBackupPath => Path + ".pre-v2.bak";
         public string LoadoutUpgradeBackupPath => Path + ".pre-v3.bak";
+        public string EconomyUpgradeBackupPath => Path + ".pre-v4.bak";
 
         public ProfileData Load() => ReadProfile(out _, out _);
 
@@ -106,7 +118,9 @@ namespace Dustline
                 if (previous != null)
                 {
                     if (profile.Version < previous.Version) throw new InvalidDataException("Cannot downgrade an existing profile.");
-                    if (previous.Version < ProfileData.CurrentVersion && profile.Version == ProfileData.CurrentVersion)
+                    if (previous.Version < 4 && profile.Version == 4)
+                        BackupOriginal(EconomyUpgradeBackupPath, original);
+                    else if (previous.Version < 3 && profile.Version == 3)
                         BackupOriginal(LoadoutUpgradeBackupPath, original);
                     else if (previous.Version == 1 && profile.Version == 2)
                         BackupOriginal(UpgradeBackupPath, original);
@@ -173,8 +187,9 @@ namespace Dustline
             ValidateItems(profile.Stash, ids, profile.Version);
             ValidateItems(profile.Loadout, ids, profile.Version);
             if (profile.Version >= 3 && profile.RaidInProgress
-                && profile.Loadout.Exists(item => item.Area != CargoArea.Legacy || item.Slot != EquipmentSlot.None))
-                throw new InvalidDataException("An in-progress raid can only retain migration items at home.");
+                && profile.Loadout.Exists(item => item.Slot != EquipmentSlot.None || item.Area != CargoArea.Legacy
+                    && (profile.Version < 4 || item.Area != CargoArea.Secure)))
+                throw new InvalidDataException("Invalid retained cargo for an in-progress raid.");
         }
 
         private static bool IsValidBladeId(string id) => id == "" || !string.IsNullOrWhiteSpace(id);
@@ -190,6 +205,7 @@ namespace Dustline
                     || !Enum.IsDefined(typeof(EquipmentSlot), item.Slot))
                     throw new InvalidDataException("Invalid profile item or duplicate instance ID.");
                 if (!Enum.IsDefined(typeof(CargoArea), item.Area) || item.UsesSpent < 0 || item.Wear < 0
+                    || version < 4 && item.Area == CargoArea.Secure
                     || version < 3 && ((int)item.Slot > (int)EquipmentSlot.Pack || (int)item.Area > (int)CargoArea.Rig)
                     || version == 1 && ((int)item.Slot > (int)EquipmentSlot.Armor || item.Area != CargoArea.Main || !item.Parts.Empty
                         || !string.IsNullOrEmpty(item.LoadedAmmoId) || item.UsesSpent != 0 || item.Wear != 0))
@@ -247,6 +263,7 @@ namespace Dustline
                                     Fail("Negative profile balance or counter.");
                                 break;
                             case "RaidInProgress":
+                            case "BirthdayGiftClaimed":
                                 ReadBoolean();
                                 break;
                             case "BoundBladeId":
@@ -320,7 +337,7 @@ namespace Dustline
                                     break;
                                 case "Area":
                                     int area = ReadInteger();
-                                    if (area < 0 || area > (int)CargoArea.Legacy) Fail("Invalid cargo area.");
+                                    if (area < 0 || area > (int)CargoArea.Secure) Fail("Invalid cargo area.");
                                     break;
                                 case "UsesSpent":
                                 case "Wear":

@@ -35,6 +35,7 @@ namespace Dustline
             internal ItemDefinition Part;
             internal int Level, Cost, Count;
             internal bool Installed;
+            internal bool Available => Part == null || !Part.NotForSale || Count > 0;
             internal string Name;
         }
 
@@ -415,8 +416,9 @@ namespace Dustline
                 var button = Button(confirmation, "确认安装", 0, 0, 197, 41, null, true);
                 button.interactable = false;
                 cancel.interactable = option != null;
-                workshopConfirm = option != null ? button : null;
+                workshopConfirm = option != null && option.Available ? button : null;
                 if (option == null || !slot.HasValue) return;
+                if (!option.Available) { button.GetComponentInChildren<Text>().text = "需持有配件"; return; }
                 if (option.Cost > 0) button.GetComponentInChildren<Text>().text = "确认安装 · " + option.Cost;
                 button.onClick.AddListener(() =>
                 {
@@ -446,8 +448,10 @@ namespace Dustline
                 foreach (var item in session.Catalog.CompatibleParts(def, slot))
                 {
                     int count = session.Stash.Count(item.Id) + session.Loadout.Count(item.Id);
-                    options.Add(new WorkshopOption { Part = item, Cost = count == 0 ? item.Value : 0, Count = count,
-                        Installed = installed.ItemId == item.Id, Name = item.DisplayName });
+                    string name = item.DisplayName;
+                    if (slot == PartSlot.Sight && item.Part.Magnification > 0) name += " · " + item.Part.Magnification + "×";
+                    options.Add(new WorkshopOption { Part = item, Cost = count == 0 && !item.NotForSale ? item.Value : 0, Count = count,
+                        Installed = installed.ItemId == item.Id, Name = name });
                 }
                 for (int level = 0; level <= (factory ? WeaponTuning.MaxUpgradeLevel : 0); level++)
                 {
@@ -506,6 +510,7 @@ namespace Dustline
                     name.resizeTextMinSize = 13;
                     name.resizeTextMaxSize = 17;
                     string text = option.Installed ? "已安装" : option.Count > 0 ? "持有 × " + option.Count + " 件"
+                        : !option.Available ? "不在系统商店出售"
                         : option.Part != null ? "商店售价 " + option.Cost : option.Cost > 0 ? "原厂售价 " + option.Cost
                         : option.Level > 0 ? "已购原厂" : "原装 · 无需购买";
                     Label(card.transform, text, 14, 87, 58, 125, 30, TextAnchor.MiddleLeft, option.Installed ? Aqua : Muted);
@@ -527,7 +532,8 @@ namespace Dustline
                     changes++;
                 }
                 bool previewing = state.Preview != null;
-                note.text = !previewing ? metrics[0].Readout + "   ·   " + (state.Slot.HasValue ? "选择" + PartName(state.Slot.Value) : "当前配置")
+                note.text = !previewing ? metrics[0].Readout + "   ·   " + metrics[1].Readout + "   ·   "
+                    + (state.Slot.HasValue ? "选择" + PartName(state.Slot.Value) : "当前配置")
                     : changes == 0 ? "仅外观变化 · 参数不变" : headline;
                 note.color = previewing ? Aqua : Pale;
                 statsButton.GetComponentInChildren<Text>().text = state.Expanded ? "收起参数" : "完整参数";
@@ -541,7 +547,7 @@ namespace Dustline
                 int rowIndex = 0;
                 foreach (var row in metrics)
                 {
-                    Label(statsPanel, row.Readout, 16, 12, 33 + rowIndex * 25, 296, 24, TextAnchor.MiddleLeft, row.Changed ? Aqua : Muted);
+                    Label(statsPanel, row.Readout, 16, 12, 33 + rowIndex * 22, 296, 22, TextAnchor.MiddleLeft, row.Changed ? Aqua : Muted);
                     rowIndex++;
                 }
                 Label(statsPanel, "弹药 · " + AmmoName(def.Weapon.AmmoFamily), 14, 12, 309, 296, 25, TextAnchor.MiddleLeft, Muted);
@@ -554,12 +560,13 @@ namespace Dustline
                 return new[]
                 {
                     new WorkshopMetric("容量", WeaponRules.Capacity(def, old, session.Catalog), WeaponRules.Capacity(def, next, session.Catalog), "发"),
+                    new WorkshopMetric("腰射散布", a.Spread(false) * 1000f, b.Spread(false) * 1000f, "‰"),
+                    new WorkshopMetric("瞄具倍率", a.Magnification, b.Magnification, "×"),
+                    new WorkshopMetric("开镜视角", a.AimFov, b.AimFov, "°"),
+                    new WorkshopMetric("开镜散布", a.Spread(true) * 1000f, b.Spread(true) * 1000f, "‰"),
+                    new WorkshopMetric("开镜耗时", a.AimSeconds, b.AimSeconds, "秒"),
                     new WorkshopMetric("换弹耗时", a.ReloadSeconds, b.ReloadSeconds, "秒"),
                     new WorkshopMetric("后坐幅度", a.Recoil, b.Recoil, ""),
-                    new WorkshopMetric("腰射散布", a.HipSpread * 1000f, b.HipSpread * 1000f, "‰"),
-                    new WorkshopMetric("开镜散布", a.AimSpread * 1000f, b.AimSpread * 1000f, "‰"),
-                    new WorkshopMetric("开镜耗时", a.AimSeconds, b.AimSeconds, "秒"),
-                    new WorkshopMetric("开镜视角", a.AimFov, b.AimFov, "°"),
                     new WorkshopMetric("游戏伤害", a.Damage, b.Damage, ""),
                     new WorkshopMetric("开火间隔", a.FireInterval, b.FireInterval, "秒"),
                     new WorkshopMetric("有效距离", a.Range, b.Range, "米"),

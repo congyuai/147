@@ -15,6 +15,7 @@ namespace Dustline
         public bool Alive => Body?.Alive ?? Current > 0f;
         internal Func<Vector3, BodyPart> HitPart;
         internal Func<BodyPart, float, float> ProtectPart;
+        internal Func<BodyPart, float, int, float> ProtectAmmoPart;
         public float AimHeight = 1.2f;
         public Vector3 AimPoint => transform.position + Vector3.up * AimHeight;
         public Func<float> ArmorReduction;
@@ -38,25 +39,33 @@ namespace Dustline
         internal void EnableBody() => Body = new BodyCondition(Maximum);
 
         public void Damage(float amount, Health attacker) => Damage(amount, attacker, true);
-        internal void DamageAt(float amount, Health attacker, Vector3 point) =>
-            ApplyDamage(amount, attacker, HitPart?.Invoke(point) ?? BodyPart.Chest, true);
+        internal void DamageAt(float amount, Health attacker, Vector3 point) => DamageAt(amount, attacker, point, -1);
+
+        internal void DamageAt(float amount, Health attacker, Vector3 point, int penetration) =>
+            ApplyDamage(amount, attacker, HitPart?.Invoke(point) ?? BodyPart.Chest, true, penetration);
 
         internal void Damage(float amount, Health attacker, bool applyArmor) => ApplyDamage(amount, attacker, BodyPart.Chest, applyArmor);
 
-        void ApplyDamage(float amount, Health attacker, BodyPart part, bool applyArmor)
+        void ApplyDamage(float amount, Health attacker, BodyPart part, bool applyArmor, int penetration = -1)
         {
             if (!Alive || !(amount > 0) || float.IsInfinity(amount)) return;
             if (attacker != null && attacker != this && attacker.Team == Team) return;
+            if (applyArmor)
+            {
+                if (penetration >= 0 && ProtectAmmoPart != null) amount = ProtectAmmoPart(part, amount, penetration);
+                else if (ProtectPart != null) amount = ProtectPart(part, amount);
+                else if (Body == null) amount *= 1f - Mathf.Clamp(ArmorReduction?.Invoke() ?? 0, 0, .8f);
+            }
+            if (!(amount > 0f) || float.IsInfinity(amount)) return;
             if (Body != null)
             {
                 float before = Current;
-                Body.Damage(part, applyArmor && ProtectPart != null ? ProtectPart(part, amount) : amount);
+                Body.Damage(part, amount);
                 Current = Body.Total;
                 Report(before - Current, attacker);
                 return;
             }
-            float protection = applyArmor ? Mathf.Clamp(ArmorReduction?.Invoke() ?? 0, 0, 0.8f) : 0f;
-            float remaining = Mathf.Max(0, Current - amount * (1 - protection));
+            float remaining = Mathf.Max(0, Current - amount);
             float lost = Current - remaining;
             if (!(lost > 0)) return;
 

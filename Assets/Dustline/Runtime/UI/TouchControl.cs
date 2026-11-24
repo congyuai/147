@@ -118,7 +118,11 @@ namespace Dustline
             if (GestureEnd != null) { GestureEnd(lastPosition, cancel); return; }
             if (cancel) Input.CancelAction(Action);
             else Input.Hold(Action, false);
-            if (Action == "Move") Input.TouchMove = Vector2.zero;
+            if (Action == "Move")
+            {
+                Input.TouchMove = Vector2.zero;
+                if (cancel) Input.CancelTouchSprint();
+            }
         }
         internal void CancelPointer() => Release(true);
 

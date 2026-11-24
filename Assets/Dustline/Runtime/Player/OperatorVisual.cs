@@ -295,6 +295,14 @@ namespace Dustline
             }
         }
 
+        internal Transform CreateBackMount()
+        {
+            var mount = new GameObject("Back weapon mount") { layer = gameObject.layer }.transform;
+            mount.SetParent(Joint(Bone.Chest), false);
+            mount.SetLocalPositionAndRotation(new Vector3(.14f, .08f, -.38f), Quaternion.Euler(-69f, 180f, -24f));
+            return mount;
+        }
+
         internal void BindWeaponView(WeaponVisual weapon) => carriedWeapon = weapon;
 
         public void PoseArms(Vector3 rightHand, Vector3 leftHand)

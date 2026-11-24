@@ -16,6 +16,9 @@ namespace Dustline
     [CreateAssetMenu(menuName = "Dustline/Loot Table")]
     public sealed class LootTable : ScriptableObject
     {
+        public const string BirthdayCake = "birthday_cake";
+        public const int BirthdayDropDenominator = 100000;
+        public const int BirthdayResale = 52013140;
         public List<LootEntry> Entries = new List<LootEntry>();
         public int Rolls = 3;
 
@@ -35,9 +38,11 @@ namespace Dustline
 
             var eligible = new List<LootEntry>();
             long totalWeight = 0;
+            var cake = target.Catalog.Find(BirthdayCake);
+            bool cakeEligible = cake != null && (accepts == null || accepts(cake));
             foreach (LootEntry entry in Entries)
             {
-                if (entry == null || entry.Weight <= 0 || entry.Min < 1 || entry.Max < entry.Min) continue;
+                if (entry == null || entry.ItemId == BirthdayCake || entry.Weight <= 0 || entry.Min < 1 || entry.Max < entry.Min) continue;
                 var item = target.Catalog.Find(entry.ItemId);
                 if (item == null || (accepts != null && !accepts(item))) continue;
 
@@ -49,6 +54,7 @@ namespace Dustline
 
             for (int roll = 0; roll < rolls; roll++)
             {
+                if (cakeEligible && random.Next(BirthdayDropDenominator) == 0 && target.TryAdd(BirthdayCake, 1, out _)) continue;
                 double ticket = random.NextDouble() * totalWeight;
                 LootEntry selected = eligible[eligible.Count - 1];
                 long cumulative = 0;

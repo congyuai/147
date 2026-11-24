@@ -7,7 +7,7 @@ namespace Dustline
     {
         internal bool TrySortStash(out string error)
         {
-            if (adaptive || accepts != null || baseWidth != 12 || baseHeight != 10)
+            if (adaptive || accepts != null || baseWidth != StashColumns || (baseHeight != StashRows && baseHeight != 10))
             {
                 error = "仅可整理仓库。";
                 return false;

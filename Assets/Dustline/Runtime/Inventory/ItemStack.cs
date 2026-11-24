@@ -34,7 +34,7 @@ namespace Dustline
         public bool Empty => Sight.Empty && Grip.Empty && Stock.Empty && Muzzle.Empty && Magazine.Empty;
     }
 
-    public enum CargoArea { Main, Rig, Pockets, Legacy }
+    public enum CargoArea { Main, Rig, Pockets, Legacy, Secure }
 
     [Serializable]
     public sealed class ItemStack

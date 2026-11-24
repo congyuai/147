@@ -40,11 +40,18 @@ namespace Dustline
         public static BodyCoverage Mask(BodyPart part) => (BodyCoverage)(1 << (int)part);
         public static bool IsVital(BodyPart part) => part == BodyPart.Head || part == BodyPart.Chest;
 
-        internal static float Protect(BodyPart part, float damage, ItemDefinition rule, ItemStack armor)
+        internal static float Protect(BodyPart part, float damage, ItemDefinition rule, ItemStack armor) =>
+            Protect(part, damage, rule, armor, 0);
+
+        internal static float Protect(BodyPart part, float damage, ItemDefinition rule, ItemStack armor, int penetration)
         {
             if (rule == null || armor == null || armor.Wear >= rule.Durability || (rule.Coverage & Mask(part)) == 0) return damage;
             float remaining = 1f - .45f * armor.Wear / rule.Durability;
-            float blocked = damage * Mathf.Clamp01(rule.DamageReduction * remaining);
+            float resistance = 1f;
+            if (penetration > 0 && rule.Tier > 0)
+                resistance = Mathf.Clamp01(.60f + .04f * (WeaponRules.PenetrationForTier(rule.Tier)
+                    - Math.Min(penetration, WeaponRules.PenetrationForTier(WeaponRules.AmmoTierCount))));
+            float blocked = damage * Mathf.Clamp01(rule.DamageReduction * remaining * resistance);
             if (blocked > 0f) armor.Wear = (int)Mathf.Min(rule.Durability, armor.Wear + Mathf.Max(1f, Mathf.Ceil(blocked)));
             return damage - blocked;
         }

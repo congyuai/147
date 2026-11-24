@@ -9,7 +9,7 @@ namespace Dustline
         Medicine,
         Armor,
         Valuable,
-        Part, Helmet, Rig, Pack
+        Part, Helmet, Rig, Pack, SecureCase
     }
 
     public enum MedicineForm { Pouch, Roll, Case, Tourniquet, Splint, Tablets, Surgery }
@@ -71,7 +71,7 @@ namespace Dustline
     {
         public PartSlot Slot;
         public string Interface, DedicatedItem;
-        public int Form, Capacity;
+        public int Form, Capacity, Magnification;
         public float Stability, ReloadFactor, AimFactor;
     }
 
@@ -105,6 +105,7 @@ namespace Dustline
             ItemKind.Helmet => "头盔",
             ItemKind.Rig => "弹挂",
             ItemKind.Pack => "背包",
+            ItemKind.SecureCase => "安全箱",
             ItemKind.Part => "配件",
             ItemKind.Valuable => "贵重物品",
             _ => "物品"
@@ -112,7 +113,11 @@ namespace Dustline
         public int Width = 1;
         public int Height = 1;
         public int MaxStack = 1;
-        public int Value;
+        public int Value, Penetration, FixedResale;
+        public bool Special, NotForSale;
+        public int ResaleValue => FixedResale > 0 ? FixedResale : System.Math.Max(1, Value / 2);
+        public string QualityName => Special ? "彩色 · 特殊" : Tier > 0 ? Tier + " 级" : "未分级";
+        public Color QualityColor => Special ? new Color32(236, 150, 208, 255) : GradeColor(Tier);
         public float UnitWeight;
         public float HealAmount = 40f;
         public float UseSeconds = 2.1f;

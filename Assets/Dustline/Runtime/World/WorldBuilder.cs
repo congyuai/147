@@ -14,12 +14,15 @@ namespace Dustline
         public ExtractionZone Exit { get; private set; }
         public IReadOnlyList<ExtractionZone> Exits { get; private set; } = Array.Empty<ExtractionZone>();
         public Light Sun { get; private set; }
-        public Vector3 Spawn => PortLayout.Spawn;
+        public Vector3 Spawn => IsQuarry ? QuarryLayout.Spawn : PortLayout.Spawn;
+        internal bool IsQuarry { get; private set; }
+        internal Texture2D QuarryChart { get; private set; }
         public readonly List<Vector3> PatrolPoints = new List<Vector3>();
 
         readonly List<UnityEngine.Object> generatedAssets = new List<UnityEngine.Object>();
         readonly List<ExtractionZone> exitZones = new List<ExtractionZone>();
         readonly List<Vector3> navigationSeeds = new List<Vector3>();
+        readonly HashSet<Collider> quarryFloors = new HashSet<Collider>();
         readonly List<Vector3> guardPoints = new List<Vector3>();
         readonly List<Vector3> candidates = new List<Vector3>();
         readonly Collider[] placementHits = new Collider[16];
@@ -49,25 +52,32 @@ namespace Dustline
             if (asset != null) generatedAssets.Add(asset);
         }
 
-        public void Build(GameSession owner)
+        public void Build(GameSession owner) => Build(owner, false);
+
+        internal void Build(GameSession owner, bool quarry)
         {
             if (owner == null) throw new ArgumentNullException(nameof(owner));
             ClearGeneratedWorld();
+            IsQuarry = quarry;
             session = owner;
             random = new System.Random(0xD05711 + Time.frameCount);
             SaveAmbient();
             ConfigureLighting();
 
-            portMaterials = new PortMaterials(Keep);
+            Texture2D ground = quarry ? QuarryRaster.BakeGround() : null;
+            Keep(ground);
+            portMaterials = new PortMaterials(Keep, ground);
             DarkMaterial = portMaterials.Dark;
+            if (quarry)
+            {
+                BuildQuarry();
+                return;
+            }
 
-            navigationSeeds.Clear();
-            PatrolPoints.Clear();
-            guardPoints.Clear();
             var scenery = new PortScenery(transform, portMaterials, Keep, navigationSeeds);
             scenery.Build();
-            BuildExits();
-            BuildFixedLoot();
+            BuildExits(PortLayout.Exits);
+            BuildPortLoot();
             Physics.SyncTransforms();
 
             Navigation = new NavigationGrid(navigationSeeds, 57f, GetComponentsInChildren<HarborDoor>());
@@ -77,6 +87,23 @@ namespace Dustline
                 else if (PortLayout.CanPostBot(point)) PatrolPoints.Add(point);
             }
             if (PatrolPoints.Count == 0) throw new InvalidOperationException("港区未生成可用巡逻路点。");
+        }
+
+        void BuildQuarry()
+        {
+            new QuarryScenery(transform, portMaterials, Keep, navigationSeeds, quarryFloors).Build();
+            BuildExits(QuarryLayout.Exits);
+            BuildQuarryLoot();
+            Physics.SyncTransforms();
+            Navigation = new NavigationGrid(navigationSeeds, 39f, quarryFloors);
+            foreach (var point in Navigation.ReachablePoints(Spawn))
+                if (QuarryLayout.CanPostBot(point)) PatrolPoints.Add(point);
+            foreach (var exit in QuarryLayout.Exits)
+                if (Navigation.Path(Spawn, exit.Position).Count == 0)
+                    throw new InvalidOperationException("采石场撤离路线不通：" + exit.Name);
+            if (PatrolPoints.Count < 14) throw new InvalidOperationException("采石场没有足够的可达巡逻路点。");
+            QuarryChart = QuarryRaster.BakeChart();
+            Keep(QuarryChart);
         }
 
         void SaveAmbient()
@@ -111,13 +138,22 @@ namespace Dustline
             RenderSettings.fogStartDistance = 250;
             RenderSettings.fogEndDistance = 1620;
 
-            var sunObject = new GameObject("Low angle harbor sun", typeof(Light));
+            if (IsQuarry)
+            {
+                RenderSettings.ambientSkyColor = new Color(.57f, .63f, .69f);
+                RenderSettings.ambientEquatorColor = new Color(.39f, .38f, .35f);
+                RenderSettings.ambientGroundColor = new Color(.21f, .18f, .16f);
+                RenderSettings.fogColor = new Color(.54f, .57f, .60f);
+                RenderSettings.fogStartDistance = 295f;
+                RenderSettings.fogEndDistance = 1120f;
+            }
+            var sunObject = new GameObject(IsQuarry ? "Stone Ridge daylight" : "Low angle harbor sun", typeof(Light));
             sunObject.transform.SetParent(transform, false);
-            sunObject.transform.rotation = Quaternion.Euler(27, -38, 0);
+            sunObject.transform.rotation = IsQuarry ? Quaternion.Euler(46, -62, 0) : Quaternion.Euler(27, -38, 0);
             Sun = sunObject.GetComponent<Light>();
             Sun.type = LightType.Directional;
             Sun.cullingMask &= ~ItemPreviewStage.LayerMask;
-            Sun.color = new Color(1f, 0.78f, 0.59f);
+            Sun.color = IsQuarry ? new Color(1f, .92f, .77f) : new Color(1f, .78f, .59f);
             Sun.intensity = 1.15f;
             Sun.shadows = LightShadows.Soft;
             Sun.shadowStrength = 0.78f;
@@ -125,6 +161,14 @@ namespace Dustline
             Sun.shadowNormalBias = 0.35f;
             Sun.renderingLayerMask = 1;
             RenderSettings.sun = Sun;
+            if (IsQuarry)
+            {
+                PointLight("Screening control house lamps", QuarryLayout.HighValueCenter + Vector3.up * 4.4f, new Color(1f, .72f, .46f), 2.5f, 19f);
+                PointLight("Quarry workshop lamps", QuarryTerrain.At(64, 242) + Vector3.up * 4.7f, new Color(.81f, .88f, 1f), 2.1f, 22f);
+                foreach (var exit in QuarryLayout.Exits)
+                    PointLight("Ridge exit signal", exit.Position + Vector3.up * 2.65f, new Color(.55f, 1f, .72f), 1.35f, 12f);
+                return;
+            }
 
             PointLight("Customs interior lamps", PortLayout.At(-198, 62) + Vector3.up * 4.8f, new Color(1f, .65f, .35f), 2.2f, 25);
             PointLight("Workshop interior lamps", PortLayout.At(83, -157) + Vector3.up * 5.4f, new Color(1f, .58f, .31f), 2.8f, 28);
@@ -147,12 +191,11 @@ namespace Dustline
 
         }
 
-        void BuildExits()
+        void BuildExits(IReadOnlyList<PortExit> definitions)
         {
-            exitZones.Clear();
-            for (int i = 0; i < PortLayout.Exits.Count; i++)
+            for (int i = 0; i < definitions.Count; i++)
             {
-                var definition = PortLayout.Exits[i];
+                var definition = definitions[i];
                 var go = new GameObject("Extraction zone " + (i + 1));
                 go.transform.SetParent(transform, false);
                 go.transform.position = definition.Position;
@@ -164,11 +207,7 @@ namespace Dustline
             Exit = exitZones[0];
         }
 
-        void BuildFixedLoot()
-        {
-            Physics.SyncTransforms();
-            var fixedVisuals = new PortMesh();
-            var fixedPoints = new[] {
+        void BuildPortLoot() => BuildFixedLoot(new[] {
                 new FixedLoot(-297.6f, -236.6f, LootKind.StorageLocker, "堆场值班柜"),
                 new FixedLoot(-261.2f, -220.1f, LootKind.SupplyCrate, "堆场物资箱"),
                 new FixedLoot(-231, -164.8f, LootKind.Toolbox, "堆场工具箱"),
@@ -220,13 +259,47 @@ namespace Dustline
                 new FixedLoot(259.1f, 125.8f, LootKind.EquipmentCase, "海事站 · 精密设备箱"),
                 new FixedLoot(265.5f, 112.4f, LootKind.Toolbox, "海事站 · 校准工具箱"),
                 new FixedLoot(242.2f, 112.2f, LootKind.StorageLocker, "海事站 · 岸电备件柜")
-            };
+            });
+
+        void BuildQuarryLoot() => BuildFixedLoot(new[] {
+            new FixedLoot(-288,-247, LootKind.StorageLocker, "调度棚值班柜"),
+            new FixedLoot(-274,-250, LootKind.Toolbox, "西坡测量工具箱"),
+            new FixedLoot(-269,-231, LootKind.SupplyCrate, "营地补给箱"),
+            new FixedLoot(-265,-214, LootKind.MedicalCase, "营地急救箱"),
+            new FixedLoot(-303,254, LootKind.Toolbox, "北脊道班备件箱"),
+            new FixedLoot(-296,257, LootKind.StorageLocker, "护坡巡检柜"),
+            new FixedLoot(53,242, LootKind.Toolbox, "钻头检修工具箱"),
+            new FixedLoot(77,247, LootKind.StorageLocker, "钻场工装柜"),
+            new FixedLoot(74,238, LootKind.MedicalCase, "钻场医疗箱"),
+            new FixedLoot(77,208, LootKind.SupplyCrate, "北脊料台货箱"),
+            new FixedLoot(-20,-29, LootKind.Toolbox, "坑底测绘工具箱"),
+            new FixedLoot(-10,-30, LootKind.MedicalCase, "勘探棚医疗箱"),
+            new FixedLoot(-18,-5, LootKind.SupplyCrate, "采坑巡检供给箱"),
+            new FixedLoot(35,-31, LootKind.StorageLocker, "坑底机务柜"),
+            new FixedLoot(188,82, LootKind.EquipmentCase, "控制站 · 筛分诊断设备箱"),
+            new FixedLoot(216,89, LootKind.EquipmentCase, "控制站 · 精密测量设备箱"),
+            new FixedLoot(189,90, LootKind.StorageLocker, "控制站 · 检测样品柜"),
+            new FixedLoot(220,77, LootKind.Toolbox, "控制站 · 校准工具箱"),
+            new FixedLoot(216,46, LootKind.SupplyCrate, "输送廊补给箱"),
+            new FixedLoot(241,47, LootKind.StorageLocker, "破碎机维修柜"),
+            new FixedLoot(174,-173, LootKind.Toolbox, "泵房过滤器工具箱"),
+            new FixedLoot(192,-173, LootKind.MedicalCase, "泵站医疗箱"),
+            new FixedLoot(193,-158, LootKind.StorageLocker, "沉淀池样品柜"),
+            new FixedLoot(172,-150, LootKind.SupplyCrate, "泵站供给箱"),
+            new FixedLoot(289,-264, LootKind.StorageLocker, "磅房票据柜"),
+            new FixedLoot(287,-249, LootKind.Toolbox, "称重校正工具箱")
+        });
+
+        void BuildFixedLoot(FixedLoot[] fixedPoints)
+        {
+            Physics.SyncTransforms();
+            var fixedVisuals = new PortMesh();
             int stations = 0;
             for (int i = 0; i < fixedPoints.Length; i++)
             {
                 FixedLoot point = fixedPoints[i];
-                Vector3 requested = PortLayout.At(point.X, point.Z);
-                bool high = PortLayout.InHighValueArea(requested);
+                Vector3 requested = GroundPoint(point.X, point.Z);
+                bool high = InHighValueArea(requested);
                 if (!TryLootSite(requested, Dimensions(point.Kind), false, out var site)) continue;
                 var container = CreateLootInternal(site, point.Title, point.Kind, SearchSeconds(point.Kind), fixedVisuals);
                 var table = high ? session.HighValueLootTable : session.LootTable;
@@ -235,14 +308,14 @@ namespace Dustline
                 if (high) stations++;
                 Physics.SyncTransforms();
             }
-            if (stations == 0) throw new InvalidOperationException("海事检修站没有可搜索的物资箱。");
+            if (stations == 0) throw new InvalidOperationException((IsQuarry ? QuarryLayout.HighValueName : PortLayout.HighValueName) + "没有可搜索的物资箱。");
 
-            var starter = CreateLootInternal(PortLayout.At(Spawn.x + 4, Spawn.z + 5), "起点医疗箱",
+            var starter = CreateLootInternal(GroundPoint(Spawn.x + 4, Spawn.z + 5), "起点医疗箱",
                 LootKind.MedicalCase, 1.1f, fixedVisuals);
             starter.Inventory.TryAdd("medkit", 1, out _);
             starter.Inventory.TryAdd("bandage", 2, out _);
             Physics.SyncTransforms();
-            var ammoPoint = PortLayout.At(Spawn.x + 6.3f, Spawn.z + 5.7f);
+            var ammoPoint = GroundPoint(Spawn.x + 6.3f, Spawn.z + 5.7f);
             if (TryLootSite(ammoPoint, Dimensions(LootKind.SupplyCrate), false, out var ammoSite))
                 CreateLootInternal(ammoSite, "起点弹药箱", LootKind.SupplyCrate, 1.2f, fixedVisuals).Inventory.TryAdd("ammo", 30, out _);
             fixedVisuals.Bake(transform, "Fixed loot visuals", portMaterials.Structure, Keep, false);
@@ -263,14 +336,19 @@ namespace Dustline
         {
             Physics.SyncTransforms();
             if (!TryLootSite(point, Dimensions(LootKind.FieldBag), true, out var site))
-                site = PortLayout.At(point.x, point.z);
+                site = GroundPoint(point.x, point.z);
             return CreateLootInternal(site, title, LootKind.FieldBag, 2.2f);
         }
 
+        float GroundHeight(float x, float z) => IsQuarry ? QuarryTerrain.Floor(x, z) : PortTerrain.Floor(x, z);
+        Vector3 GroundPoint(float x, float z) => new Vector3(x, GroundHeight(x, z), z);
+        bool InHighValueArea(Vector3 point) => IsQuarry ? QuarryLayout.InHighValueArea(point) : PortLayout.InHighValueArea(point);
+        bool TryWalk(float x, float z, out float y) => IsQuarry ? QuarryTerrain.TryWalk(x, z, out y) : PortTerrain.TryWalk(x, z, out y);
+
         bool TryLootSite(Vector3 point, Vector3 size, bool dropped, out Vector3 site)
         {
-            bool high = PortLayout.InHighValueArea(point);
-            bool onWalkable = PortTerrain.TryWalk(point.x, point.z, out float floor);
+            bool high = InHighValueArea(point);
+            bool onWalkable = TryWalk(point.x, point.z, out float floor);
             if (TryPlace(point.x, point.z, out site)) return true;
             for (int ring = 1; ring <= (dropped ? 5 : 3); ring++)
                 for (int i = 0; i < 8; i++)
@@ -283,13 +361,13 @@ namespace Dustline
             bool TryPlace(float x, float z, out Vector3 position)
             {
                 position = new Vector3(x, 0, z);
-                if (!PortTerrain.TryWalk(x, z, out float y) || (!dropped && PortLayout.InHighValueArea(position) != high)) return false;
+                if (!TryWalk(x, z, out float y) || (!dropped && InHighValueArea(position) != high)) return false;
                 position.y = y;
                 if (dropped && onWalkable && Physics.Linecast(new Vector3(point.x, floor + .78f, point.z),
                     position + Vector3.up * .78f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) return false;
                 float spread = Mathf.Max(size.x, size.z) * .5f;
-                if (Mathf.Abs(y - PortTerrain.Floor(x - spread, z)) > .22f || Mathf.Abs(y - PortTerrain.Floor(x + spread, z)) > .22f
-                    || Mathf.Abs(y - PortTerrain.Floor(x, z + spread)) > .22f || Mathf.Abs(y - PortTerrain.Floor(x, z - spread)) > .22f) return false;
+                if (Mathf.Abs(y - GroundHeight(x - spread, z)) > .22f || Mathf.Abs(y - GroundHeight(x + spread, z)) > .22f
+                    || Mathf.Abs(y - GroundHeight(x, z + spread)) > .22f || Mathf.Abs(y - GroundHeight(x, z - spread)) > .22f) return false;
                 var center = position + Vector3.up * ((size.y + .13f) * .5f);
                 var extents = size * .5f + new Vector3(.17f, -.065f, .17f);
                 int count = Physics.OverlapBoxNonAlloc(center, extents, placementHits, Quaternion.identity,
@@ -297,7 +375,8 @@ namespace Dustline
                 for (int j = 0; j < count; j++)
                 {
                     var hit = placementHits[j];
-                    if (hit.TryGetComponent<FootstepSurface>(out var surface) && surface.IsNavigationFloor) continue;
+                    if (IsQuarry ? quarryFloors.Contains(hit)
+                        : hit.TryGetComponent<FootstepSurface>(out var surface) && surface.IsNavigationFloor) continue;
                     return false;
                 }
                 return count < placementHits.Length;
@@ -386,6 +465,11 @@ namespace Dustline
 
         public void SpawnBots()
         {
+            if (IsQuarry)
+            {
+                SpawnQuarryBots();
+                return;
+            }
             var taken = new List<Vector3>(14);
             for (int district = 0; district < PortLayout.Districts.Count; district++)
                 for (int slot = 0; slot < 2; slot++)
@@ -426,11 +510,38 @@ namespace Dustline
             void Register(Vector3 point, int team, BotRank rank)
             {
                 taken.Add(point);
-                var bot = new GameObject("Local combatant " + taken.Count + " " + rank);
-                bot.transform.SetParent(transform, false);
-                bot.transform.position = point + Vector3.up * .035f;
-                bot.AddComponent<BotController>().Initialize(session, team, taken.Count - 1, rank);
+                AddBot(point, team, taken.Count - 1, rank);
             }
+        }
+
+        void SpawnQuarryBots()
+        {
+            const int count = 14;
+            var taken = new List<Vector3>(count);
+            int stations = QuarryLayout.Districts.Count;
+            for (int slot = 0; slot < count; slot++)
+            {
+                int district = slot % stations;
+                candidates.Clear();
+                foreach (var p in PatrolPoints)
+                    if (QuarryLayout.DistrictIndex(p) == district && !NearAny(p, taken, 28f) && Navigation.CanStandAt(p))
+                        candidates.Add(p);
+                if (candidates.Count == 0)
+                    foreach (var p in PatrolPoints)
+                        if (!NearAny(p, taken, 18f) && Navigation.CanStandAt(p)) candidates.Add(p);
+                if (candidates.Count == 0) throw new InvalidOperationException("采石场没有足够的安全出生点。");
+                var point = candidates[random.Next(candidates.Count)];
+                taken.Add(point);
+                AddBot(point, (district + slot / stations) % 2 + 1, slot, BotRank.Regular);
+            }
+        }
+
+        void AddBot(Vector3 point, int team, int index, BotRank rank)
+        {
+            var bot = new GameObject("Local combatant " + (index + 1) + " " + rank);
+            bot.transform.SetParent(transform, false);
+            bot.transform.position = point + Vector3.up * .035f;
+            bot.AddComponent<BotController>().Initialize(session, team, index, rank);
         }
 
         static bool NearAny(Vector3 point, List<Vector3> others, float distance)
@@ -449,6 +560,12 @@ namespace Dustline
 
         public string DistrictAt(Vector3 position)
         {
+            if (IsQuarry)
+            {
+                if (QuarryLayout.InHighValueArea(position)) return QuarryLayout.HighValueName;
+                int quarryDistrict = QuarryLayout.DistrictIndex(position);
+                return quarryDistrict < 0 ? "采石运输道" : QuarryLayout.Districts[quarryDistrict].Name;
+            }
             int index = PortLayout.DistrictIndex(position);
             if (PortLayout.InHighValueArea(position)) return PortLayout.HighValueName;
             return index < 0 ? "港区道路" : PortLayout.Districts[index].Name;
@@ -457,6 +574,17 @@ namespace Dustline
         public Vector3 PickPatrolPoint(Vector3 position, System.Random source)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
+            if (IsQuarry)
+            {
+                candidates.Clear();
+                foreach (var point in PatrolPoints)
+                {
+                    float sq = NavigationGrid.PlanarDistanceSquared(point, position);
+                    if (sq >= 6 * 6 && sq <= 104 * 104) candidates.Add(point);
+                }
+                if (candidates.Count == 0) candidates.AddRange(PatrolPoints);
+                return PickReachable(position, source);
+            }
             candidates.Clear();
             int current = NearestDistrict(position);
             foreach (var point in PatrolPoints)
@@ -519,6 +647,12 @@ namespace Dustline
                 if (generatedAssets[i] != null) DestroyImmediate(generatedAssets[i]);
             generatedAssets.Clear();
             exitZones.Clear();
+            navigationSeeds.Clear();
+            guardPoints.Clear();
+            PatrolPoints.Clear();
+            quarryFloors.Clear();
+            candidates.Clear();
+            QuarryChart = null;
             Navigation = null;
             Exit = null;
             Exits = Array.Empty<ExtractionZone>();

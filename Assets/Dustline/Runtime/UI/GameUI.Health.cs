@@ -106,7 +106,7 @@ namespace Dustline
             ItemStack MedicineStack(ItemDefinition item)
             {
                 var stack = session.ActiveFieldBag?.Find(preferred);
-                return stack != null && stack.ItemId == item.Id && stack.Quantity > 0 && stack.Slot == EquipmentSlot.None
+                return GridInventory.FieldSupply(stack) && stack.ItemId == item.Id && stack.Quantity > 0
                     ? stack : session.QuickMedicine(item.Id);
             }
 

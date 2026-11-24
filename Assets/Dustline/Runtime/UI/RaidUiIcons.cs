@@ -4,7 +4,7 @@ using UnityEngine;
 namespace Dustline
 {
     enum RaidIcon { Dial, Knob, Aim, Fire, Reload, Crouch, Search, Heal, Bag, Gear, Reticle, Hit, Strike, Prone, Jump, LeanLeft, LeanRight,
-        InteractDoor, Map, Heading, Danger, Exit, Switch, ControlRing, DamageArc, Health }
+        InteractDoor, Map, Heading, Danger, Exit, Switch, ControlRing, DamageArc, Health, Sort, Secure, Sun }
 
     sealed class RaidUiIcons : IDisposable
     {
@@ -52,6 +52,22 @@ namespace Dustline
         {
             switch (icon)
             {
+                case RaidIcon.Sort:
+                    return Cover(Mathf.Min(Segment(p, -18, -15, -18, 17, 2), Mathf.Min(
+                        Segment(p, -25, -8, -18, -16, -11, -8), Mathf.Min(Box(p, 7, 13, 15, 2),
+                        Mathf.Min(Box(p, 3, 2, 11, 2), Box(p, -1, -9, 7, 2))))));
+                case RaidIcon.Secure:
+                    return Cover(Mathf.Min(Outline(p, 0, -5, 24, 16, 2.3f), Mathf.Min(
+                        Outline(p, 0, 13, 9, 5, 2), Mathf.Min(Box(p, -13, -3, 2, 6), Box(p, 13, -3, 2, 6)))));
+                case RaidIcon.Sun:
+                    float light = Circle(p, 0, 0, 13);
+                    for (int ray = 0; ray < 8; ray++)
+                    {
+                        float a = ray * Mathf.PI / 4;
+                        float x = Mathf.Cos(a), y = Mathf.Sin(a);
+                        light = Mathf.Min(light, Segment(p, x * 17, y * 17, x * 24, y * 24, 1.7f));
+                    }
+                    return Cover(light);
                 case RaidIcon.Health:
                     const float limb = 3f;
                     p.x = Mathf.Abs(p.x);

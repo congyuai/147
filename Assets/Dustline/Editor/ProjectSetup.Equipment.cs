@@ -12,13 +12,10 @@ namespace Dustline.Editor
             rifle.FrameInterface = "feed-a";
             rifle.MoveFactor = 1f;
             EditorUtility.SetDirty(rifle);
-            catalog.Find("ammo").AmmoFamily = AmmoFamily.Amber;
-            EditorUtility.SetDirty(catalog.Find("ammo"));
-
-            Ammo("ammo_copper", "铜线轻型弹", AmmoFamily.Copper, 2, 45);
-            Ammo("ammo_silver", "银标远程弹", AmmoFamily.Silver, 4, 30);
-            Ammo("ammo_slate", "岩纹散弹", AmmoFamily.Slate, 3, 24);
-            Ammo("ammo_amber_range", "琥珀训练弹", AmmoFamily.Amber, 2, 60);
+            AmmoLine("amber", "琥珀", AmmoFamily.Amber, "ammo", "琥珀标准弹", 2, 60);
+            AmmoLine("copper", "铜线", AmmoFamily.Copper, "ammo_copper", "铜线轻型弹", 2, 45);
+            AmmoLine("silver", "银标", AmmoFamily.Silver, "ammo_silver", "银标远程弹", 4, 30);
+            AmmoLine("slate", "岩纹", AmmoFamily.Slate, "ammo_slate", "岩纹散弹", 3, 24);
             Gun("dust_pistol", "潮汐 P-9 手枪", WeaponForm.Pistol, "ammo_copper", AmmoFamily.Copper, "feed-c", 2, 1, 12, 19, .22f, 58, 1.24f, .75f, 1.07f, 1, false, 132, new Color(.40f,.50f,.54f));
             Gun("dust_smg", "浪花 S-12 冲锋枪", WeaponForm.Smg, "ammo_copper", AmmoFamily.Copper, "feed-c", 3, 2, 24, 17, .11f, 72, 1.68f, .88f, 1.03f, 1, true, 218, new Color(.24f,.34f,.36f));
             Gun("dust_shotgun", "堤岸 S-6 霰弹枪", WeaponForm.Shotgun, "ammo_slate", AmmoFamily.Slate, "feed-d", 4, 1, 6, 12, .65f, 55, 2.37f, 1.28f, .94f, 5, false, 238, new Color(.49f,.32f,.22f));
@@ -26,9 +23,24 @@ namespace Dustline.Editor
             Gun("dust_sniper", "岬角 N-5 狙击枪", WeaponForm.Sniper, "ammo_silver", AmmoFamily.Silver, "feed-n", 5, 2, 5, 68, .98f, 198, 2.57f, 1.83f, .87f, 1, false, 452, new Color(.39f,.43f,.51f));
             Gun("dust_lmg", "堆场 L-40 轻机枪", WeaponForm.Lmg, "ammo", AmmoFamily.Amber, "feed-l", 5, 2, 40, 24, .12f, 112, 3.15f, 1.46f, .76f, 1, true, 484, new Color(.36f,.39f,.27f));
 
-            Part("part_sight_dot", "沿线反射瞄具", PartSlot.Sight, "glass-line", 1, 0, .91f, 1, .91f);
-            Part("part_sight_prism", "沿线棱镜瞄具", PartSlot.Sight, "glass-line", 2, 0, .88f, 1, 1.16f);
-            Part("part_sight_mini", "微型瞄具", PartSlot.Sight, "glass-mini", 1, 0, .91f, 1, .96f);
+            Gun("dust_pistol_beacon", "浮标 C-7 手枪", WeaponForm.Pistol, "ammo_copper", AmmoFamily.Copper, "feed-c", 2, 1, 8, 27, .28f, 51, 1.16f, .97f, 1.10f, 1, false, 164, new Color(.56f,.43f,.32f), true, .017f, .0032f);
+            Gun("dust_smg_wake", "尾波 W-21 冲锋枪", WeaponForm.Smg, "ammo_copper", AmmoFamily.Copper, "feed-c", 3, 2, 18, 20, .087f, 65, 1.78f, .79f, 1.06f, 1, true, 254, new Color(.23f,.48f,.47f), true, .016f, .0041f);
+            Gun("dust_rifle_jetty", "栈桥 J-24 步枪", WeaponForm.Rifle, "ammo", AmmoFamily.Amber, "feed-a", 4, 2, 24, 30, .17f, 124, 2.26f, 1.31f, .96f, 1, true, 318, new Color(.37f,.46f,.37f), true, .014f, .0026f);
+            Gun("dust_shotgun_brine", "盐雾 B-8 霰弹枪", WeaponForm.Shotgun, "ammo_slate", AmmoFamily.Slate, "feed-d", 4, 2, 8, 10, .49f, 49, 2.62f, 1.13f, .95f, 7, false, 278, new Color(.53f,.43f,.31f), true, .060f, .042f);
+            Gun("dust_marksman_tide", "潮历 T-11 精确射手步枪", WeaponForm.Marksman, "ammo_silver", AmmoFamily.Silver, "feed-b", 4, 2, 11, 49, .39f, 163, 2.12f, 1.55f, .92f, 1, false, 406, new Color(.41f,.49f,.35f), true, .019f, .0016f);
+            Gun("dust_sniper_lantern", "孤灯 H-4 狙击枪", WeaponForm.Sniper, "ammo_silver", AmmoFamily.Silver, "feed-n", 5, 2, 4, 76, 1.17f, 234, 2.81f, 2.02f, .84f, 1, false, 509, new Color(.30f,.42f,.55f), true, .025f, .0011f);
+            Gun("dust_lmg_moor", "系泊 M-32 轻机枪", WeaponForm.Lmg, "ammo", AmmoFamily.Amber, "feed-l", 5, 2, 32, 28, .15f, 134, 2.85f, 1.52f, .81f, 1, true, 526, new Color(.38f,.40f,.33f), true, .023f, .0049f);
+
+            Part("part_sight_dot", "沿线反射瞄具", PartSlot.Sight, "glass-line", 1, 0, .91f, 1, .91f, magnification: 1);
+            Part("part_sight_prism", "沿线棱镜瞄具", PartSlot.Sight, "glass-line", 2, 0, .88f, 1, 1.16f, magnification: 2);
+            Part("part_sight_mini", "微型瞄具", PartSlot.Sight, "glass-mini", 1, 0, .91f, 1, .96f, magnification: 1);
+            Part("part_sight_mini_prism", "漂灯微型棱镜", PartSlot.Sight, "glass-mini", 2, 0, .92f, 1, 1.18f, magnification: 2);
+            Part("part_scope_3", "波纹短镜", PartSlot.Sight, "glass-line", 2, 0, .87f, 1, 1.20f, magnification: 3);
+            Part("part_scope_4", "水尺观察镜", PartSlot.Sight, "glass-line", 2, 0, .86f, 1, 1.26f, magnification: 4);
+            Part("part_scope_6", "航图巡望镜", PartSlot.Sight, "glass-line", 2, 0, .85f, 1, 1.31f, magnification: 6);
+            Part("part_scope_8", "灯塔辨标镜", PartSlot.Sight, "glass-line", 2, 0, .84f, 1, 1.38f, magnification: 8);
+            Part("part_scope_12", "天际观测镜", PartSlot.Sight, "glass-line", 2, 0, .83f, 1, 1.47f, magnification: 12);
+            Part("part_scope_15", "白帆远眺镜", PartSlot.Sight, "glass-line", 2, 0, .82f, 1, 1.56f, magnification: 15);
             Part("part_grip", "稳固握把", PartSlot.Grip, "hand-line", 2, 0, .79f, 1.08f, 1);
             Part("part_grip_mini", "紧凑握套", PartSlot.Grip, "hand-mini", 1, 0, .87f, 1, .95f);
             Part("part_stock", "平衡枪托", PartSlot.Stock, "tail-line", 2, 0, .84f, .94f, 1);
@@ -42,6 +54,18 @@ namespace Dustline.Editor
             Part("part_mag_d", "堤岸备用弹匣", PartSlot.Magazine, "feed-d", 1, 9, 1, 1.12f, 1);
             Part("part_mag_n", "岬角专用弹匣", PartSlot.Magazine, "feed-n", 1, 8, 1, 1.09f, 1, "dust_sniper");
             Part("part_mag_l", "堆场供弹盒", PartSlot.Magazine, "feed-l", 2, 56, 1, 1.16f, 1);
+
+            Part("part_grip_cord", "泊链纹理握把", PartSlot.Grip, "hand-line", 1, 0, .86f, .98f, .97f);
+            Part("part_grip_reef", "礁纹贴合握套", PartSlot.Grip, "hand-mini", 2, 0, .81f, 1.04f, 1f);
+            Part("part_stock_anchor", "浮锚配重枪托", PartSlot.Stock, "tail-line", 3, 0, .77f, 1.06f, 1.13f);
+            Part("part_muzzle_wake", "余波短罩", PartSlot.Muzzle, "front-line", 3, 0, .93f, 1f, .94f);
+            Part("part_muzzle_beacon", "灯座紧凑护帽", PartSlot.Muzzle, "front-mini", 3, 0, .86f, 1f, 1.06f);
+            Part("part_mag_a_patrol", "栈桥轻载弹匣", PartSlot.Magazine, "feed-a", 3, 16, 1f, .80f, .97f, "dust_rifle_jetty");
+            Part("part_mag_b_tide", "银标低负担弹匣", PartSlot.Magazine, "feed-b", 3, 10, 1f, .86f, 1f);
+            Part("part_mag_c_beacon", "铜线便携弹匣", PartSlot.Magazine, "feed-c", 1, 10, 1f, .84f, .96f);
+            Part("part_mag_d_brine", "岩纹长程弹仓", PartSlot.Magazine, "feed-d", 2, 11, 1f, 1.22f, 1.06f);
+            Part("part_mag_n_lantern", "孤灯专用弹匣", PartSlot.Magazine, "feed-n", 3, 6, 1f, 1.06f, 1f, "dust_sniper_lantern");
+            Part("part_mag_l_moor", "系泊快换弹盒", PartSlot.Magazine, "feed-l", 2, 28, 1f, .84f, .98f);
 
             var oldArmor = catalog.Find("armor");
             oldArmor.Tier = 2; oldArmor.Coverage = BodyCoverage.Chest; oldArmor.Durability = 60;
@@ -113,17 +137,27 @@ namespace Dustline.Editor
                 return item;
             }
 
-            void Ammo(string id, string title, AmmoFamily family, int value, int stack)
+            void AmmoLine(string key, string familyName, AmmoFamily family, string standardId, string standardTitle, int baseValue, int stack)
             {
-                var item = Need(id, title, ItemKind.Ammo, 1, 1, stack, .013f, value, new Color(.62f,.55f,.33f));
-                item.AmmoFamily = family;
-                EnsureLootEntry(ordinary, id, 9, 23, 2);
-                EditorUtility.SetDirty(item);
+                for (int tier = 1; tier <= WeaponRules.AmmoTierCount; tier++)
+                {
+                    bool training = tier == 1 && family == AmmoFamily.Amber;
+                    string id = tier == 2 ? standardId : training ? "ammo_amber_range" : "ammo_" + key + "_" + tier;
+                    string title = tier == 2 ? standardTitle : training ? "琥珀训练弹" : familyName + " · " + tier + " 级弹";
+                    var item = Need(id, title, ItemKind.Ammo, 1, 1, stack, .013f, tier == 2 || training ? baseValue : baseValue + (tier * tier - 1) / 2,
+                        new Color(.62f,.55f,.33f));
+                    item.AmmoFamily = family;
+                    item.Tier = tier;
+                    item.Penetration = WeaponRules.PenetrationForTier(tier);
+                    EnsureLootEntry(tier >= 4 ? high : ordinary, id, tier >= 4 ? 4 : 9,
+                        System.Math.Min(stack, tier >= 4 ? 11 : 23), tier >= 5 ? 1 : 2);
+                    EditorUtility.SetDirty(item);
+                }
             }
 
             void Gun(string id, string title, WeaponForm form, string ammo, AmmoFamily family, string feed,
                 int w, int h, int capacity, float damage, float interval, float range, float reload, float recoil,
-                float move, int rays, bool auto, int price, Color tint)
+                float move, int rays, bool auto, int price, Color tint, bool alternate = false, float hip = .012f, float ads = .002f)
             {
                 var item = Need(id, title, ItemKind.Weapon, w, h, 1, 1.0f + w * .66f, price, tint);
                 var def = item.Weapon ?? AssetDatabase.LoadAssetAtPath<WeaponDefinition>(Root + "/" + id + "_weapon.asset");
@@ -136,18 +170,20 @@ namespace Dustline.Editor
                 def.MagazineSize = capacity; def.Damage = damage; def.FireInterval = interval; def.Range = range;
                 def.ReloadSeconds = reload; def.Recoil = recoil; def.MoveFactor = move; def.Rays = rays;
                 def.Automatic = auto; def.Melee = false;
+                def.AlternateFrame = alternate; def.HipSpread = hip; def.AimSpread = ads;
                 item.Weapon = def;
                 EnsureLootEntry(ordinary, id, 1, 1, 1);
                 EditorUtility.SetDirty(def); EditorUtility.SetDirty(item);
             }
 
             void Part(string id, string title, PartSlot slot, string fitting, int form, int capacity,
-                float stability, float reload, float aim, string dedicated = "")
+                float stability, float reload, float aim, string dedicated = "", int magnification = 0)
             {
-                var item = Need(id, title, ItemKind.Part, slot == PartSlot.Stock ? 2 : 1, 1, 1, .19f, 61 + form * 28, new Color(.35f,.42f,.42f));
+                var item = Need(id, title, ItemKind.Part, slot == PartSlot.Stock || magnification >= 8 ? 2 : 1, 1, 1,
+                    .19f, 61 + form * 28 + magnification * 8, new Color(.35f,.42f,.42f));
                 item.Part = new PartSpec { Slot = slot, Interface = fitting, DedicatedItem = dedicated, Form = form,
-                    Capacity = capacity, Stability = stability, ReloadFactor = reload, AimFactor = aim };
-                EnsureLootEntry(ordinary, id, 1, 1, 1);
+                    Capacity = capacity, Stability = stability, ReloadFactor = reload, AimFactor = aim, Magnification = magnification };
+                if (magnification < 6) EnsureLootEntry(ordinary, id, 1, 1, 1);
                 EnsureLootEntry(high, id, 1, 1, 1);
                 EditorUtility.SetDirty(item);
             }

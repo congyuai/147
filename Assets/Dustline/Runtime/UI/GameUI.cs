@@ -9,7 +9,7 @@ namespace Dustline
 {
     public sealed partial class GameUI : MonoBehaviour
     {
-        enum ScreenPage { Lobby, Stash, Shop, Operator, Gunsmith, MenuSettings, Loading, Field, FieldInventory, FieldMap, FieldSettings, Health, ExitConfirm, PracticePanel, TouchLayout, Results, Error }
+        enum ScreenPage { Lobby, Stash, Shop, Operator, Gunsmith, MenuSettings, Loading, Field, FieldInventory, FieldMap, FieldSettings, Health, ExitConfirm, PracticePanel, TouchLayout, Results, Error, Strategy, Preparation, Market }
 
         ScreenPage current;
         readonly Stack<Action> backRoutes = new Stack<Action>();
@@ -81,37 +81,44 @@ namespace Dustline
 
         public void ShowMenu()
         {
-            var panel = Display(ScreenPage.Lobby, "Operations desk");
-            Header(panel, "行动大厅", "01 / 今日任务");
-            var left = At("Deployment summary", panel, 26, 132, 410, 471);
-            Fill(left, Ink);
-            Fill(At("Brief accent", left, 0, 0, 3, 99), Amber);
-            Label(left, "尘线：撤离行动", 35, 22, 24, 368, 59);
-            Label(left, "当前区域 / 北岬货运港", 19, 22, 85, 368, 33, color: Amber);
-            Label(left, "沿河道、厂房与装卸站搜索物资，在突袭结束前通过任一撤离点离开。", 20, 22, 132, 354, 82, color: Muted);
-            Fill(At("Summary divider", left, 22, 228, 366, 1), Border);
-            var equipped = new List<string>();
-            foreach (var slot in LoadoutSlots.Hands)
+            var panel = Display(ScreenPage.Lobby, "Operations desk", wide: true);
+            reflowWidePage = Draw;
+            Draw();
+
+            void Draw()
             {
-                var stack = session.Loadout.Equipped(slot);
-                if (stack != null) equipped.Add(ItemName(stack, ""));
+                operatorPreview?.Dispose();
+                ClearContent(panel);
+                float w = panel.rect.width;
+                WideHeader(panel, "尘线：行动大厅", "行动员等级 " + session.PlayerLevel + "   /   本地突袭", true);
+                const float nav = 162;
+                Fill(At("Lobby navigation", panel, 12, 58, nav, 609), Ink);
+                Button(panel, "仓库", 20, 78, nav - 16, 55, ShowStash);
+                Button(panel, "商店", 20, 142, nav - 16, 55, () => ShowShop());
+                Button(panel, "市场", 20, 206, nav - 16, 55, ShowMarket);
+                Button(panel, "枪械改装", 20, 280, nav - 16, 48, () => ShowGunsmith());
+                Button(panel, "离线靶场", 20, 336, nav - 16, 48, session.StartPractice);
+                Button(panel, "角色", 20, 560, nav - 16, 43, ShowOperator);
+                Button(panel, "设置", 20, 611, nav - 16, 43, () => ShowSettings(false));
+                float portraitWidth = Mathf.Min(w * .44f, 560f);
+                var portrait = At("Lobby operator", panel, (w - portraitWidth) * .5f, 56, portraitWidth, 605);
+                BuildPortrait(portrait);
+                Button(portrait, "切换正背面", (portraitWidth - 146) * .5f, 551, 146, 38, () => operatorPreview?.RotateView());
+                float sideW = Mathf.Clamp(w * .24f, 215f, 310f);
+                float x = w - sideW - 14;
+                var summary = At("Deployment summary", panel, x, 124, sideW, 351);
+                Fill(summary, Ink);
+                Label(summary, "当前穿戴", 25, 11, 12, sideW - 22, 36, color: Amber);
+                DrawPreparedSummary(summary, sideW);
+                if (!string.IsNullOrEmpty(session.Notice))
+                    Label(panel, session.Notice, 15, x, 487, sideW, 57, color: Amber);
+                bool ready = Deployment.TryDifficulty(session.PreparedSite, session.PreparedTier, out var tier);
+                if (ready) Button(panel, Deployment.Sites[session.PreparedSite].Name + " / " + tier.Name, x, 550, sideW, 44, OpenStrategicMap);
+                Button(panel, ready ? "出发" : "开始游戏", x, 603, sideW, 56, () =>
+                {
+                    if (ready) session.StartRaid(); else OpenStrategicMap();
+                }, true);
             }
-            Label(left, "当前整备", 16, 22, 246, 340, 27, color: Muted);
-            var gearReadout = Label(left, equipped.Count == 0 ? "仅携带随身刀" : string.Join(" / ", equipped), 25, 22, 278, 366, 48);
-            gearReadout.resizeTextForBestFit = true;
-            gearReadout.resizeTextMinSize = 15;
-            gearReadout.resizeTextMaxSize = 25;
-            Label(left, "随身刀 / " + session.BoundBladeName, 18, 22, 328, 366, 31, color: Aqua);
-            if (!string.IsNullOrEmpty(session.Notice))
-                Label(left, session.Notice, 17, 22, 374, 366, 81, color: Amber);
-            DrawBriefingMap(panel);
-            Button(panel, "开始突袭", 26, 615, 195, 49, session.StartRaid, true);
-            Button(panel, "仓库", 231, 615, 100, 49, ShowStash);
-            Button(panel, "设置", 341, 615, 95, 49, () => ShowSettings(false));
-            Button(panel, "角色", 446, 615, 100, 49, ShowOperator);
-            Button(panel, "枪械改装", 556, 615, 143, 49, () => ShowGunsmith());
-            Button(panel, "离线靶场", 712, 615, 157, 49, session.StartPractice);
-            Label(panel, "离线突袭  /  15 分钟", 17, 877, 618, 335, 43, TextAnchor.MiddleRight, Muted);
         }
 
         void ShowOperator()
@@ -275,6 +282,8 @@ namespace Dustline
             backHandledFrame = Time.frameCount;
             if (MedicineWheelOpen) { CloseMedicineWheel(true); return; }
             if (CloseInventoryOverlay()) return;
+            if (current == ScreenPage.Preparation && closePreparationPicker?.Invoke() == true) return;
+            if (current == ScreenPage.Strategy && strategyFocused) { FocusStrategicOverview(); return; }
             if (current == ScreenPage.Results) session.ReturnToMenu();
             else if (backRoutes.Count > 0)
             {
@@ -299,7 +308,7 @@ namespace Dustline
             Header(panel, "退出本局？", "主动退出将按撤离失败结算");
             var body = At("Exit warning", panel, 26, 135, 1186, 438);
             Fill(body, Ink);
-            Label(body, "随身装备和搜刮物资将丢失。\n绑定近战武器和已有仓库物资会保留。", 26, 36, 89, 1100, 147, color: Pale);
+            Label(body, "未保护的随身装备和物资将丢失。\n安全箱、绑定近战和已有仓库物资会保留。", 26, 36, 89, 1100, 147, color: Pale);
             Button(panel, "取消 · 继续本局", 26, 615, 225, 49, () =>
             {
                 backHandledFrame = Time.frameCount;
@@ -311,8 +320,8 @@ namespace Dustline
         public void ShowLoading(bool practice = false)
         {
             var panel = Display(ScreenPage.Loading, "Loading district");
-            Header(panel, "正在部署", practice ? "离线靶场" : "北岬货运港");
-            Label(panel, practice ? "正在准备标靶和练习装备…" : "正在准备港区、搜刮点与撤离路线…", 30, 42, 285, 1150, 78, TextAnchor.MiddleCenter);
+            Header(panel, "正在部署", practice ? "离线靶场" : Deployment.Sites[session.ActiveSite].Name);
+            Label(panel, practice ? "正在准备标靶和练习装备…" : "正在准备关卡、搜刮点与撤离路线…", 30, 42, 285, 1150, 78, TextAnchor.MiddleCenter);
         }
 
         public void ShowPractice()
@@ -330,19 +339,99 @@ namespace Dustline
 
         void ShowPracticePanel()
         {
-            var panel = Display(ScreenPage.PracticePanel, "Practice controls");
-            Header(panel, "靶场控制", "练习独立结算，不消耗正式整备装备");
-            var body = At("Practice information", panel, 26, 134, 1186, 449);
-            Fill(body, Ink);
-            Label(body, "固定靶 / 移动靶", 31, 30, 24, 1120, 48, color: Amber);
-            Label(body, "标靶倒下后会自动复位，命中包括近战。可补充练习装备或模拟受伤以测试药品。", 23, 30, 94, 1080, 60, color: Pale);
-            Label(body, "开火 " + session.Practice.Shots + "  /  命中 " + session.Practice.Hits + "  /  击倒靶板 " + session.Practice.Plates,
-                27, 30, 184, 1080, 44, color: Aqua);
-            Button(body, "重置标靶和计数", 30, 285, 293, 61, () => { session.Practice.ResetPlates(); EnterField(); });
-            Button(body, "补充练习装备", 349, 285, 274, 61, () => { EnterField(); session.RefillPractice(); });
-            Button(body, "模拟受伤", 651, 285, 220, 61, () => { session.PracticeHealthSample(); EnterField(); });
-            Button(body, "重伤演练", 896, 285, 220, 61, () => { session.PracticeSevereSample(); ShowHealth(); });
-            Button(panel, "返回大厅", 26, 615, 162, 49, session.LeavePractice);
+            if (session.Phase != SessionPhase.Practice || session.Practice == null) return;
+            var panel = Display(ScreenPage.PracticePanel, "Practice controls", wide: true);
+            var range = session.Practice;
+            var gun = session.Player.Weapon;
+            int target = 0;
+            SetPageRestore(ShowPracticePanel);
+            reflowWidePage = Draw;
+            Draw();
+
+            void Draw()
+            {
+                Clear(panel);
+                float w = panel.rect.width;
+                WideHeader(panel, "靶场控制", "练习装备独立 · 无限备用弹药", false);
+                var stats = range.GetStats();
+                var summary = At("Practice statistics", panel, 12, 59, w - 24, 78);
+                Fill(summary, Ink);
+                Label(summary, "开火 " + stats.Shots + "  /  命中发数 " + stats.HitShots + "  /  命中率 " + stats.Accuracy.ToString("P0")
+                    + "   ·   击倒 " + stats.Plates, 21, 12, 7, w - 48, 31, color: Aqua);
+                Label(summary, "命中射线 " + stats.Hits + " / " + stats.Rays + "   ·   开火散布均方根 " + stats.SpreadRmsDegrees.ToString("0.00") + "°",
+                    16, 12, 44, w - 48, 25, color: Muted);
+                var roster = At("Dummy roster", panel, 12, 147, 151, 455);
+                Fill(roster, Ink);
+                Label(roster, "选中假人", 18, 9, 5, 133, 30, color: Amber);
+                for (int i = 0; i < range.DummyCount; i++)
+                {
+                    int index = i;
+                    if (!range.TryGetDummy(index, out var entry)) continue;
+                    Button(roster, entry.Name, 9, 40 + 51 * i, 133, 44, () => { target = index; Draw(); }, index == target);
+                }
+                Button(roster, "重置标靶和计数", 9, 361, 133, 53, () => { range.ResetPlates(); Draw(); });
+                const float left = 173f;
+                float rightW = Mathf.Min(275f, w * .25f), wide = w - left - rightW - 22f;
+                var detail = At("Dummy equipment and condition", panel, left, 147, wide, 455);
+                Fill(detail, Ink);
+                if (range.TryGetDummy(target, out var dummy))
+                {
+                    Label(detail, dummy.Name + (dummy.Alive ? " · 就绪" : " · 等待重现"), 24, 12, 5, wide - 24, 33, color: Aqua);
+                    Label(detail, "耐受 " + dummy.CurrentHealth.ToString("0.0") + " / " + dummy.MaxHealth.ToString("0")
+                        + "   ·   命中 " + dummy.Hits + "   ·   击倒 " + dummy.Knockdowns, 17, 12, 42, wide - 24, 32, color: Pale);
+                    string region = dummy.LastHitPart.HasValue ? BodyCondition.Name(dummy.LastHitPart.Value) : "—";
+                    Label(detail, "最后命中 " + region + " · " + dummy.LastDamage.ToString("0.0") + "    累计伤害 " + dummy.TotalDamage.ToString("0.0")
+                        + "\n命中点散布均方根 " + (100f * dummy.SpreadRms).ToString("0.0") + " 厘米", 16, 12, 80, wide - 24, 55, color: Muted);
+                    Gear(EquipmentSlot.Helmet, ItemKind.Helmet, dummy.HelmetId, dummy.HelmetWear, dummy.HelmetDurability, 151);
+                    Gear(EquipmentSlot.Armor, ItemKind.Armor, dummy.ArmorId, dummy.ArmorWear, dummy.ArmorDurability, 249);
+                    Button(detail, "复位此假人", 12, 362, 163, 48, () => { range.ResetDummy(target); Draw(); }, true);
+                }
+                var ammo = At("Practice ammo levels", panel, w - rightW - 12, 147, rightW, 455);
+                Fill(ammo, Ink);
+                Label(ammo, "训练弹等级", 21, 12, 7, rightW - 24, 37, color: Aqua);
+                Label(ammo, gun.HasInfiniteReserve ? "备用弹药无限" : "请先切换到一支枪械", 16, 12, 47, rightW - 24, 27, color: Muted);
+                float optionWidth = (rightW - 31) * .5f;
+                for (int tier = 1; tier <= WeaponRules.AmmoTierCount; tier++)
+                {
+                    int grade = tier;
+                    var round = session.Catalog.Items.Find(def => def.Kind == ItemKind.Ammo && def.Tier == grade
+                        && WeaponRules.CanLoad(gun.Definition, def, out _));
+                    int i = tier - 1;
+                    var option = Button(ammo, tier + " 级弹", 12 + i % 2 * (optionWidth + 7), 87 + i / 2 * 55, optionWidth, 47, () =>
+                    {
+                        if (round != null && gun.SelectPracticeAmmo(round.Id)) Draw();
+                    }, round != null && gun.ReadyAmmoType == round.Id);
+                    option.interactable = round != null;
+                }
+                Label(ammo, session.Catalog.Find(gun.ReadyAmmoType)?.DisplayName ?? "未选训练弹", 18, 12, 264, rightW - 24, 51, color: Amber);
+                Button(ammo, "补充练习装备", 12, 362, rightW - 24, 48, () => { session.RefillPractice(); EnterField(); });
+                Button(panel, "返回大厅", 12, 617, 145, 48, session.LeavePractice);
+                Button(panel, "模拟受伤", 174, 617, 145, 48, () => { session.PracticeHealthSample(); EnterField(); });
+                Button(panel, "重伤演练", 330, 617, 145, 48, () => { session.PracticeSevereSample(); ShowHealth(); });
+                Button(panel, "继续练习", w - 177, 617, 165, 48, EnterField, true);
+
+                void Gear(EquipmentSlot slot, ItemKind kind, string id, int wear, int durability, float y)
+                {
+                    var stock = session.Catalog.Stock(kind);
+                    var currentGear = session.Catalog.Find(id);
+                    Label(detail, SlotName(slot) + "   " + (currentGear?.DisplayName ?? "未装备")
+                        + (durability > 0 ? "   耐久 " + (durability - wear) + "/" + durability : ""), 16, 12, y, wide - 24, 27, color: Muted);
+                    Button(detail, "清空", 12, y + 31, 74, 44, () => SetGear(null));
+                    Button(detail, "上一件", 94, y + 31, 86, 44, () => Move(-1));
+                    Button(detail, "下一件", 188, y + 31, 86, 44, () => Move(1));
+                    void Move(int delta)
+                    {
+                        if (stock.Count == 0) return;
+                        int i = stock.FindIndex(item => item.Id == id);
+                        var item = stock[i < 0 ? (delta > 0 ? 0 : stock.Count - 1) : (i + delta + stock.Count) % stock.Count];
+                        SetGear(item.Id);
+                    }
+                    void SetGear(string option)
+                    {
+                        if (range.TrySetDummyGear(target, slot, option, session.Catalog)) Draw();
+                    }
+                }
+            }
         }
 
         public void ShowRaid()
@@ -351,14 +440,14 @@ namespace Dustline
             mapZoom = 0f;
             EnterField();
             Notify(session.Input.TouchMode
-                ? "摇杆前推冲刺。地图标出撤离点；点按战斗栏切换武器。"
+                ? "向前推杆锁定奔跑，回拉解除。地图标出撤离点。"
                 : "F 交互 / 1–4 或 X 切换武器 / J 健康 / M 地图 / Tab 背包 / Esc 设置");
         }
 
         public void ShowResults()
         {
             var panel = Display(ScreenPage.Results, "Raid report");
-            Header(panel, "突袭结算", "北岬货运港 / 行动记录");
+            Header(panel, "突袭结算", Deployment.Sites[session.ActiveSite].Name + " / 行动记录");
             var report = At("Debrief plate", panel, 26, 136, 1186, 450);
             Fill(report, Ink);
             Fill(At("Report accent", report, 0, 0, 4, 109), Amber);
@@ -420,6 +509,8 @@ namespace Dustline
             session.SaveControlPreferences();
             operatorPreview?.Dispose();
             operatorPreview = null;
+            ReleaseStrategicMap();
+            closePreparationPicker = null;
             DisposeGunsmithPreview();
             healthRefresh = null;
             ResetInventoryView();
@@ -581,6 +672,7 @@ namespace Dustline
         void LateUpdate()
         {
             UpdateInventoryDrag();
+            if (current == ScreenPage.Strategy) UpdateStrategicMap();
             itemIcons?.Step();
             if (current == ScreenPage.Gunsmith) RenderGunsmithPreview();
         }
@@ -693,6 +785,7 @@ namespace Dustline
         void OnDestroy()
         {
             operatorPreview?.Dispose();
+            ReleaseStrategicMap();
             DisposeGunsmithPreview();
             itemIcons?.Dispose();
             icons?.Dispose();

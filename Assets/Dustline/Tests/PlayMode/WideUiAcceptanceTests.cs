@@ -77,7 +77,7 @@ namespace Dustline.Tests
             var grid = Node(storage, "Item grid").GetComponent<InventoryBoard>();
             Assert.That(grid.GetComponent<CanvasRenderer>(), Is.Not.Null);
             float cell = ((RectTransform)grid.transform).rect.width / 12f;
-            Assert.That(((RectTransform)grid.transform).rect.height, Is.EqualTo(10 * cell).Within(.02));
+            Assert.That(((RectTransform)grid.transform).rect.height, Is.EqualTo(30 * cell).Within(.02));
             Assert.That(((RectTransform)grid.transform.parent.parent).rect.width, Is.GreaterThanOrEqualTo(12 * cell));
             var stack = session.Stash.Items.Single(item => item.ItemId == "dust_marksman");
             var tile = Node(grid.transform, session.Catalog.Find(stack.ItemId).DisplayName);
@@ -293,7 +293,8 @@ namespace Dustline.Tests
             yield return null;
             Assert.That(Active(surface, "Selected model part"), Is.True);
             var option = Node(page, "Candidate / part_mag_a");
-            Assert.That(option.GetComponentsInChildren<Text>().Any(label => label.text.StartsWith("商店售价 ")), Is.True);
+            int cost = session.Catalog.Find("part_mag_a").Value;
+            Assert.That(option.GetComponentsInChildren<Text>().Any(label => label.text == "商店售价 " + cost), Is.True);
             Assert.That(HasText(page, "容量 20 发"), Is.True);
             var oldMesh = PreviewMagazine();
             yield return Capture("02-workshop-stock", page);
@@ -314,7 +315,6 @@ namespace Dustline.Tests
             Assert.That(HasText(page, "容量 20 → 30 发"), Is.False);
             Assert.That(PreviewMagazine(), Is.SameAs(oldMesh));
 
-            int cost = session.Catalog.Find("part_mag_a").Value;
             session.Profile.Credits = cost + 10;
             session.PersistSafeState();
             var funded = File.ReadAllBytes(store.Path);
@@ -375,7 +375,7 @@ namespace Dustline.Tests
             Click(Panel("Practice controls"), "模拟受伤");
             Assert.That(session.UI.BlocksGameplay, Is.False);
             Assert.That(session.Input.Gameplay, Is.True);
-            Assert.That(Node(hud, "Stamina value").GetComponent<Text>().text, Does.StartWith("体力"));
+            Assert.That(Node(hud, "Stamina display").GetComponent<CanvasGroup>().alpha, Is.Zero);
             Assert.That(Active(hud, "Total health"), Is.False);
             var summary = Node(hud, "Injury summary");
             Assert.That(Active(summary, "Injury / LightBleed"), Is.True);
@@ -425,18 +425,26 @@ namespace Dustline.Tests
             yield return null;
             var page = Panel("Supply store");
             var tabs = Node(page, "Shop categories");
-            var distinct = new[] { ("弹挂", ItemKind.Rig, 5), ("背包", ItemKind.Pack, 6), ("头盔", ItemKind.Helmet, 6), ("护甲", ItemKind.Armor, 6) };
-            foreach (var tab in distinct)
+            var distinct = new[] { ("弹挂", ItemKind.Rig), ("背包", ItemKind.Pack), ("头盔", ItemKind.Helmet), ("护甲", ItemKind.Armor) };
+            foreach (var (caption, kind) in distinct)
             {
-                Click(tabs, tab.Item1);
+                Click(tabs, "Category / " + caption);
                 yield return null;
                 tabs = Node(page, "Shop categories");
                 var cards = page.Cast<Transform>().Where(node => node.gameObject.activeInHierarchy && node.name.StartsWith("Stock / ")).ToArray();
+                var expected = session.Catalog.Items.Where(item => item.Kind == kind && !item.NotForSale)
+                    .OrderBy(item => item.Tier > 0 ? item.Tier : int.MaxValue)
+                    .ThenBy(item => item.Value).ThenBy(item => item.Id, StringComparer.Ordinal).Take(8).ToArray();
                 Assert.That(cards.Length, Is.GreaterThanOrEqualTo(6));
-                CollectionAssert.AreEqual(session.Catalog.Stock(tab.Item2).Take(8).Select(item => "Stock / " + item.Id), cards.Select(card => card.name));
-                var badge = Node(cards[0], "Stock quality").GetComponent<Text>();
-                Assert.That(badge.text, Is.EqualTo(tab.Item3 + " 级"));
-                Assert.That(badge.color, Is.EqualTo(ItemDefinition.GradeColor(tab.Item3)));
+                CollectionAssert.AreEqual(expected.Select(item => "Stock / " + item.Id), cards.Select(card => card.name));
+                for (int i = 0; i < cards.Length; i++)
+                {
+                    var badge = Node(cards[i], "Stock quality").GetComponent<Text>();
+                    Assert.That(badge.text, Is.EqualTo(expected[i].QualityName));
+                    Assert.That(badge.color, Is.EqualTo(ItemDefinition.GradeColor(expected[i].Tier)));
+                    string price = expected[i].Value + " 信用点";
+                    Assert.That(cards[i].GetComponentsInChildren<Text>().Any(label => label.text == price), Is.True, expected[i].Id);
+                }
             }
             yield return Capture("06-shop-armor", page);
         }
@@ -445,7 +453,7 @@ namespace Dustline.Tests
         {
             var catalog = Resources.Load<ItemCatalog>("Dustline/Items");
             Assert.That(catalog, Is.Not.Null, "Run Dustline > Prepare Project first.");
-            var stash = new GridInventory(12, 10, 300f, catalog);
+            var stash = GridInventory.Warehouse(catalog);
             var loadout = GridInventory.Carried(catalog);
             var worn = new List<ItemStack>();
             foreach (var entry in new[] { ("rifle", EquipmentSlot.Weapon), ("vest_4", EquipmentSlot.Armor), ("rig_4", EquipmentSlot.Rig), ("pack_4", EquipmentSlot.Pack) })
@@ -473,7 +481,8 @@ namespace Dustline.Tests
             Assert.That(loadout.TryMove(bandage.InstanceId, CargoArea.Rig, 0, 0, false, out _), Is.True);
             if (hasBackpack) Add(loadout, "medkit");
             store = new ProfileStore(Path.Combine(Application.temporaryCachePath, "dustline-wide-ui-" + Guid.NewGuid().ToString("N") + ".json"));
-            store.Save(new ProfileData { Version = ProfileData.CurrentVersion, Credits = credits, Loadout = loadout.Snapshot(), Stash = stash.Snapshot() });
+            store.Save(new ProfileData { Version = ProfileData.CurrentVersion, Credits = credits, BirthdayGiftClaimed = true,
+                Loadout = loadout.Snapshot(), Stash = stash.Snapshot() });
             host = new GameObject("Wide UI test session");
             host.SetActive(false);
             session = host.AddComponent<GameSession>();

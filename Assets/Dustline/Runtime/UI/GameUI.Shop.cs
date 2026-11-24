@@ -12,68 +12,137 @@ namespace Dustline
             (ItemKind.Medicine, "医疗"), (ItemKind.Valuable, "物资")
         };
 
-        void ShowShop(ItemKind kind = ItemKind.Rig) => BuildShop(kind, 0, 0f, true);
+        static readonly (WeaponForm? form, string name)[] ShopWeaponCategories =
+        {
+            (WeaponForm.Rifle, "突击步枪"), (WeaponForm.Smg, "冲锋枪"), (WeaponForm.Lmg, "轻机枪"),
+            (WeaponForm.Marksman, "射手步枪"), (WeaponForm.Sniper, "狙击步枪"), (WeaponForm.Shotgun, "霰弹枪"),
+            (WeaponForm.Pistol, "手枪"), (null, "近战武器")
+        };
 
-        void BuildShop(ItemKind kind, int index, float tabPosition, bool centreTab)
+        void ShowShop(ItemKind kind = ItemKind.Rig) => BuildShop(kind, 0, 0f, kind == ItemKind.Weapon, -1);
+
+        void BuildShop(ItemKind kind, int index, float categoryOffset, bool weaponsExpanded, int weaponCategory)
         {
             if (session.Phase != SessionPhase.Menu) return;
             var root = Display(ScreenPage.Shop, "Supply store", wide: true);
-            InventoryScroll tabScroll = null;
-            ItemDefinition shown = null;
-            SetPageRestore(() => BuildShop(kind, index, tabPosition, false), CaptureTabScroll);
+            RectTransform categoryContent = null;
+            SetPageRestore(() => BuildShop(kind, index, categoryOffset, weaponsExpanded, weaponCategory), CaptureCategoryScroll);
             reflowWidePage = Build;
             Build();
 
-            void CaptureTabScroll()
+            void CaptureCategoryScroll()
             {
-                if (tabScroll != null) tabPosition = Mathf.Clamp01(tabScroll.horizontalNormalizedPosition);
+                if (categoryContent != null) categoryOffset = categoryContent.anchoredPosition.y;
             }
 
             void Build()
             {
-                var reopen = shown;
                 CloseItemPopup();
-                CaptureTabScroll();
+                CaptureCategoryScroll();
                 Clear(root);
-                const float inset = 12f, tabMin = 122f, gap = 8f;
-                float w = root.rect.width, usable = w - 2 * inset, stride = Mathf.Max(tabMin + gap, (usable + gap) / ShopTabs.Length);
-                float tabWidth = stride - gap, tabTotal = stride * ShopTabs.Length - gap;
-                if (centreTab)
+                const float inset = 12f, gap = 8f, categoryHeight = 518f, mainRow = 42f, subRow = 38f;
+                float w = root.rect.width, railWidth = Mathf.Clamp(w * .18f, 172f, 228f);
+                float stockX = railWidth + 2 * inset, stockWidth = w - stockX - inset;
+                WideHeader(root, "补给商店", "品质从低到高 · 同级按价格升序", true);
+                var rail = At("Shop category rail", root, inset, 58, railWidth, 562);
+                Fill(rail, Ink);
+                Label(rail, "物品类别", 19, 10, 2, railWidth - 20, 32, TextAnchor.MiddleLeft, Aqua);
+                float listWidth = railWidth - 23;
+                float contentHeight = Mathf.Max(categoryHeight, mainRow * ShopTabs.Length + (weaponsExpanded ? subRow * ShopWeaponCategories.Length : 0f));
+                var viewport = At("Shop categories", rail, 6, 36, listWidth, categoryHeight);
+                Fill(viewport, Color.clear, true);
+                viewport.gameObject.AddComponent<RectMask2D>();
+                var content = categoryContent = At("Shop category content", viewport, 0, 0, listWidth, contentHeight);
+                float scrollRange = contentHeight - categoryHeight;
+                categoryOffset = Mathf.Clamp(categoryOffset, 0f, scrollRange);
+                content.anchoredPosition = new Vector2(0, categoryOffset);
+                if (scrollRange > 0f)
                 {
-                    int active = System.Array.FindIndex(ShopTabs, entry => entry.kind == kind);
-                    tabPosition = Mathf.Clamp01((stride * (active + .5f) - usable * .5f) / Mathf.Max(1f, tabTotal - usable));
-                    centreTab = false;
-                }
-                WideHeader(root, "补给商店", "品质从高到低 · 同级按价格升序", true);
-                var tabs = HorizontalStrip(root, "Shop categories", inset, 58, usable, 48, tabTotal, tabPosition, value => tabPosition = value);
-                tabScroll = tabs.parent.GetComponent<InventoryScroll>();
-                for (int i = 0; i < ShopTabs.Length; i++)
-                {
-                    var tab = ShopTabs[i];
-                    Button(tabs, tab.name, i * stride, 0, tabWidth, 42, () =>
+                    var scroll = viewport.gameObject.AddComponent<InventoryScroll>();
+                    scroll.viewport = viewport;
+                    scroll.content = content;
+                    scroll.horizontal = false;
+                    scroll.inertia = false;
+                    scroll.movementType = ScrollRect.MovementType.Clamped;
+                    scroll.scrollSensitivity = 45f;
+                    scroll.AllowScroll = CanAct;
+                    scroll.TryAcquire = source =>
                     {
-                        if (tabScroll?.Dragging == true || kind == tab.kind || ProcessInventoryBackKey()) return;
-                        kind = tab.kind; index = 0; Build();
-                    }, kind == tab.kind);
+                        if (!CanAct()) return false;
+                        inventoryScrollOwner = source;
+                        CloseItemPopup();
+                        return true;
+                    };
+                    scroll.Released = source => { if (inventoryScrollOwner == source) inventoryScrollOwner = null; };
+                    scroll.WheelScroll = () => CloseItemPopup();
+
+                    var track = At("Shop category scroll track", rail, railWidth - 12, 36, 6, categoryHeight);
+                    Fill(track, Plate);
+                    float thumbHeight = categoryHeight * categoryHeight / contentHeight;
+                    var thumb = At("Shop category scroll thumb", track, 0, 0, 6, thumbHeight);
+                    Fill(thumb, Muted);
+                    SetThumb(categoryOffset / scrollRange);
+                    scroll.onValueChanged.AddListener(value => SetThumb(1f - value.y));
+
+                    void SetThumb(float fraction) => thumb.anchoredPosition = new Vector2(0, -Mathf.Clamp01(fraction) * (categoryHeight - thumbHeight));
                 }
 
-                var stock = session.Catalog.Stock(kind);
+                float y = 0;
+                string selection = "";
+                foreach (var tab in ShopTabs)
+                {
+                    if (tab.kind == kind) selection = tab.name;
+                    if (tab.kind != ItemKind.Weapon)
+                    {
+                        Button(content, tab.name, 0, y, listWidth, mainRow - 5, () => SelectCategory(tab.kind), tab.kind == kind)
+                            .name = "Category / " + tab.name;
+                        y += mainRow;
+                        continue;
+                    }
+
+                    Button(content, (weaponsExpanded ? "−  " : "+  ") + tab.name, 0, y, listWidth, mainRow - 5, () =>
+                    {
+                        if (!CanAct()) return;
+                        weaponsExpanded = !weaponsExpanded;
+                        if (weaponsExpanded && kind != ItemKind.Weapon)
+                        {
+                            kind = ItemKind.Weapon;
+                            index = 0;
+                        }
+                        Build();
+                    }, kind == ItemKind.Weapon && (!weaponsExpanded || weaponCategory < 0)).name = "Category / 武器";
+                    y += mainRow;
+                    if (kind == ItemKind.Weapon && weaponCategory >= 0) selection = tab.name + " / " + ShopWeaponCategories[weaponCategory].name;
+                    if (!weaponsExpanded) continue;
+                    for (int i = 0; i < ShopWeaponCategories.Length; i++)
+                    {
+                        int category = i;
+                        var entry = ShopWeaponCategories[i];
+                        bool selected = kind == ItemKind.Weapon && weaponCategory == i;
+                        Button(content, entry.name, 14, y, listWidth - 14, subRow - 3, () => SelectCategory(ItemKind.Weapon, category), selected)
+                            .name = "Weapon category / " + (entry.form?.ToString() ?? "Melee");
+                        y += subRow;
+                    }
+                }
+
+                Label(root, selection, 22, stockX, 59, stockWidth, 43, TextAnchor.MiddleLeft).name = "Shop selection";
+                bool chooseWeapon = kind == ItemKind.Weapon && weaponCategory < 0;
+                var stock = chooseWeapon ? null : session.Catalog.Stock(kind);
+                WeaponForm? form = weaponCategory < 0 ? null : ShopWeaponCategories[weaponCategory].form;
+                // Stock already orders tiers and prices; filtering must precede pagination.
+                stock?.RemoveAll(item => item.NotForSale || (kind == ItemKind.Weapon && !MatchesShopWeapon(item.Weapon, form)));
                 const int pageSize = 8;
-                int pages = Mathf.Max(1, (stock.Count + pageSize - 1) / pageSize);
+                int count = stock?.Count ?? 0;
+                int pages = Mathf.Max(1, (count + pageSize - 1) / pageSize);
                 index = Mathf.Clamp(index, 0, pages - 1);
-                float cellWidth = (usable - 3 * gap) * .25f;
-                RectTransform restoredAnchor = null;
-                for (int i = 0; i < pageSize && index * pageSize + i < stock.Count; i++)
+                float cellWidth = (stockWidth - 3 * gap) * .25f;
+                for (int i = 0; i < pageSize && index * pageSize + i < count; i++)
                 {
                     var item = stock[index * pageSize + i];
-                    var card = Button(root, "", inset + (i % 4) * (cellWidth + gap), 119 + (i / 4) * 252, cellWidth, 239, null, background: Ink);
+                    var card = Button(root, "", stockX + (i % 4) * (cellWidth + gap), 108 + (i / 4) * 252, cellWidth, 239, null, background: Ink);
                     card.name = "Stock / " + item.Id;
                     var cell = (RectTransform)card.transform;
-                    card.onClick.AddListener(() =>
-                    {
-                        if (tabScroll?.Dragging != true && !ProcessInventoryBackKey()) ShowProduct(cell, item);
-                    });
-                    if (item == reopen) restoredAnchor = cell;
+                    card.onClick.AddListener(() => { if (CanAct()) ShowProduct(cell, item); });
                     var grade = item.Tier > 0 ? ItemDefinition.GradeColor(item.Tier) : Muted;
                     Fill(At("Quality edge", cell, 0, 0, 3, 239), grade);
                     Fill(At("Quality badge", cell, 11, 10, 75, 27), Color.Lerp(Plate, grade, .22f));
@@ -87,38 +156,59 @@ namespace Dustline
                     Label(cell, ShopItemDetails(item), 14, 11, 148, cellWidth - 22, 43, TextAnchor.UpperCenter, Muted);
                     int amount = PurchaseAmount(item);
                     Fill(At("Price band", cell, 11, 196, cellWidth - 22, 33), Plate);
-                    Label(cell, (amount > 1 ? "×" + amount + " / " : "") + (long)item.Value * amount + " 信用点", 16,
+                    var price = Label(cell, (amount > 1 ? "×" + amount + " / " : "") + (long)item.Value * amount + " 信用点", 16,
                         18, 196, cellWidth - 92, 33, TextAnchor.MiddleLeft, Amber);
+                    price.resizeTextForBestFit = true;
+                    price.resizeTextMinSize = 11;
+                    price.resizeTextMaxSize = 16;
                     Label(cell, "详情 ›", 14, cellWidth - 70, 196, 52, 33, TextAnchor.MiddleRight, Aqua);
                 }
-                if (stock.Count == 0) Label(root, "本类暂无商品", 26, inset, 156, usable, 62, TextAnchor.MiddleCenter, Muted);
+                if (count == 0)
+                {
+                    string message = chooseWeapon ? (weaponsExpanded ? "请选择武器类型" : "展开左侧武器分类") : "本类暂无商品";
+                    Label(root, message, 26, stockX, 156, stockWidth, 62, TextAnchor.MiddleCenter, Muted).name = "Shop empty state";
+                }
                 Fill(At("Shop footer", root, 0, 630, w, 50), Ink);
                 Button(root, "上一页", w - 357, 633, 102, 42, () => ChangePage(-1)).interactable = index > 0;
-                Label(root, (index + 1) + " / " + pages, 18, w - 247, 633, 111, 42, TextAnchor.MiddleCenter);
+                Label(root, (index + 1) + " / " + pages, 18, w - 247, 633, 111, 42, TextAnchor.MiddleCenter).name = "Shop page count";
                 Button(root, "下一页", w - 125, 633, 113, 42, () => ChangePage(1)).interactable = index + 1 < pages;
-                if (restoredAnchor != null) ShowProduct(restoredAnchor, reopen);
-            }
 
-            void ChangePage(int step)
-            {
-                if (tabScroll?.Dragging == true || ProcessInventoryBackKey()) return;
-                index += step;
-                Build();
-            }
+                bool CanAct() => rail != null && rail.gameObject.activeInHierarchy && session.Phase == SessionPhase.Menu
+                    && !ProcessInventoryBackKey() && backHandledFrame != Time.frameCount && InventoryIdle();
 
-            void ShowProduct(RectTransform anchor, ItemDefinition item)
-            {
-                var popup = ItemPopup(root, anchor, item, null, () => shown = null);
-                shown = item;
-                int amount = PurchaseAmount(item);
-                Button(popup, "购买 ×" + amount + " / " + (long)item.Value * amount + " 信用点", 13, 164, popup.rect.width - 26, 42, () =>
+                void SelectCategory(ItemKind choice, int category = -1)
                 {
-                    if (itemPopup != popup || tabScroll?.Dragging == true || ProcessInventoryBackKey()) return;
-                    session.Buy(item.Id, amount);
-                    UpdateCredits();
-                }, true);
+                    if (!CanAct() || (kind == choice && weaponCategory == category)) return;
+                    kind = choice;
+                    weaponCategory = category;
+                    index = 0;
+                    Build();
+                }
+
+                void ChangePage(int step)
+                {
+                    int next = index + step;
+                    if (!CanAct() || next < 0 || next >= pages) return;
+                    index = next;
+                    Build();
+                }
+
+                void ShowProduct(RectTransform anchor, ItemDefinition item)
+                {
+                    var popup = ItemPopup(root, anchor, item, null, null);
+                    int amount = PurchaseAmount(item);
+                    Button(popup, "购买 ×" + amount + " / " + (long)item.Value * amount + " 信用点", 13, 164, popup.rect.width - 26, 42, () =>
+                    {
+                        if (popup == null || itemPopup != popup || !CanAct()) return;
+                        session.Buy(item.Id, amount);
+                        UpdateCredits();
+                    }, true);
+                }
             }
         }
+
+        static bool MatchesShopWeapon(WeaponDefinition weapon, WeaponForm? form) => weapon != null
+            && (form.HasValue ? !weapon.Melee && weapon.Form == form.Value : weapon.Melee);
 
         static int PurchaseAmount(ItemDefinition item) => item.Kind == ItemKind.Ammo ? Mathf.Min(20, item.MaxStack) : 1;
 

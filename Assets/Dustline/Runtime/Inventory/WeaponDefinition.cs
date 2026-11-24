@@ -10,6 +10,7 @@ namespace Dustline
         public const string RifleId = "rifle";
         public const string BatonId = "baton";
         public WeaponForm Form;
+        public bool AlternateFrame;
         public bool Melee;
         public string AmmoId;
         public AmmoFamily AmmoFamily;
@@ -22,6 +23,8 @@ namespace Dustline
         public float Range = 100f;
         public float ReloadSeconds = 2f;
         public float Recoil = 1.2f;
+        public float HipSpread = .012f;
+        public float AimSpread = .002f;
         public bool Automatic = true;
     }
 }

@@ -21,6 +21,7 @@ namespace Dustline
         GameObject hintCard;
         Text staminaReadout, statusReadout, prompt, weaponMode;
         BodyFigure bodyHud;
+        CanvasGroup staminaHud;
         RectTransform weaponBar, weaponStrip;
         readonly Button[] injuryBadges = new Button[DisplayedInjuries.Length];
         readonly Text[] injuryCounts = new Text[DisplayedInjuries.Length];
@@ -50,12 +51,12 @@ namespace Dustline
         void BuildHud()
         {
             var upperLeft = Anchor("Left HUD anchor", hud, 0, 1);
-            var vitals = HudCard(upperLeft, "Vitals", 13, 12, 139, 172);
+            var vitals = At("Vitals", upperLeft, 13, 12, 139, 172);
             var sheet = Button(vitals, "", 2, 0, 137, 137, () => { if (!BlocksGameplay) ShowHealth(); }, false, Color.clear);
             sheet.name = "Open body condition";
             sheet.transition = Selectable.Transition.None;
             bodyHud = CreateBodyFigure(vitals, "Body diagram", 38, 4, 63, 131);
-            bodyHud.Initialize(part => { if (!BlocksGameplay) ShowHealth(part); });
+            bodyHud.Initialize(part => { if (!BlocksGameplay) ShowHealth(part); }, .75f);
             var summary = At("Injury summary", vitals, 90, 102, DisplayedInjuries.Length * 38, 30);
             for (int i = 0; i < DisplayedInjuries.Length; i++)
             {
@@ -68,10 +69,14 @@ namespace Dustline
                 injuryCounts[i] = count;
                 badge.gameObject.SetActive(false);
             }
-            Fill(At("Stamina divider", vitals, 8, 138, 123, 1), Border);
-            staminaReadout = Label(vitals, "", 14, 8, 140, 123, 20, TextAnchor.MiddleLeft, Muted);
+            var stamina = At("Stamina display", vitals, 0, 136, 139, 36);
+            staminaHud = stamina.gameObject.AddComponent<CanvasGroup>();
+            staminaHud.alpha = 0;
+            staminaHud.blocksRaycasts = false;
+            Fill(stamina, new Color32(12, 21, 26, 164));
+            staminaReadout = Label(stamina, "", 14, 8, 2, 123, 21, TextAnchor.MiddleLeft, Pale);
             staminaReadout.name = "Stamina value";
-            staminaBar = Bar(vitals, 8, 164, 123, 4, Aqua);
+            staminaBar = Bar(stamina, 8, 27, 123, 4, Aqua);
 
             var upperRight = Anchor("Right HUD anchor", hud, 1, 1);
             miniMap = CreateMap(upperRight, -197, 18, 179, true, false);
@@ -169,7 +174,7 @@ namespace Dustline
                     }
                 }
                 view.Ammo.text = !available ? "" : definition?.Weapon != null && !definition.Weapon.Melee
-                    ? (active && weapon.Magazine != null ? weapon.Magazine.Rounds : Mathf.Max(0, stack.LoadedAmmo)) + " / " + weapon.ReserveFor(stack)
+                    ? (active && weapon.Magazine != null ? weapon.Magazine.Rounds : Mathf.Max(0, stack.LoadedAmmo)) + " / " + ReserveLabel(weapon.ReserveFor(stack))
                     : blade != null ? "绑定" : "近战";
                 view.Ammo.color = active ? Amber : Pale;
             }
@@ -188,6 +193,8 @@ namespace Dustline
                 SetActive(switchButton, selectable > 1 && !overlap);
             }
         }
+
+        static string ReserveLabel(int amount) => amount == int.MaxValue ? "无限" : amount.ToString();
 
         RectTransform HudCard(Transform parent, string title, float x, float y, float w, float h)
         {
@@ -226,7 +233,7 @@ namespace Dustline
                 SetActive(interactButton, session.Phase == SessionPhase.Raid);
                 var interactionIcon = icons[player.LookingAtDoor ? RaidIcon.InteractDoor : RaidIcon.Search];
                 if (interactGlyph.sprite != interactionIcon) interactGlyph.sprite = interactionIcon;
-                SetActive(sprintRing.gameObject, player.Sprinting);
+                SetActive(sprintRing.gameObject, session.Input.TouchSprintLocked);
             }
             bool marker = Time.unscaledTime < hitUntil;
             reticle.enabled = !player.WeaponView.MedicineBusy && !MedicineWheelOpen && (marker || !session.Input.Aim && player.AimProgress < 0.08f);
@@ -238,6 +245,8 @@ namespace Dustline
                 reticle.color = marker ? Amber : Pale;
             }
             if (session.Input.TouchMode) medicineDialProgress.fillAmount = player.TreatmentProgress;
+            if (player.Stamina < 99.99f || player.SprintExhausted) staminaHud.alpha = 1f;
+            else staminaHud.alpha = force ? 0f : Mathf.MoveTowards(staminaHud.alpha, 0f, 6f * Time.unscaledDeltaTime);
             if (!force && Time.unscaledTime < hudAt) return;
             hudAt = Time.unscaledTime + 0.09f;
             UpdateMedicineButton(player);
@@ -249,8 +258,9 @@ namespace Dustline
 
             if (session.Phase == SessionPhase.Practice)
             {
-                var range = session.Practice;
-                statusReadout.text = "离线靶场 / " + Mathf.RoundToInt(sampledFps) + " 帧\n开火 " + range.Shots + " / 命中 " + range.Hits + "\n击倒靶板 " + range.Plates;
+                var stats = session.Practice.GetStats();
+                statusReadout.text = "离线靶场 / " + Mathf.RoundToInt(sampledFps) + " 帧\n开火 " + stats.Shots + " / 命中率 " + stats.Accuracy.ToString("P0")
+                    + "\n击倒假人 " + stats.Plates;
                 string hint = session.Input.TouchMode ? "点地图或背包打开靶场控制" : "Tab 或 M 打开靶场控制";
                 SetFieldPrompt(player.IsTreating ? TreatmentPrompt(player) : hint, player.IsTreating, player.TreatmentProgress);
                 return;

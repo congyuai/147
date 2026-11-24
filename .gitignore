@@ -8,6 +8,8 @@
 /.vs/
 /.idea/
 *.csproj
+!/MarketServer/MarketServer.csproj
+!/MarketServer/Tests/MarketServer.Integration.csproj
 *.sln
 *.suo
 *.user

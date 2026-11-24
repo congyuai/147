@@ -35,10 +35,13 @@ namespace Dustline
         readonly bool[] destroyed = new bool[BodyCondition.Count];
         BodyPart? selected;
         Action<BodyPart> select;
+        float opacity = 1f;
 
-        internal void Initialize(Action<BodyPart> onSelect)
+        internal void Initialize(Action<BodyPart> onSelect, float alpha = 1f)
         {
             select = onSelect;
+            opacity = alpha;
+            SetVerticesDirty();
             raycastTarget = select != null;
             SetCondition(null);
         }
@@ -114,6 +117,7 @@ namespace Dustline
             void Face(Vector2[] outline, Vector2 center, float scale, Color32 tint)
             {
                 int index = mesh.currentVertCount;
+                tint.a = (byte)(tint.a * opacity);
                 foreach (var point in outline)
                 {
                     Vector2 p = center + (point - center) * scale;

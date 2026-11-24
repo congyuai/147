@@ -13,18 +13,24 @@ namespace Dustline
 
         public List<ItemDefinition> Stock(ItemKind kind)
         {
-            var stock = Items.FindAll(item => item.Kind == kind);
-            stock.Sort((a, b) =>
-            {
-                int order = System.Math.Max(0, b.Tier).CompareTo(System.Math.Max(0, a.Tier));
-                if (order == 0) order = a.Value.CompareTo(b.Value);
-                return order != 0 ? order : string.CompareOrdinal(a.Id, b.Id);
-            });
+            var stock = Items.FindAll(item => item.Kind == kind && !item.NotForSale);
+            stock.Sort(CompareStock);
             return stock;
         }
 
+        static int CompareStock(ItemDefinition a, ItemDefinition b)
+        {
+            int order = (a.Tier > 0 ? a.Tier : int.MaxValue).CompareTo(b.Tier > 0 ? b.Tier : int.MaxValue);
+            if (order == 0) order = a.Value.CompareTo(b.Value);
+            return order != 0 ? order : string.CompareOrdinal(a.Id, b.Id);
+        }
+
         public List<ItemDefinition> CompatibleParts(ItemDefinition weapon, PartSlot slot)
-            => Stock(ItemKind.Part).FindAll(item => WeaponRules.CanMount(weapon, slot, item, out _));
+        {
+            var parts = Items.FindAll(item => item.Kind == ItemKind.Part && WeaponRules.CanMount(weapon, slot, item, out _));
+            parts.Sort(CompareStock);
+            return parts;
+        }
 
         public ItemDefinition Find(string id)
         {
@@ -55,7 +61,7 @@ namespace Dustline
                     throw new ArgumentException("Invalid inventory definition: " + definition.Id, nameof(Items));
                 if (definition.Weapon != null && !definition.Weapon.Melee && definition.Weapon.MagazineSize < 1)
                     throw new ArgumentException("Invalid magazine size: " + definition.Id, nameof(Items));
-                if ((definition.Kind == ItemKind.Rig || definition.Kind == ItemKind.Pack) && (definition.Storage.Columns < 1
+                if ((definition.Kind == ItemKind.Rig || definition.Kind == ItemKind.Pack || definition.Kind == ItemKind.SecureCase) && (definition.Storage.Columns < 1
                     || definition.Storage.Columns > 12 || definition.Storage.Rows < 1 || definition.Storage.Rows > 12
                     || definition.Storage.Split < 0 || definition.Storage.Split >= definition.Storage.Columns
                     || !(definition.Storage.CarryBonus >= 0f) || float.IsInfinity(definition.Storage.CarryBonus)
