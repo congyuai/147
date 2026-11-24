@@ -31,9 +31,9 @@ namespace Dustline
             input.placeholder = hint;
             input.contentType = InputField.ContentType.IntegerNumber;
             input.characterLimit = 10;
+            var result = Label(card, "", 18, 21, 327, 642, 88, TextAnchor.MiddleLeft, Amber);
             Button(card, "增加等级", 21, 246, 310, 53, () => Grant(true), true);
             Button(card, "增加信用点", 353, 246, 310, 53, () => Grant(false), true);
-            var result = Label(card, "", 18, 21, 327, 642, 88, TextAnchor.MiddleLeft, Amber);
             UpdateValues();
 
             void Grant(bool level)

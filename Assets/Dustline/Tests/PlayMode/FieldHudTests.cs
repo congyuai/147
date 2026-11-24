@@ -286,8 +286,15 @@ namespace Dustline.Tests
             var control = move.GetComponent<TouchControl>();
             var icon = Node(move, "Sprint lock");
             var input = session.Input;
+            RefreshHud();
+            Canvas.ForceUpdateCanvases();
+            Assert.That(icon.gameObject.activeInHierarchy, Is.False);
             var e = new PointerEventData(EventSystem.current) { pointerId = 31, button = PointerEventData.InputButton.Left, position = ScreenPoint(move) };
             control.OnPointerDown(e);
+            e.position = ScreenPoint(icon);
+            control.OnDrag(e);
+            Invoke(input, "Update");
+            Assert.That(input.SprintHeld, Is.False, "A hidden target must not latch sprint.");
             e.position = RectTransformUtility.WorldToScreenPoint(null, move.TransformPoint(Vector2.up * move.rect.width * .32f));
             control.OnDrag(e);
             Invoke(input, "Update");
@@ -333,6 +340,11 @@ namespace Dustline.Tests
             host.SetActive(true);
             Assert.That(session.Phase, Is.EqualTo(SessionPhase.Menu), session.Error);
             savedProfile = File.ReadAllBytes(store.Path);
+            var slots = (IEnumerable)typeof(GameUI).GetField("touchSlots", Instance).GetValue(session.UI);
+            var defaultLayout = typeof(GameUI).GetMethod("DefaultLayout", BindingFlags.Static | BindingFlags.NonPublic);
+            foreach (var slot in slots)
+                slot.GetType().GetField("Value", Instance).SetValue(slot, defaultLayout.Invoke(null, new[] { slot }));
+            Invoke(session.UI, "ApplyTouchLayout");
             session.Input.ForceTouch = true;
             session.StartPractice();
             for (int frame = 0; frame < 45 && session.Phase == SessionPhase.PracticeLoading; frame++) yield return null;

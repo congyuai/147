@@ -96,7 +96,7 @@ namespace Dustline
             var rect = (RectTransform)transform;
             if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rect, data.position, data.pressEventCamera, out var local)) return;
             var raw = (local - rect.rect.center) / (rect.rect.width * .35f);
-            bool target = dragging && SprintTarget != null
+            bool target = dragging && SprintTarget != null && SprintTarget.gameObject.activeInHierarchy
                 && RectTransformUtility.ScreenPointToLocalPointInRectangle(SprintTarget, data.position, data.pressEventCamera, out var hit)
                 && hit.sqrMagnitude <= SprintTarget.rect.width * SprintTarget.rect.width * .25f;
             Input.MoveTouchStick(raw, target);

@@ -18,7 +18,8 @@ namespace Dustline.Tests
                 Vector3 south = PortWorldFixture.Floor(x, channel - bank);
                 Vector3 north = PortWorldFixture.Floor(x, channel + bank);
                 var nav = built.World.Navigation;
-                Assert.That(nav.CanStandAt(south) && nav.CanStandAt(north), Is.True);
+                Assert.That(nav.CanTraverse(south, south), Is.True, "The south bank must be standable.");
+                Assert.That(nav.CanTraverse(north, north), Is.True, "The north bank must be standable.");
                 Assert.That(nav.CanTraverse(south, north), Is.False, "A swimmer can cross, but dry navigation cannot.");
 
                 for (int side = -1; side <= 1; side += 2)

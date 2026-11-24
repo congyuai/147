@@ -212,8 +212,9 @@ namespace Dustline.Tests
                 foreach (var slot in new[] { EquipmentSlot.Helmet, EquipmentSlot.Armor, EquipmentSlot.Rig, EquipmentSlot.Pack })
                 {
                     var item = kit.Equipped(slot);
-                    var view = body.transform.Find("Worn " + slot + " / " + item.ItemId);
-                    Assert.That(view, Is.Not.Null);
+                    string name = "Worn " + slot + " / " + item.ItemId;
+                    var view = body.transform.Cast<Transform>().SingleOrDefault(child => child.name == name);
+                    Assert.That(view, Is.Not.Null, name);
                     Assert.That(view.GetComponent<SkinnedMeshRenderer>().sharedMesh.vertexCount, Is.GreaterThan(64));
                 }
                 var weapon = kit.Equipped(EquipmentSlot.Weapon);
