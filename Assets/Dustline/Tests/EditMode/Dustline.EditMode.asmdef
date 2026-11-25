@@ -1,6 +1,6 @@
 {
   "name": "Dustline.EditMode",
-  "references": ["Dustline.Runtime"],
+  "references": ["Dustline.Runtime", "Unity.Networking.Transport"],
   "optionalUnityReferences": ["TestAssemblies"],
   "includePlatforms": ["Editor"],
   "autoReferenced": false

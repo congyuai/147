@@ -6,6 +6,6 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
-    path: Assets/Dustline/Scenes/Bootstrap.unity
-    guid: 112233445566778899aabbccddeeff01
+    path: Assets/Dustline/Scenes/Pilot.unity
+    guid: 9e7d5576598d4c8584cb297d8a30e02a
   m_configObjects: {}

@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.Build;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -119,16 +120,17 @@ namespace Dustline.Tests
         }
 
         [Test]
-        public void BuildVersionAdvancesWithoutChangingSaveIdentity()
+        public void PilotBuildUsesSeparateVersionAndIdentity()
         {
-            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.6.1"));
-            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(12));
+            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.6.2-pilot.1"));
+            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(13));
             Assert.That(PlayerSettings.Android.forceInternetPermission, Is.True);
             Assert.That(PlayerSettings.Android.renderOutsideSafeArea, Is.True);
             Assert.That(LayerMask.NameToLayer("DustlineStrategicMap"), Is.EqualTo(27));
             Assert.That(PlayerSettings.companyName, Is.EqualTo("Dustline"));
-            Assert.That(PlayerSettings.productName, Is.EqualTo("Dustline Extraction"));
-            Assert.That(PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android), Is.EqualTo("com.dustline.extraction"));
+            Assert.That(PlayerSettings.productName, Is.EqualTo("Dustline Extraction Pilot"));
+            Assert.That(PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android), Is.EqualTo("com.dustline.extraction.pilot"));
+            Assert.That(PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Standalone), Is.EqualTo("com.dustline.extraction.pilot"));
         }
 
         [TestCase("Adaptive", 432, "AdaptiveBackground", "AdaptiveForeground")]
@@ -283,7 +285,7 @@ namespace Dustline.Tests
         }
 
         [Test]
-        public void BootstrapSceneAndPipelineAreConfigured()
+        public void PilotBuildSceneAndPipelineAreConfigured()
         {
             Assert.That(GraphicsSettings.defaultRenderPipeline, Is.Not.Null);
             Assert.That(LayerMask.NameToLayer(FirstPersonView.LayerName), Is.EqualTo(FirstPersonView.Layer));
@@ -291,9 +293,26 @@ namespace Dustline.Tests
             Assert.That(Shader.Find("Hidden/Dustline/Item Icon Alpha"), Is.Not.Null);
             Assert.That(EditorBuildSettings.scenes.Length, Is.EqualTo(1));
             Assert.That(EditorBuildSettings.scenes[0].enabled, Is.True);
+            Assert.That(EditorBuildSettings.scenes[0].path, Is.EqualTo("Assets/Dustline/Scenes/Pilot.unity"));
             Assert.That(AssetDatabase.LoadAssetAtPath<SceneAsset>(EditorBuildSettings.scenes[0].path), Is.Not.Null);
             Assert.That(Shader.Find("Universal Render Pipeline/Lit"), Is.Not.Null);
             Assert.That(Shader.Find("Universal Render Pipeline/Unlit"), Is.Not.Null);
+        }
+
+        [Test]
+        public void PilotSceneLoadsWithItsOwnBootstrapAndNoOfflineSession()
+        {
+            const string path = "Assets/Dustline/Scenes/Pilot.unity";
+            Assert.That(AssetDatabase.LoadAssetAtPath<SceneAsset>(path), Is.Not.Null);
+            var scene = EditorSceneManager.OpenPreviewScene(path);
+            try
+            {
+                var roots = scene.GetRootGameObjects();
+                Assert.That(roots, Has.Length.EqualTo(1));
+                Assert.That(roots[0].GetComponent<PilotBootstrap>(), Is.Not.Null);
+                Assert.That(roots[0].GetComponentsInChildren<GameSession>(true), Is.Empty);
+            }
+            finally { EditorSceneManager.ClosePreviewScene(scene); }
         }
     }
 }

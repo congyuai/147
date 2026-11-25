@@ -2,7 +2,6 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEditor.Build;
-using UnityEditor.Build.Reporting;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
@@ -13,12 +12,14 @@ namespace Dustline.Editor
     public static partial class ProjectSetup
     {
         const string Root = "Assets/Dustline/Resources/Dustline";
-        const string Scene = "Assets/Dustline/Scenes/Bootstrap.unity";
+        const string Scene = "Assets/Dustline/Scenes/Pilot.unity";
         const string PipelinePath = "Assets/Dustline/Settings/MobilePipeline.asset";
         const string RendererPath = "Assets/Dustline/Settings/MobileRenderer.asset";
         const string RenderingRoot = Root + "/Rendering";
-        const string Version = "0.6.1";
-        const int AndroidVersionCode = 12;
+        const string Version = "0.6.2-pilot.1";
+        const string ProductName = "Dustline Extraction Pilot";
+        const string ApplicationId = "com.dustline.extraction.pilot";
+        const int AndroidVersionCode = 13;
         const int RaidRendererLayers = FirstPersonView.Mask | (1 << 27) | (1 << 29) | (1 << 30) | (1 << 2) | 1;
         static readonly string[] LitVariantAssets = { "LitBase", "LitMetal", "LitEmission", "LitMetalEmission" };
         static readonly Dictionary<string, string> ItemNames = new Dictionary<string, string> {
@@ -202,11 +203,12 @@ namespace Dustline.Editor
             PrepareEconomy(catalog, table, highValue);
             EnsureBoundBlades();
             PlayerSettings.companyName = "Dustline";
-            PlayerSettings.productName = "Dustline Extraction";
+            PlayerSettings.productName = ProductName;
             PlayerSettings.bundleVersion = Version;
             PlayerSettings.Android.bundleVersionCode = AndroidVersionCode;
             PlayerSettings.defaultInterfaceOrientation = UIOrientation.LandscapeLeft;
-            PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, "com.dustline.extraction");
+            PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, ApplicationId);
+            PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Standalone, ApplicationId);
             PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, ScriptingImplementation.IL2CPP);
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
             PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel26;
@@ -445,33 +447,6 @@ namespace Dustline.Editor
             item.UnitWeight = weight; item.Value = value; item.Tint = tint;
             AssetDatabase.CreateAsset(item, Root + "/" + id + ".asset");
             return item;
-        }
-
-        [MenuItem("Dustline/Build Windows")]
-        public static void BuildWindows() { Build(BuildTarget.StandaloneWindows64, "Builds/Windows/Dustline.exe"); }
-        [MenuItem("Dustline/Build Android")]
-        public static void BuildAndroid()
-        {
-            EditorUserBuildSettings.buildAppBundle = false;
-            Build(BuildTarget.Android, "Builds/Android/dustline-extraction-v" + Version + ".apk");
-        }
-        [MenuItem("Dustline/Build Android Demo")]
-        public static void BuildAndroidDemo()
-        {
-            EditorUserBuildSettings.buildAppBundle = false;
-            Build(BuildTarget.Android, "Builds/Android/dustline-extraction-v" + Version + "-demo.apk", demo: true);
-        }
-
-        static void Build(BuildTarget target, string output, bool demo = false)
-        {
-            Prepare();
-            if (target == BuildTarget.Android) ConfigureLauncherIcons(required: true);
-            Directory.CreateDirectory(Path.GetDirectoryName(output));
-            var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions {
-                scenes = new[] { Scene }, locationPathName = output, target = target, options = BuildOptions.None,
-                extraScriptingDefines = demo ? new[] { "DUSTLINE_DEMO_GM" } : System.Array.Empty<string>()
-            });
-            if (report.summary.result != BuildResult.Succeeded) throw new BuildFailedException(report.summary.result.ToString());
         }
     }
 }

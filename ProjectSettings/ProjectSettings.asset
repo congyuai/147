@@ -5,9 +5,9 @@ PlayerSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 26
   companyName: Dustline
-  productName: Dustline Extraction
-  bundleVersion: 0.6.1
-  AndroidBundleVersionCode: 12
+  productName: Dustline Extraction Pilot
+  bundleVersion: 0.6.2-pilot.1
+  AndroidBundleVersionCode: 13
   defaultScreenWidth: 1280
   defaultScreenHeight: 720
   defaultIsNativeResolution: 1
@@ -23,8 +23,8 @@ PlayerSettings:
   AndroidTargetArchitectures: 2
   ForceInternetPermission: 1
   applicationIdentifier:
-    Android: com.dustline.extraction
-    Standalone: com.dustline.extraction
+    Android: com.dustline.extraction.pilot
+    Standalone: com.dustline.extraction.pilot
   scriptingBackend:
     Android: 1
     Standalone: 0
